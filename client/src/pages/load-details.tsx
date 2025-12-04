@@ -1,5 +1,5 @@
 import { useRoute, useLocation } from "wouter";
-import { getLoadById, Load, Stop } from "@/lib/mock-data";
+import { getLoadById, Load, Stop, StopStatus } from "@/lib/mock-data";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -8,6 +8,177 @@ import { ArrowLeft, Map, Navigation, Upload, CheckCircle2, Clock, Play, Square }
 import { format } from "date-fns";
 import { useState, useEffect } from "react";
 import { toast } from "sonner";
+import { cn } from "@/lib/utils";
+
+// --- StopRow Component ---
+
+interface StopRowProps {
+  stop: Stop;
+  onStatusUpdate: (stopId: string, status: "ARRIVED" | "DEPARTED") => Promise<void>;
+}
+
+function StopRow({ stop, onStatusUpdate }: StopRowProps) {
+  const [isArriveLoading, setIsArriveLoading] = useState(false);
+  const [isDepartLoading, setIsDepartLoading] = useState(false);
+
+  const handleUpdate = async (newStatus: "ARRIVED" | "DEPARTED") => {
+    if (newStatus === "ARRIVED") setIsArriveLoading(true);
+    else setIsDepartLoading(true);
+
+    try {
+      await onStatusUpdate(stop.id, newStatus);
+    } catch (error) {
+      console.error(error);
+      // Toast is handled in parent, but we could add one here too if needed
+    } finally {
+      if (newStatus === "ARRIVED") setIsArriveLoading(false);
+      else setIsDepartLoading(false);
+    }
+  };
+
+  // Status Pill Logic
+  const getStatusPill = (status: StopStatus) => {
+    let text = "";
+    let classes = "";
+
+    switch (status) {
+      case "PLANNED":
+        text = "Planned";
+        classes = "bg-gray-800 text-gray-200";
+        break;
+      case "EN_ROUTE":
+        text = "En route";
+        classes = "bg-blue-900 text-blue-200";
+        break;
+      case "ARRIVED":
+        text = "Arrived";
+        classes = "bg-emerald-900 text-emerald-200";
+        break;
+      case "DEPARTED":
+        text = "Departed";
+        classes = "bg-teal-900 text-teal-200";
+        break;
+      case "SKIPPED":
+        text = "Skipped";
+        classes = "bg-red-900 text-red-200";
+        break;
+      default:
+        text = status;
+        classes = "bg-gray-800 text-gray-200";
+    }
+
+    return (
+      <div className={cn("inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium", classes)}>
+        {text}
+      </div>
+    );
+  };
+
+  // Button Logic
+  const showButtons = stop.type === "PICKUP" || stop.type === "DELIVERY";
+  
+  const baseBtn = "inline-flex items-center justify-center px-2.5 py-1 text-xs font-medium rounded-md border transition disabled:opacity-40 disabled:cursor-not-allowed h-8";
+  const primaryBtn = cn(baseBtn, "border-emerald-500 bg-emerald-600 text-white hover:bg-emerald-500");
+  const secondaryBtn = cn(baseBtn, "border-slate-500 bg-slate-800 text-slate-100 hover:bg-slate-700");
+  const disabledBtn = cn(baseBtn, "border-slate-700 bg-slate-900 text-slate-400");
+
+  const isArrived = stop.status === "ARRIVED";
+  const isDeparted = stop.status === "DEPARTED";
+  const isPlannedOrEnRoute = stop.status === "PLANNED" || stop.status === "EN_ROUTE";
+
+  // Arrive Button State
+  let arriveBtnClass = primaryBtn;
+  let arriveDisabled = false;
+
+  if (isArrived || isDeparted) {
+    arriveBtnClass = disabledBtn;
+    arriveDisabled = true;
+  }
+
+  // Depart Button State
+  let departBtnClass = secondaryBtn;
+  let departDisabled = false;
+
+  if (isArrived) {
+    departBtnClass = primaryBtn; // Active step
+  } else if (isDeparted) {
+    departBtnClass = disabledBtn;
+    departDisabled = true;
+  } else if (isPlannedOrEnRoute) {
+    // Can't depart before arriving (usually), but spec says:
+    // "When status PLANNED or EN_ROUTE: Departed: secondaryBtn"
+    // So we leave it enabled but secondary.
+    departBtnClass = secondaryBtn;
+  }
+
+  return (
+    <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 rounded-lg bg-slate-900/60 px-3 py-2 border border-slate-800">
+      {/* Left Column */}
+      <div className="flex flex-col gap-1">
+        {/* Type & Sequence */}
+        <div className="text-xs uppercase tracking-wide text-slate-400">
+          {stop.type === "PICKUP" ? "Pickup" : stop.type === "DELIVERY" ? "Delivery" : stop.type} #{stop.sequence}
+        </div>
+        
+        {/* Name (City/State or Facility Name if available) */}
+        <div className="text-sm font-medium text-slate-50">
+          {stop.city}, {stop.state}
+        </div>
+
+        {/* Address */}
+        <div className="text-xs text-slate-300">
+          {stop.addressLine1} {stop.zip}
+        </div>
+
+        {/* Time Window */}
+        <div className="text-xs text-slate-400">
+           {format(new Date(stop.windowStart), "MM/dd HH:mm")} – {format(new Date(stop.windowEnd), "HH:mm")}
+        </div>
+      </div>
+
+      {/* Right Column */}
+      <div className="flex flex-col items-start sm:items-end gap-2 w-full sm:w-auto">
+        {/* Status Pill & Timestamps */}
+        <div className="flex flex-col items-end gap-1">
+          {getStatusPill(stop.status)}
+          
+          {stop.arrivedAt && (
+             <span className="text-[10px] text-slate-400 font-mono">
+               Arrived: {format(new Date(stop.arrivedAt), "HH:mm")}
+             </span>
+          )}
+          {stop.departedAt && (
+             <span className="text-[10px] text-slate-400 font-mono">
+               Departed: {format(new Date(stop.departedAt), "HH:mm")}
+             </span>
+          )}
+        </div>
+
+        {/* Buttons */}
+        {showButtons && (
+          <div className="flex flex-row gap-2 mt-1">
+            <button
+              className={arriveBtnClass}
+              disabled={arriveDisabled || isArriveLoading}
+              onClick={() => handleUpdate("ARRIVED")}
+            >
+              {isArriveLoading ? "Arriving..." : "Arrive"}
+            </button>
+            <button
+              className={departBtnClass}
+              disabled={departDisabled || isDepartLoading}
+              onClick={() => handleUpdate("DEPARTED")}
+            >
+              {isDepartLoading ? "Departing..." : "Departed"}
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// --- Main Page Component ---
 
 export default function LoadDetails() {
   const [, params] = useRoute("/driver/loads/:id");
@@ -25,41 +196,29 @@ export default function LoadDetails() {
   const handleStopStatusUpdate = async (stopId: string, newStatus: "ARRIVED" | "DEPARTED") => {
     if (!load) return;
 
-    // Mock API call
-    try {
-      // In a real app, this would be:
-      // await fetch(`/api/tracking/stops/${stopId}/status`, {
-      //   method: 'POST',
-      //   body: JSON.stringify({ status: newStatus }),
-      // });
-      
-      // Simulate network delay
-      await new Promise(resolve => setTimeout(resolve, 500));
+    // Simulate network delay
+    await new Promise(resolve => setTimeout(resolve, 800));
 
-      // Update local state
-      setLoad(prev => {
-        if (!prev) return undefined;
-        return {
-          ...prev,
-          stops: prev.stops.map(stop => {
-            if (stop.id === stopId) {
-              return {
-                ...stop,
-                status: newStatus,
-                arrivedAt: newStatus === "ARRIVED" ? new Date().toISOString() : stop.arrivedAt,
-                departedAt: newStatus === "DEPARTED" ? new Date().toISOString() : stop.departedAt
-              };
-            }
-            return stop;
-          })
-        };
-      });
+    // Update local state
+    setLoad(prev => {
+      if (!prev) return undefined;
+      return {
+        ...prev,
+        stops: prev.stops.map(stop => {
+          if (stop.id === stopId) {
+            return {
+              ...stop,
+              status: newStatus,
+              arrivedAt: newStatus === "ARRIVED" ? new Date().toISOString() : stop.arrivedAt,
+              departedAt: newStatus === "DEPARTED" ? new Date().toISOString() : stop.departedAt
+            };
+          }
+          return stop;
+        })
+      };
+    });
 
-      toast.success(`Stop marked as ${newStatus.toLowerCase()}`);
-    } catch (error) {
-      console.error("Error updating status:", error);
-      toast.error("Failed to update status");
-    }
+    toast.success(`Stop marked as ${newStatus.toLowerCase()}`);
   };
 
   if (loading) {
@@ -107,105 +266,17 @@ export default function LoadDetails() {
           </Button>
         </div>
 
-        {/* Stops Timeline */}
+        {/* Stops List */}
         <div className="space-y-4">
           <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider pl-1">Route Plan</h2>
-          <div className="space-y-0">
-            {load.stops.map((stop, idx) => {
-              const isLast = idx === load.stops.length - 1;
-              const isPast = stop.status === "DEPARTED" || stop.status === "ARRIVED" || stop.status === "SKIPPED";
-              const isCompleted = stop.status === "DEPARTED";
-              
-              // Determine button states
-              const showButtons = stop.type === "PICKUP" || stop.type === "DELIVERY";
-              const isArriveDisabled = stop.status === "ARRIVED" || stop.status === "DEPARTED";
-              const isDepartDisabled = stop.status === "DEPARTED"; // Can depart if ARRIVED or PLANNED/EN_ROUTE (though logically usually after arrive)
-
-              return (
-                <div key={stop.id} className="flex gap-4 relative pb-8 last:pb-0">
-                  {/* Connector Line */}
-                  {!isLast && (
-                    <div className={`absolute left-[11px] top-3 bottom-0 w-[2px] ${
-                      isPast ? "bg-primary" : "bg-border"
-                    }`} />
-                  )}
-                  
-                  {/* Status Dot */}
-                  <div className={`relative z-10 h-6 w-6 rounded-full border-2 flex items-center justify-center shrink-0 transition-colors ${
-                    stop.status === "DEPARTED" 
-                      ? "bg-primary border-primary text-primary-foreground"
-                      : stop.status === "ARRIVED"
-                      ? "bg-primary border-primary text-primary-foreground"
-                      : "bg-background border-muted-foreground/30 text-muted-foreground"
-                  }`}>
-                    {stop.status === "DEPARTED" || stop.status === "ARRIVED" ? (
-                      <CheckCircle2 className="h-3.5 w-3.5" />
-                    ) : (
-                      <span className="text-[10px] font-bold">{idx + 1}</span>
-                    )}
-                  </div>
-
-                  {/* Content */}
-                  <div className="flex-1 space-y-3 pt-0.5">
-                    <div className="flex justify-between items-start">
-                      <div>
-                        <div className="flex items-center gap-2">
-                          <h3 className="font-semibold text-base">{stop.city}, {stop.state}</h3>
-                          <Badge variant="outline" className="text-[10px] h-5 px-1.5 border-border/50 bg-muted/20">
-                            {stop.type}
-                          </Badge>
-                        </div>
-                        <p className="text-sm text-muted-foreground mt-0.5">{stop.addressLine1}</p>
-                        {stop.zip && <p className="text-xs text-muted-foreground">{stop.zip}</p>}
-                      </div>
-                    </div>
-
-                    {/* Time Window */}
-                    <div className="flex items-center gap-2 text-xs bg-card border border-border/50 p-2 rounded-md w-fit">
-                      <Clock className="h-3.5 w-3.5 text-primary" />
-                      <span className="font-mono">
-                        {format(new Date(stop.windowStart), "MMM d, HH:mm")} - {format(new Date(stop.windowEnd), "HH:mm")}
-                      </span>
-                    </div>
-
-                    {/* Action Buttons */}
-                    {showButtons && (
-                      <div className="flex gap-3 mt-3">
-                        <Button 
-                          size="sm" 
-                          className="h-9 flex-1 bg-emerald-600 hover:bg-emerald-700 text-white disabled:opacity-50 disabled:cursor-not-allowed"
-                          onClick={() => handleStopStatusUpdate(stop.id, "ARRIVED")}
-                          disabled={isArriveDisabled}
-                        >
-                          {stop.status === "ARRIVED" || stop.status === "DEPARTED" ? (
-                            <>Arrived {stop.arrivedAt && format(new Date(stop.arrivedAt), "HH:mm")}</>
-                          ) : (
-                            <>
-                              <Play className="mr-2 h-3 w-3 fill-current" /> Arrive
-                            </>
-                          )}
-                        </Button>
-                        <Button 
-                          size="sm" 
-                          variant="secondary"
-                          className="h-9 flex-1 disabled:opacity-50 disabled:cursor-not-allowed"
-                          onClick={() => handleStopStatusUpdate(stop.id, "DEPARTED")}
-                          disabled={isDepartDisabled}
-                        >
-                          {stop.status === "DEPARTED" ? (
-                             <>Departed {stop.departedAt && format(new Date(stop.departedAt), "HH:mm")}</>
-                          ) : (
-                             <>
-                               <Square className="mr-2 h-3 w-3 fill-current" /> Departed
-                             </>
-                          )}
-                        </Button>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
+          <div className="space-y-3">
+            {load.stops.map((stop) => (
+              <StopRow 
+                key={stop.id} 
+                stop={stop} 
+                onStatusUpdate={handleStopStatusUpdate} 
+              />
+            ))}
           </div>
         </div>
 

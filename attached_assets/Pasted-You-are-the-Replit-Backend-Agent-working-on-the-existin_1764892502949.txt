@@ -1,0 +1,224 @@
+You are the Replit Backend Agent working on the existing `agentos-tracking-core` project.
+
+TASK: Update the driver load details page so that:
+1) Each stop row (pickup/delivery) shows a clear status pill (PLANNED / EN_ROUTE / ARRIVED / DEPARTED / SKIPPED).
+2) For each pickup/delivery stop there are two buttons on the right side: “Arrive” and “Departed”.
+3) Buttons call the existing API route POST /api/tracking/stops/[id]/status and visually reflect the current status (enabled/disabled and styles).
+
+Work ONLY inside this project, keep the rest of logic and types intact.
+
+────────────────────────────────
+1. CLIENT КОМПОНЕНТ ДЛЯ СТОПОВ
+────────────────────────────────
+
+On the page file: src/app/driver/loads/[id]/page.tsx
+
+• If this page is currently a pure server component, create a small client component for a single stop row.
+
+Either:
+- define an inner client component at the bottom of page.tsx with "use client"; at the top of that component section,
+OR
+- create a new file src/components/driver/StopRowClient.tsx with "use client"; and import it into page.tsx.
+
+The client component must receive via props at least:
+- stop.id
+- stop.type
+- stop.sequence
+- stop.name
+- stop.addressLine1, stop.city, stop.state, stop.zip, stop.country
+- stop.windowStart, stop.windowEnd
+- stop.status (StopStatus enum from Prisma: PLANNED, EN_ROUTE, ARRIVED, DEPARTED, SKIPPED)
+- stop.arrivedAt, stop.departedAt (optional timestamps)
+
+Use TypeScript props so that types are clear.
+
+────────────────────────────────
+2. РАЗМЕТКА СТРОКИ STOP ROW
+────────────────────────────────
+
+Размести контент так:
+
+Обёртка строки:
+- div с классами:
+  "flex flex-row items-center justify-between gap-3 rounded-lg bg-slate-900/60 px-3 py-2 border border-slate-800"
+
+Внутри:
+- Левая колонка: div "flex flex-col gap-1"
+  Содержимое:
+  1) Верхняя строка: маленький лейбл типа стопа и имя:
+     – Текст типа:
+       если stop.type === "PICKUP" → "Pickup"
+       если stop.type === "DELIVERY" → "Delivery"
+       иначе просто stop.type.
+     – Рядом можно добавить номер последовательности, например "Pickup #1" или "Delivery #2".
+     – Класс текста: "text-xs uppercase tracking-wide text-slate-400"
+  2) Имя stop.name (крупнее):
+     – класс: "text-sm font-medium text-slate-50"
+  3) Адрес (addressLine1, city, state, zip):
+     – в одной строке, класс: "text-xs text-slate-300"
+  4) Окно времени:
+     – формат: "12/02 10:00 – 16:00"
+     – используй toLocaleString или простое форматирование на сервере.
+     – класс: "text-xs text-slate-400"
+
+Под или рядом с этими полями покажи статус-пилл (см. следующий пункт).
+
+- Правая колонка: div "flex flex-col items-end gap-1"
+  Внутри:
+  1) Статус-пилл (можно здесь, над кнопками).
+  2) Блок с кнопками: div "flex flex-row gap-2"
+
+────────────────────────────────
+3. СТАТУС-ПИЛЛ ДЛЯ STOP.STATUS
+────────────────────────────────
+
+Добавь функцию, которая по значению stop.status возвращает:
+- текст для отображения
+- цветовые классы Tailwind.
+
+Пример соответствий:
+
+If status === "PLANNED":
+  text = "Planned"
+  classes = "bg-gray-800 text-gray-200"
+If status === "EN_ROUTE":
+  text = "En route"
+  classes = "bg-blue-900 text-blue-200"
+If status === "ARRIVED":
+  text = "Arrived"
+  classes = "bg-emerald-900 text-emerald-200"
+If status === "DEPARTED":
+  text = "Departed"
+  classes = "bg-teal-900 text-teal-200"
+If status === "SKIPPED":
+  text = "Skipped"
+  classes = "bg-red-900 text-red-200"
+
+Базовый класс для пилла:
+"inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium"
+
+Отрендери его так:
+<div className={`inline-flex ... ${colorClasses}`}>{statusText}</div>
+
+Также ниже или рядом можно вывести строки:
+- если arrivedAt есть → "Arrived: HH:MM"
+- если departedAt есть → "Departed: HH:MM"
+Форматируй время через toLocaleTimeString с hour: "2-digit", minute: "2-digit".
+
+────────────────────────────────
+4. КНОПКИ ARRIVE И DEPARTED
+────────────────────────────────
+
+Для каждой остановки типа PICKUP или DELIVERY отрендери две кнопки справа:
+- "Arrive"
+- "Departed"
+
+Для других типов (DROP, YARD) пока можно не показывать кнопки вообще.
+
+Базовый стиль кнопки (строка, не код):
+"inline-flex items-center justify-center px-2.5 py-1 text-xs font-medium rounded-md border transition disabled:opacity-40 disabled:cursor-not-allowed"
+
+Определи три набора классов:
+
+baseBtn = общие классы как выше.
+primaryBtn = baseBtn + " border-emerald-500 bg-emerald-600 text-white hover:bg-emerald-500"
+secondaryBtn = baseBtn + " border-slate-500 bg-slate-800 text-slate-100 hover:bg-slate-700"
+disabledBtn = baseBtn + " border-slate-700 bg-slate-900 text-slate-400"
+
+Логика выбора стиля по статусу:
+- Когда статус PLANNED или EN_ROUTE:
+  — кнопка Arrive: primaryBtn
+  — кнопка Departed: secondaryBtn
+- Когда статус ARRIVED:
+  — Arrive: disabledBtn disabled={true}
+  — Departed: primaryBtn
+- Когда статус DEPARTED или SKIPPED:
+  — обе кнопки: disabledBtn disabled={true}
+
+Кнопки должны быть расположены в div "flex flex-row gap-2".
+
+────────────────────────────────
+5. ЛОКАЛЬНОЕ СОСТОЯНИЕ LOADING ДЛЯ КНОПОК
+────────────────────────────────
+
+В клиент-компоненте добавь:
+- useState для isArriveLoading (boolean)
+- useState для isDepartLoading (boolean)
+
+При клике:
+- соответствующая кнопка становится disabled.
+- текст можно заменить на "Arriving..." или "Departing..." во время запроса.
+
+Например:
+если newStatus === "ARRIVED" → isArriveLoading = true
+если newStatus === "DEPARTED" → isDepartLoading = true
+
+disabled для Arrive:
+- когда isArriveLoading === true
+- или когда логически кнопка должна быть не активна (см. статус).
+disabled для Departed:
+- когда isDepartLoading === true
+- или когда логически не активна.
+
+────────────────────────────────
+6. ОБРАБОТЧИКИ КЛИКОВ И FETCH
+────────────────────────────────
+
+В client-компоненте импортируй useRouter из "next/navigation".
+
+Создай функцию handleUpdateStatus(newStatus: "ARRIVED" | "DEPARTED"):
+- Внутри:
+  1) В зависимости от newStatus выставь нужный *Loading флаг.
+  2) Вызови fetch на URL `/api/tracking/stops/${stop.id}/status`:
+     – метод POST
+     – заголовок "Content-Type": "application/json"
+     – body: JSON.stringify({ status: newStatus })
+  3) Если ответ не ok:
+     – выведи console.error, можешь добавить простое alert("Failed to update status").
+  4) Если всё ок:
+     – вызови router.refresh() чтобы перерисовать страницу и получить обновлённый stop.status, arrivedAt, departedAt.
+  5) В блоке finally верни isArriveLoading и isDepartLoading к false.
+
+Кнопки должны вызывать:
+- Arrive: onClick → handleUpdateStatus("ARRIVED")
+- Departed: onClick → handleUpdateStatus("DEPARTED")
+
+────────────────────────────────
+7. ПРОВЕРЬ API /api/tracking/stops/[id]/status
+────────────────────────────────
+
+Файл: src/app/api/tracking/stops/[id]/status/route.ts
+
+Убедись, что:
+- API читает JSON-body и достаёт поле "status".
+- Разрешённые значения пока только "ARRIVED" и "DEPARTED".
+- С помощью Prisma обновляет модель TrackingStop:
+  • если status === "ARRIVED":
+    – установить status = ARRIVED
+    – если arrivedAt ещё не задан, установить arrivedAt = текущая дата/время
+  • если status === "DEPARTED":
+    – установить status = DEPARTED
+    – если departedAt ещё не задан, установить departedAt = текущая дата/время
+- Возвращает 200 и обновлённый объект стопа в JSON (NextResponse.json).
+
+Можно также (но не обязательно сейчас) добавить TODO-хук, чтобы при изменении статуса дергать интеграционные webhooks (AgentOS, TMS).
+
+────────────────────────────────
+8. ФИНАЛЬНАЯ ПРОВЕРКА
+────────────────────────────────
+
+После изменений:
+- Страница /driver/loads/[id] успешно билдится.
+- Для каждого стопа типа PICKUP/DELIVERY:
+  • виден лейбл типа, название, адрес и окно времени;
+  • виден статус-пилл с корректным цветом и текстом;
+  • справа две кнопки Arrive и Departed.
+- При нажатии:
+  • выполняется запрос к API,
+  • после успешного ответа страница обновляется,
+  • статус и время (Arrived/Departed) меняются,
+  • кнопки переходят в правильное enabled/disabled состояние и стиль.
+
+Сохрани аккуратный, чистый код и соблюдай текущий стиль проекта (TypeScript + Tailwind, без лишних библиотек).
+
+END OF INSTRUCTIONS
