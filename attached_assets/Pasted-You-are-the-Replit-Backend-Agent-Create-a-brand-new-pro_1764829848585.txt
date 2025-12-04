@@ -1,0 +1,612 @@
+You are the Replit Backend Agent. Create a brand new project called **agentos-tracking-core**.
+
+## Goal
+
+Build a small tracking backend + mini-app similar to MacroPoint, but:
+
+1. It MUST work standalone (as its own tracker for brokers / carriers).
+2. It MUST be ready to integrate with an external platform called **AgentOS** via REST API and webhooks.
+
+Stack:
+
+- Next.js 14 with **App Router**
+- TypeScript
+- Tailwind CSS
+- Prisma as ORM
+- SQLite as DB (via Prisma) for simplicity in Replit
+
+---
+
+## High-Level Requirements
+
+1. Implement a backend “Tracking Core” with the following entities:
+   - CarrierCompany
+   - Broker
+   - Driver
+   - TrackingLoad
+   - TrackingStop
+   - TrackingSession
+   - LocationPoint
+   - Document
+   - PublicTrackingLink
+   - IntegrationMapping
+
+2. Implement REST-style API routes under `/api/tracking/*` used by:
+   - Driver mini-app (mobile/web UI)
+   - Public tracking page for brokers (like a MacroPoint link)
+   - External systems (AgentOS, broker TMS) to create loads and receive webhooks.
+
+3. Implement minimal frontend pages:
+   - `/driver` – Driver’s view with tabs: **Today**, **History**, **Upcoming** (list of loads).
+   - `/driver/loads/[id]` – detailed view of a specific load (similar to MacroPoint “View Load” screen with list of stops and actions).
+   - `/public/track/[token]` – public tracking page for brokers/clients, showing status and map placeholder for the route.
+
+4. Use Tailwind CSS for layout and styling. Design can be simple but clean; dark-ish background with accent colors (you can choose), somewhat reminiscent of MacroPoint UI but not a copy.
+
+---
+
+## Project Setup
+
+1. Initialize a new Next.js 14 App Router + TypeScript + Tailwind project.
+2. Add Prisma and configure SQLite:
+
+   - Install dependencies:
+     - `@prisma/client`
+     - `prisma`
+   - Use SQLite datasource (`provider = "sqlite"`) in Prisma.
+   - Use a local DB file `./dev.db`.
+
+3. Implement a shared `PrismaClient` in `src/lib/db.ts` and reuse it in all route handlers.
+
+---
+
+## Prisma Schema
+
+Create file: `prisma/schema.prisma` with the following content (adapt to proper formatting, but keep fields and enums):
+
+```prisma
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum LoadStatus {
+  CREATED
+  DISPATCHED
+  IN_TRANSIT
+  DELIVERED
+  CANCELLED
+}
+
+enum TrackingStatus {
+  ON
+  PAUSED
+  STOPPED
+}
+
+enum TrackingMode {
+  GPS
+  MANUAL
+  MIXED
+}
+
+enum StopType {
+  PICKUP
+  DELIVERY
+  DROP
+  YARD
+}
+
+enum StopStatus {
+  PLANNED
+  EN_ROUTE
+  ARRIVED
+  DEPARTED
+  SKIPPED
+}
+
+enum DocumentType {
+  BOL
+  POD
+  LUMPER_RECEIPT
+  FUEL_RECEIPT
+  OTHER
+}
+
+enum DocumentStatus {
+  UPLOADED
+  PROCESSING
+  PROCESSED
+  REJECTED
+}
+
+enum ExternalSystem {
+  AGENTOS
+  BROKER_TMS
+  OTHER
+}
+
+model CarrierCompany {
+  id        String         @id @default(cuid())
+  name      String
+  dotNumber String?        @unique
+  mcNumber  String?        @unique
+  timezone  String?
+
+  drivers   Driver[]
+  loads     TrackingLoad[]
+
+  createdAt DateTime       @default(now())
+  updatedAt DateTime       @updatedAt
+}
+
+model Broker {
+  id           String         @id @default(cuid())
+  name         String
+  type         String?
+  contactEmail String?
+  contactPhone String?
+
+  loads        TrackingLoad[]
+
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+}
+
+model Driver {
+  id         String         @id @default(cuid())
+  fullName   String
+  phone      String         @unique
+  email      String?
+  lang       String         @default("en")
+  status     String         @default("active")
+
+  carrierId  String?
+  carrier    CarrierCompany? @relation(fields: [carrierId], references: [id])
+
+  loads      TrackingLoad[]  @relation("LoadDriver")
+  sessions   TrackingSession[]
+  locations  LocationPoint[]
+  documents  Document[]
+
+  createdAt  DateTime       @default(now())
+  updatedAt  DateTime       @updatedAt
+}
+
+model TrackingLoad {
+  id                String             @id @default(cuid())
+
+  externalLoadId    String?
+  sourceSystem      ExternalSystem     @default(OTHER)
+
+  carrierId         String
+  carrier           CarrierCompany     @relation(fields: [carrierId], references: [id])
+
+  brokerId          String?
+  broker            Broker?            @relation(fields: [brokerId], references: [id])
+
+  driverId          String?
+  driver            Driver?            @relation("LoadDriver", fields: [driverId], references: [id])
+
+  status            LoadStatus         @default(CREATED)
+  trackingMode      TrackingMode       @default(GPS)
+  trackingStatus    TrackingStatus     @default(ON)
+
+  rateAmount        Float?
+  rateCurrency      String?
+
+  pickupEta         DateTime?
+  deliveryEta       DateTime?
+
+  lastLocationCity  String?
+  lastLocationState String?
+  lastLocationLat   Float?
+  lastLocationLon   Float?
+  lastLocationAt    DateTime?
+
+  stops             TrackingStop[]
+  sessions          TrackingSession[]
+  locations         LocationPoint[]
+  documents         Document[]
+  publicLinks       PublicTrackingLink[]
+  integrations      IntegrationMapping[]
+
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+
+  @@index([externalLoadId])
+  @@index([carrierId])
+  @@index([brokerId])
+  @@index([driverId])
+}
+
+model TrackingStop {
+  id              String        @id @default(cuid())
+  loadId          String
+  load            TrackingLoad  @relation(fields: [loadId], references: [id])
+
+  type            StopType
+  sequence        Int
+  name            String?
+
+  addressLine1    String
+  addressLine2    String?
+  city            String
+  state           String
+  zip             String?
+  country         String?
+
+  windowStart     DateTime?
+  windowEnd       DateTime?
+
+  status          StopStatus    @default(PLANNED)
+  arrivedAt       DateTime?
+  departedAt      DateTime?
+
+  geoLat          Float?
+  geoLon          Float?
+  geoRadiusMeters Int?
+
+  noteFromDisp    String?
+
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  @@index([loadId, sequence])
+}
+
+model TrackingSession {
+  id          String        @id @default(cuid())
+  loadId      String
+  load        TrackingLoad  @relation(fields: [loadId], references: [id])
+
+  driverId    String
+  driver      Driver        @relation(fields: [driverId], references: [id])
+
+  deviceType  String
+  appVersion  String?
+
+  startedAt   DateTime      @default(now())
+  endedAt     DateTime?
+  status      String        @default("active")
+
+  lastPingAt  DateTime?
+  lastPingLat Float?
+  lastPingLon Float?
+
+  locations   LocationPoint[]
+
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  @@index([loadId, driverId])
+}
+
+model LocationPoint {
+  id            String           @id @default(cuid())
+  loadId        String
+  load          TrackingLoad     @relation(fields: [loadId], references: [id])
+
+  driverId      String?
+  driver        Driver?          @relation(fields: [driverId], references: [id])
+
+  sessionId     String?
+  session       TrackingSession? @relation(fields: [sessionId], references: [id])
+
+  lat           Float
+  lon           Float
+  speedKph      Float?
+  headingDeg    Float?
+  accuracyMeters Float?
+  source        String           @default("device")
+
+  createdAt     DateTime         @default(now())
+
+  @@index([loadId, createdAt])
+  @@index([driverId, createdAt])
+}
+
+model Document {
+  id           String         @id @default(cuid())
+  loadId       String
+  load         TrackingLoad   @relation(fields: [loadId], references: [id])
+
+  driverId     String?
+  driver       Driver?        @relation(fields: [driverId], references: [id])
+
+  stopId       String?
+  stop         TrackingStop?  @relation(fields: [stopId], references: [id])
+
+  type         DocumentType   @default(OTHER)
+  fileUrl      String
+  fileName     String?
+  contentType  String?
+  sizeBytes    Int?
+
+  status       DocumentStatus @default(UPLOADED)
+  ocrDataJson  String?
+
+  uploadedAt   DateTime       @default(now())
+  processedAt  DateTime?
+
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+
+  @@index([loadId])
+  @@index([stopId])
+}
+
+model PublicTrackingLink {
+  id             String         @id @default(cuid())
+  loadId         String
+  load           TrackingLoad   @relation(fields: [loadId], references: [id])
+
+  token          String         @unique
+  expiresAt      DateTime?
+  allowedToSee   String         @default("status_and_route")
+
+  createdAt      DateTime       @default(now())
+
+  @@index([loadId])
+}
+
+model IntegrationMapping {
+  id             String          @id @default(cuid())
+  loadId         String
+  load           TrackingLoad    @relation(fields: [loadId], references: [id])
+
+  externalSystem ExternalSystem  @default(OTHER)
+  externalLoadId String
+  webhookUrl     String?
+
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+
+  @@unique([externalSystem, externalLoadId])
+  @@index([loadId])
+}
+
+After creating the schema, run prisma migrate dev and prisma generate.
+
+⸻
+
+Shared DB Helper
+
+Create src/lib/db.ts:
+	•	Import PrismaClient.
+	•	Create a singleton instance for dev.
+	•	Export it as db.
+
+⸻
+
+API Routes (App Router)
+
+Create the following route handlers under src/app/api:
+
+1) Create or sync a load
+
+File: src/app/api/tracking/loads/route.ts
+
+Implement:
+	•	POST /api/tracking/loads
+	•	Input (JSON) should roughly match:
+	•	externalLoadId?: string
+	•	sourceSystem?: 'AGENTOS' | 'BROKER_TMS' | 'OTHER'
+	•	carrierId: string
+	•	Optional broker object ({ id?, name? }) – create or link broker.
+	•	Driver object { phone: string; fullName?: string } – find or create Driver.
+	•	rateAmount?, rateCurrency?
+	•	stops: [] – array of stops as described in the schema.
+	•	Optional webhookUrl to create an IntegrationMapping row.
+	•	Behaviour:
+	•	Create or reuse Broker and Driver.
+	•	Create TrackingLoad + TrackingStop rows.
+	•	Optionally create IntegrationMapping (with externalSystem and externalLoadId).
+	•	Return loadId, driverId, and (for convenience) a newly created public tracking token.
+	•	GET /api/tracking/loads/:id is a separate route (see below).
+
+2) Get load details for driver
+
+File: src/app/api/tracking/loads/[id]/route.ts
+
+Support:
+	•	GET – return a detailed JSON view for driver UI:
+	•	Basic load info.
+	•	Broker / carrier names.
+	•	Driver summary.
+	•	Stops array (with status).
+	•	Last location block (city, state, lat, lon, timestamp).
+
+3) Driver loads list (Today / History / Upcoming)
+
+File: src/app/api/tracking/driver/loads/route.ts
+
+Support:
+	•	GET /api/tracking/driver/loads?driverId=...&view=today|history|upcoming
+
+Return:
+
+{
+  "driverId": "drv_...",
+  "view": "today",
+  "loads": [
+    {
+      "id": "ld_...",
+      "externalLoadId": "...",
+      "brokerName": "Soar Transportation Group",
+      "status": "IN_TRANSIT",
+      "lastLocationCity": "Ogden",
+      "lastLocationState": "UT",
+      "lastLocationAt": "2025-12-03T12:30:00.000Z"
+    }
+  ]
+}
+
+Use a simple date-based heuristic:
+	•	today – loads with pickup/delivery windows touching today or currently IN_TRANSIT.
+	•	history – DELIVERED / CANCELLED.
+	•	upcoming – not yet started.
+
+4) Location pings
+
+File: src/app/api/tracking/locations/route.ts
+	•	POST /api/tracking/locations:
+Input:
+	•	loadId: string
+	•	driverId?: string
+	•	sessionId?: string
+	•	lat: number
+	•	lon: number
+	•	optional speedKph, headingDeg, accuracyMeters.
+Behaviour:
+	•	Insert a LocationPoint row.
+	•	Update TrackingSession lastPing* fields (create a session if needed).
+	•	Update TrackingLoad lastLocation* fields.
+	•	(Future: run geofencing logic to auto-set ARRIVED/DEPARTED on stops.)
+Return { ok: true }.
+
+5) Stop status updates (Arrived / Departed)
+
+File: src/app/api/tracking/stops/[id]/status/route.ts
+	•	POST:
+Input JSON:
+	•	driverId?: string
+	•	status: "ARRIVED" | "DEPARTED"
+Behaviour:
+	•	Update TrackingStop status and timestamps (arrivedAt / departedAt).
+	•	Optionally update TrackingLoad status (IN_TRANSIT/DELIVERED).
+	•	Optionally trigger webhook via IntegrationMapping (NOT fully implemented; just leave TODO).
+
+6) Load actions (Mark as Delivered, Pause Tracking)
+
+File: src/app/api/tracking/loads/[id]/action/route.ts
+	•	POST:
+Input:
+	•	driverId?: string
+	•	action: "MARK_DELIVERED" | "PAUSE_TRACKING" | "RESUME_TRACKING"
+Behaviour:
+	•	For MARK_DELIVERED: set load status to DELIVERED, trackingStatus to STOPPED.
+	•	For PAUSE_TRACKING / RESUME_TRACKING: update trackingStatus.
+	•	Return updated load state.
+
+7) Documents (POD, BOL etc.)
+
+For now, assume files are already uploaded somewhere and we only register metadata.
+
+File: src/app/api/tracking/documents/route.ts
+	•	POST:
+Input:
+	•	loadId: string
+	•	driverId?: string
+	•	stopId?: string
+	•	type: DocumentType
+	•	fileUrl: string
+	•	optional fileName, contentType, sizeBytes.
+Behaviour:
+	•	Create a Document row.
+	•	Return { documentId, status }.
+
+8) Public tracking link management
+
+File: src/app/api/tracking/public-links/route.ts
+	•	POST:
+Input:
+	•	loadId: string
+	•	allowedToSee?: string (default “status_and_route”)
+	•	expiresAt?: Date
+Behaviour:
+	•	Create a PublicTrackingLink with random token.
+	•	Return { token, url } where url = "<BASE_URL>/public/track/" + token.
+
+File: src/app/api/public/track/[token]/route.ts
+	•	GET:
+	•	Resolve token → load.
+	•	Enforce expiresAt.
+	•	Return summary JSON:
+	•	Basic load info.
+	•	stops + statuses.
+	•	lastLocation.
+
+Frontend page /public/track/[token] will call this endpoint.
+
+⸻
+
+Frontend Pages (App Router)
+
+Implement simple but functional React pages:
+
+1) Driver loads list
+
+File: src/app/driver/page.tsx
+	•	Shows three tabs: Today, History, Upcoming.
+	•	For now, you can hard-code a currentDriverId constant at top of file (TODO: replace with real auth later).
+	•	Fetch /api/tracking/driver/loads?driverId=...&view=today etc.
+	•	Show list of cards per load:
+	•	Broker/company name
+	•	ExternalLoadId or internal id
+	•	Status
+	•	Last location city/state/time
+	•	Button “View” linking to /driver/loads/[id].
+
+2) Driver load detail
+
+File: src/app/driver/loads/[id]/page.tsx
+	•	Fetch /api/tracking/loads/[id].
+	•	Show:
+	•	Header with broker/company, load id, last update.
+	•	List of stops with:
+	•	name
+	•	address
+	•	time window
+	•	status chip (PLANNED / ARRIVED / DEPARTED / etc.)
+	•	buttons “Arrived” / “Departed” (call stop status API).
+	•	Section for last location (lat/lon + city/state + timestamp).
+	•	Action menu or simple buttons:
+	•	“Mark as Delivered”
+	•	“Pause Tracking” / “Resume Tracking”.
+	•	Optionally show “Documents” section placeholder.
+
+3) Public tracking page
+
+File: src/app/public/track/[token]/page.tsx
+	•	Call /api/public/track/[token].
+	•	If token invalid or expired → show simple error.
+	•	Show:
+	•	Basic load info (carrier, broker, statuses).
+	•	Stops list with statuses.
+	•	Last known location.
+	•	Simple map placeholder (you can just render a box with lat/lon; no need to implement real maps now).
+
+⸻
+
+Styling
+	•	Configure Tailwind.
+	•	Use a dark-ish background and clean layout.
+	•	Make sure components are mobile-friendly (this will eventually be displayed in a webview / mini-app).
+
+⸻
+
+Integration Hooks (AgentOS / Broker TMS)
+
+When updating status or location:
+	•	Leave TODO hooks in code to:
+	•	lookup IntegrationMapping rows by loadId,
+	•	POST JSON payloads to webhookUrl if present (e.g., { event: "load.status.updated", payload: {...} }).
+
+You don’t need to fully implement external HTTP calls now, but please:
+	•	Create a small helper (e.g. src/lib/webhook.ts) with a function stub sendIntegrationWebhook(mapping, event, payload) and call it from status-change handlers with TODO comments.
+
+⸻
+
+Final Checks
+	•	Ensure TypeScript builds.
+	•	Ensure all routes compile.
+	•	Ensure Prisma client is used correctly and DB operations are awaited.
+	•	Provide minimal seed script or dummy data example (optional) to test UI.
+	•	Project must run with npm run dev out of the box on Replit with SQLite and this schema.
+
+END OF PROMPT
