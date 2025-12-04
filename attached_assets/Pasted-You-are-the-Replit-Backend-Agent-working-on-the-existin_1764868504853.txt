@@ -1,0 +1,65 @@
+You are the Replit Backend Agent working on the existing `agentos-tracking-core` project.
+
+Goal: On the driver load details page (`src/app/driver/loads/[id]/page.tsx`), add two buttons for each stop of type `PICKUP` or `DELIVERY`: **Arrive** and **Departed**, displayed on the same row as the stop.
+
+Requirements:
+
+1. For each stop in the list on `/driver/loads/[id]/page.tsx`:
+   - If `stop.type` is `PICKUP` or `DELIVERY`, render two buttons:
+     - **Arrive**
+     - **Departed**
+   - For other stop types (DROP/YARD), buttons can be hidden for now.
+
+2. Button behavior:
+   - Clicking **Arrive** should send a `POST` to:
+     `/api/tracking/stops/${stop.id}/status`
+     with JSON body:
+     `{ "status": "ARRIVED" }`
+   - Clicking **Departed** should send a `POST` to:
+     `/api/tracking/stops/${stop.id}/status`
+     with JSON body:
+     `{ "status": "DEPARTED" }`
+   - Use `fetch` in the client component, handle errors with a simple `console.error` and optionally a `alert("Error")`.
+   - After a successful response, refresh the stop list on the page so the new status and timestamps are visible.
+     - You can either:
+       - use `router.refresh()` (Next.js App Router), OR
+       - re-fetch stops/state locally if you structured it that way.
+
+3. State / disabling logic:
+   - If stop.status is `ARRIVED`:
+     - Disable **Arrive** button (or show it as secondary/disabled).
+   - If stop.status is `DEPARTED`:
+     - Disable both **Arrive** and **Departed** buttons.
+   - If stop.status is `PLANNED` or `EN_ROUTE`:
+     - Both buttons are active.
+   - This logic should be derived from the `StopStatus` field coming from the API.
+
+4. UI details:
+   - Place the buttons on the right side of the stop row (next to stop name/address/time window).
+   - Use Tailwind classes for simple styling, e.g.:
+     - Arrive button: small, rounded, with a green-ish accent.
+     - Departed button: small, rounded, with a blue-ish or neutral accent.
+   - Buttons must be mobile-friendly (no giant padding, but comfortable to tap).
+
+5. API contract:
+   - The project already has and uses the route:
+     `POST /api/tracking/stops/[id]/status`
+   - Make sure the handler in `src/app/api/tracking/stops/[id]/status/route.ts` correctly:
+     - reads `{ status: "ARRIVED" | "DEPARTED" }` from the request body,
+     - updates the `TrackingStop` status & timestamps, and
+     - returns the updated stop JSON.
+   - If anything is missing or not implemented in this API route, implement it according to the existing Prisma schema:
+     - `ARRIVED` → set `status = ARRIVED`, `arrivedAt = now()` if not set.
+     - `DEPARTED` → set `status = DEPARTED`, `departedAt = now()` if not set.
+     - Return 200 with updated stop.
+
+6. Code organization:
+   - If `page.tsx` is currently a server component, create a small **client component** (e.g. `StopRowClient`) inside the same file or under `src/components/driver/StopRowClient.tsx`:
+     - This client component receives a `stop` prop and renders:
+       - the stop info
+       - the Arrive / Departed buttons and their click handlers.
+   - Use `"use client";` at the top of the client component.
+
+7. Make sure TypeScript types are correct, the app builds, and the load details page now shows two buttons per stop (for pickup & delivery) that correctly call the API and update the UI.
+
+END OF INSTRUCTIONS

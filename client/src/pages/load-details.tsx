@@ -1,16 +1,70 @@
 import { useRoute, useLocation } from "wouter";
-import { getLoadById } from "@/lib/mock-data";
+import { getLoadById, Load, Stop } from "@/lib/mock-data";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
-import { ArrowLeft, Map, Navigation, Phone, Upload, CheckCircle2, Clock } from "lucide-react";
+import { ArrowLeft, Map, Navigation, Upload, CheckCircle2, Clock, Play, Square } from "lucide-react";
 import { format } from "date-fns";
+import { useState, useEffect } from "react";
+import { toast } from "sonner";
 
 export default function LoadDetails() {
   const [, params] = useRoute("/driver/loads/:id");
   const [, setLocation] = useLocation();
-  const load = getLoadById(params?.id || "");
+  const [load, setLoad] = useState<Load | undefined>(undefined);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    // Simulate fetching data
+    const fetchedLoad = getLoadById(params?.id || "");
+    setLoad(fetchedLoad ? { ...fetchedLoad } : undefined);
+    setLoading(false);
+  }, [params?.id]);
+
+  const handleStopStatusUpdate = async (stopId: string, newStatus: "ARRIVED" | "DEPARTED") => {
+    if (!load) return;
+
+    // Mock API call
+    try {
+      // In a real app, this would be:
+      // await fetch(`/api/tracking/stops/${stopId}/status`, {
+      //   method: 'POST',
+      //   body: JSON.stringify({ status: newStatus }),
+      // });
+      
+      // Simulate network delay
+      await new Promise(resolve => setTimeout(resolve, 500));
+
+      // Update local state
+      setLoad(prev => {
+        if (!prev) return undefined;
+        return {
+          ...prev,
+          stops: prev.stops.map(stop => {
+            if (stop.id === stopId) {
+              return {
+                ...stop,
+                status: newStatus,
+                arrivedAt: newStatus === "ARRIVED" ? new Date().toISOString() : stop.arrivedAt,
+                departedAt: newStatus === "DEPARTED" ? new Date().toISOString() : stop.departedAt
+              };
+            }
+            return stop;
+          })
+        };
+      });
+
+      toast.success(`Stop marked as ${newStatus.toLowerCase()}`);
+    } catch (error) {
+      console.error("Error updating status:", error);
+      toast.error("Failed to update status");
+    }
+  };
+
+  if (loading) {
+    return <div className="min-h-screen flex items-center justify-center bg-background"><p className="text-muted-foreground">Loading...</p></div>;
+  }
 
   if (!load) {
     return (
@@ -60,7 +114,13 @@ export default function LoadDetails() {
             {load.stops.map((stop, idx) => {
               const isLast = idx === load.stops.length - 1;
               const isPast = stop.status === "DEPARTED" || stop.status === "ARRIVED" || stop.status === "SKIPPED";
+              const isCompleted = stop.status === "DEPARTED";
               
+              // Determine button states
+              const showButtons = stop.type === "PICKUP" || stop.type === "DELIVERY";
+              const isArriveDisabled = stop.status === "ARRIVED" || stop.status === "DEPARTED";
+              const isDepartDisabled = stop.status === "DEPARTED"; // Can depart if ARRIVED or PLANNED/EN_ROUTE (though logically usually after arrive)
+
               return (
                 <div key={stop.id} className="flex gap-4 relative pb-8 last:pb-0">
                   {/* Connector Line */}
@@ -108,12 +168,39 @@ export default function LoadDetails() {
                       </span>
                     </div>
 
-                    {/* Actions if active stop */}
-                    {stop.status === "PLANNED" && idx === 0 && load.status === "IN_TRANSIT" && (
-                       <div className="flex gap-2 mt-2">
-                         <Button size="sm" className="h-8 text-xs flex-1">Mark Arrived</Button>
-                         <Button size="sm" variant="outline" className="h-8 text-xs px-2"><Phone className="h-3.5 w-3.5" /></Button>
-                       </div>
+                    {/* Action Buttons */}
+                    {showButtons && (
+                      <div className="flex gap-3 mt-3">
+                        <Button 
+                          size="sm" 
+                          className="h-9 flex-1 bg-emerald-600 hover:bg-emerald-700 text-white disabled:opacity-50 disabled:cursor-not-allowed"
+                          onClick={() => handleStopStatusUpdate(stop.id, "ARRIVED")}
+                          disabled={isArriveDisabled}
+                        >
+                          {stop.status === "ARRIVED" || stop.status === "DEPARTED" ? (
+                            <>Arrived {stop.arrivedAt && format(new Date(stop.arrivedAt), "HH:mm")}</>
+                          ) : (
+                            <>
+                              <Play className="mr-2 h-3 w-3 fill-current" /> Arrive
+                            </>
+                          )}
+                        </Button>
+                        <Button 
+                          size="sm" 
+                          variant="secondary"
+                          className="h-9 flex-1 disabled:opacity-50 disabled:cursor-not-allowed"
+                          onClick={() => handleStopStatusUpdate(stop.id, "DEPARTED")}
+                          disabled={isDepartDisabled}
+                        >
+                          {stop.status === "DEPARTED" ? (
+                             <>Departed {stop.departedAt && format(new Date(stop.departedAt), "HH:mm")}</>
+                          ) : (
+                             <>
+                               <Square className="mr-2 h-3 w-3 fill-current" /> Departed
+                             </>
+                          )}
+                        </Button>
+                      </div>
                     )}
                   </div>
                 </div>
@@ -148,7 +235,7 @@ export default function LoadDetails() {
       <div className="fixed bottom-0 left-0 right-0 p-4 bg-background/80 backdrop-blur-xl border-t border-border/40">
         <div className="container mx-auto max-w-md flex gap-3">
           <Button className="w-full font-semibold shadow-lg shadow-primary/20" size="lg">
-            Update Status
+            Update Load Status
           </Button>
         </div>
       </div>
