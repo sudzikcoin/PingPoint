@@ -1,3 +1,4 @@
+import { api } from "@/lib/api";
 import { AppLayout } from "@/components/app-layout";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -47,14 +48,13 @@ export default function AppLoadNew() {
       // Simulate API delay
       await new Promise(resolve => setTimeout(resolve, 1000));
 
-      // 1. Ensure Workspace
-      const workspace = await ensureBrokerWorkspace(brokerEmail, brokerName);
+      // 1. Ensure Workspace via API
+      const workspace = await api.brokers.ensure(brokerEmail, brokerName);
       
-      // 2. Create Load
-      const newLoad = createLoad({
+      // 2. Create Load via API
+      const newLoad = await api.loads.create({
         brokerName: brokerName,
         brokerEmail: brokerEmail,
-        brokerWorkspaceId: workspace.id,
         driverPhone: driverPhone,
         shipperName: formData.get("shipperName") as string,
         carrierName: formData.get("carrierName") as string,
@@ -92,23 +92,13 @@ export default function AppLoadNew() {
         ]
       });
 
-      // 3. Send Notifications
-      await sendBrokerVerificationEmail({
-        email: brokerEmail,
-        brokerName: brokerName,
-        workspaceId: workspace.id,
-      });
-
-      await sendDriverAppLink({
-        phone: driverPhone,
-        loadId: newLoad.id,
-      });
+      // 3. Notifications are handled inside api.loads.create now
 
       // 4. UI Feedback & Redirect
       toast.success(`Load created! Verification email sent to ${brokerEmail}`);
       toast.info(`Driver app link sent to ${driverPhone}`);
       
-      // Redirect to loads dashboard instead of load details
+      // Redirect to loads dashboard
       setLocation(`/app/loads?workspace=${workspace.id}`);
     
     } catch (error) {

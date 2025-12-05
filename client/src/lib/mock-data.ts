@@ -51,6 +51,34 @@ export interface Load {
   brokerEmail?: string;
   driverPhone?: string;
   brokerWorkspaceId?: string;
+  
+  // New backend-aligned fields
+  loadNumber?: string;
+  trackingToken?: string;
+  driverToken?: string;
+  pickupEta?: string;
+  deliveryEta?: string;
+  billingMonth?: string;
+  isBillable?: boolean;
+}
+
+export interface TrackingPing {
+  id: string;
+  loadId: string;
+  driverId: string;
+  lat: number;
+  lng: number;
+  accuracy?: number;
+  source: string;
+  createdAt: string;
+}
+
+export interface RateConfirmationFile {
+  id: string;
+  loadId: string;
+  fileUrl: string;
+  originalName: string;
+  uploadedAt: string;
 }
 
 const TODAY = new Date();

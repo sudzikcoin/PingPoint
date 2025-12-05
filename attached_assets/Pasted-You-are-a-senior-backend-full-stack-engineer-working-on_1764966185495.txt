@@ -1,0 +1,640 @@
+You are a senior backend + full-stack engineer working on the **PingPoint** project in Replit.
+
+Your mission:
+- Implement a minimal but REAL backend for brokers, loads, drivers, email verification, and tracking.
+- Use the existing stack (Next.js 14 App Router + TypeScript + Prisma + PostgreSQL).
+- DO NOT break existing frontend routes (`/`, `/app/loads`, `/app/loads/new`, `/driver/*`, `/track/*`) or arcade styling.
+- Make small, localized changes and clearly mark new functionality with comments and TODOs.
+
+Assume:
+- There is already a Next.js 14 project with App Router (`app/`), TypeScript, Tailwind, and a simple frontend for:
+  - Driver mini-app (`/driver`),
+  - Broker console (`/app/loads`),
+  - New Load page (`/app/loads/new`).
+- We are now adding: database models, API endpoints, email verification, and driver/tracking plumbing.
+
+============================================================
+PART 1 – DATABASE SCHEMA (PRISMA + POSTGRES)
+============================================================
+
+Update `prisma/schema.prisma` to include the following models.
+If some of them already exist, extend them minimally without breaking existing fields.
+Use `@db.Timestamptz` for timestamp fields where needed.
+
+Models to add/update:
+
+model Broker {
+  id             String               @id @default(uuid())
+  name           String
+  email          String               @unique
+  emailVerified  Boolean              @default(false)
+  loads          Load[]
+  verificationTokens VerificationToken[]
+  createdAt      DateTime             @default(now()) @db.Timestamptz
+  updatedAt      DateTime             @updatedAt @db.Timestamptz
+}
+
+model VerificationToken {
+  id        String   @id @default(uuid())
+  broker    Broker   @relation(fields: [brokerId], references: [id])
+  brokerId  String
+  token     String   @unique
+  expiresAt DateTime @db.Timestamptz
+  used      Boolean  @default(false)
+  createdAt DateTime @default(now()) @db.Timestamptz
+}
+
+model Driver {
+  id        String   @id @default(uuid())
+  phone     String
+  loads     Load[]
+  createdAt DateTime @default(now()) @db.Timestamptz
+  updatedAt DateTime @updatedAt @db.Timestamptz
+}
+
+model Load {
+  id              String     @id @default(uuid())
+  broker          Broker     @relation(fields: [brokerId], references: [id])
+  brokerId        String
+  driver          Driver?    @relation(fields: [driverId], references: [id])
+  driverId        String?
+  loadNumber      String     @unique
+  shipperName     String
+  carrierName     String
+  equipmentType   String
+  customerRef     String?
+  rateAmount      Decimal    @db.Decimal(10, 2)
+  status          String     // PLANNED, IN_TRANSIT, AT_PICKUP, DELIVERED, etc.
+  trackingToken   String     @unique
+  driverToken     String     @unique
+  pickupEta       DateTime?  @db.Timestamptz
+  deliveryEta     DateTime?  @db.Timestamptz
+  billingMonth    DateTime?  @db.Date
+  isBillable      Boolean    @default(true)
+  stops           Stop[]
+  trackingPings   TrackingPing[]
+  rateConfirmationFiles RateConfirmationFile[]
+  createdAt       DateTime   @default(now()) @db.Timestamptz
+  updatedAt       DateTime   @updatedAt @db.Timestamptz
+}
+
+model Stop {
+  id           String   @id @default(uuid())
+  load         Load     @relation(fields: [loadId], references: [id])
+  loadId       String
+  sequence     Int
+  type         String   // "PICKUP" or "DELIVERY"
+  name         String
+  fullAddress  String
+  city         String
+  state        String
+  lat          Decimal? @db.Decimal(9, 6)
+  lng          Decimal? @db.Decimal(9, 6)
+  windowFrom   DateTime? @db.Timestamptz
+  windowTo     DateTime? @db.Timestamptz
+  arrivedAt    DateTime? @db.Timestamptz
+  departedAt   DateTime? @db.Timestamptz
+  createdAt    DateTime @default(now()) @db.Timestamptz
+  updatedAt    DateTime @updatedAt @db.Timestamptz
+}
+
+model TrackingPing {
+  id         String   @id @default(uuid())
+  load       Load     @relation(fields: [loadId], references: [id])
+  loadId     String
+  driver     Driver   @relation(fields: [driverId], references: [id])
+  driverId   String
+  lat        Decimal  @db.Decimal(9, 6)
+  lng        Decimal  @db.Decimal(9, 6)
+  accuracy   Decimal? @db.Decimal(6, 2)
+  source     String   // DRIVER_APP / MANUAL / ELD / etc.
+  createdAt  DateTime @default(now()) @db.Timestamptz
+}
+
+model RateConfirmationFile {
+  id           String   @id @default(uuid())
+  load         Load     @relation(fields: [loadId], references: [id])
+  loadId       String
+  fileUrl      String
+  originalName String
+  uploadedAt   DateTime @default(now()) @db.Timestamptz
+}
+
+After updating the schema:
+- Run `npx prisma migrate dev` to create/update tables.
+- Ensure existing migrations are not broken. If conflicts exist, adjust minimally and add TODO comments.
+
+============================================================
+PART 2 – SIMPLE BROKER AUTH & SESSION
+============================================================
+
+We want a passwordless flow:
+- Broker clicks email verification link → we mark email as verified and set a session cookie with `brokerId`.
+- All protected API routes read `brokerId` from the cookie.
+
+Implement a minimal session helper in `lib/auth/brokerSession.ts` (or similar):
+
+- `createBrokerSession(brokerId: string, response: NextResponse)`:
+  - Set a `Set-Cookie` header like `pingpoint_broker_session=<signed token>; HttpOnly; Secure; Path=/; Max-Age=...`.
+  - Use either:
+    - a signed JWT containing brokerId, or
+    - a simple opaque session ID stored in a DB table (if you prefer).
+  - For now, you can use a lightweight JWT with a secret (from env).
+
+- `getBrokerFromRequest(request: NextRequest)`:
+  - Read cookie `pingpoint_broker_session`.
+  - Decode/verify token.
+  - Lookup broker in DB using brokerId.
+  - Return `Broker | null`.
+
+Add TODOs:
+- `// TODO: move JWT secret to env (PINGPOINT_BROKER_JWT_SECRET)`
+- `// TODO: rotate tokens / handle expiry properly later`
+
+============================================================
+PART 3 – BROKER & VERIFICATION API
+============================================================
+
+Use App Router route handlers under `app/api`.
+
+------------------------------------------------------------
+3.1. POST /api/brokers/ensure
+------------------------------------------------------------
+
+Purpose:
+- Find or create a broker by email.
+- This is called from the New Load form.
+
+Route: `app/api/brokers/ensure/route.ts`
+
+Method: `POST`
+
+Request body (JSON):
+{
+  "email": "dispatch@soartransport.com",
+  "name": "Soar Transportation Group"
+}
+
+Logic:
+- Normalize email (trim + lowercase).
+- Try to find existing Broker by email.
+- If found:
+  - Return broker JSON.
+- If not found:
+  - Create new Broker with `name` and `email`.
+  - `emailVerified` = false.
+- Return 200 with broker object.
+
+Response JSON:
+{
+  "id": "uuid",
+  "email": "dispatch@soartransport.com",
+  "name": "Soar Transportation Group",
+  "emailVerified": false,
+  "createdAt": "...",
+  "updatedAt": "..."
+}
+
+------------------------------------------------------------
+3.2. POST /api/brokers/send-verification
+------------------------------------------------------------
+
+Route: `app/api/brokers/send-verification/route.ts`
+
+Method: `POST`
+
+Request body:
+{
+  "brokerId": "uuid"
+}
+
+Logic:
+- Lookup broker by id.
+- Generate a random token (uuid or nanoid).
+- Create VerificationToken:
+  - `brokerId`
+  - `token`
+  - `expiresAt` (e.g. now + 2 days)
+  - `used = false`
+- Construct a verification URL:
+  - `${origin}/api/brokers/verify?token=${token}`
+- Call a helper `sendBrokerVerificationEmail(broker.email, verificationUrl)`:
+  - For now, this can log to console with TODO:
+    - `// TODO: integrate real email provider (SendGrid/Postmark/etc.)`
+- Return 204 or `{ "ok": true }`.
+
+------------------------------------------------------------
+3.3. GET /api/brokers/verify?token=...
+------------------------------------------------------------
+
+Route: `app/api/brokers/verify/route.ts`
+
+Method: `GET`
+
+Query parameter: `token`.
+
+Logic:
+- Find VerificationToken by `token`.
+- Validate:
+  - Not used.
+  - Not expired.
+- Mark token as `used = true`.
+- Mark broker `emailVerified = true`.
+- Call `createBrokerSession(broker.id, NextResponse.redirect("/app/loads"))`:
+  - This sets the session cookie.
+- Redirect the browser to `/app/loads` (personal console).
+
+If invalid/expired token:
+- Return 400 or redirect to an error page (e.g. `/verify-error`).
+
+------------------------------------------------------------
+3.4. GET /api/brokers/me
+------------------------------------------------------------
+
+Route: `app/api/brokers/me/route.ts`
+
+Method: `GET`
+
+Logic:
+- Use `getBrokerFromRequest(request)` to retrieve broker.
+- If none → return 401.
+- Else return broker JSON (id, email, name, emailVerified).
+
+Response:
+{
+  "id": "uuid",
+  "email": "dispatch@soartransport.com",
+  "name": "Soar Transportation Group",
+  "emailVerified": true
+}
+
+============================================================
+PART 4 – LOADS API (BROKER CONSOLE)
+============================================================
+
+All these routes require a valid broker session (use `getBrokerFromRequest`).
+
+------------------------------------------------------------
+4.1. POST /api/loads
+------------------------------------------------------------
+
+Route: `app/api/loads/route.ts` with `POST` handler.
+
+Purpose:
+- Create a new load + stops + driver.
+- Trigger email + SMS notification placeholders.
+
+Request body (JSON) example:
+{
+  "brokerName": "Soar Transportation Group",
+  "brokerEmail": "dispatch@soartransport.com",
+  "driverPhone": "+15551234567",
+
+  "shipperName": "General Mills",
+  "carrierName": "Best Carrier LLC",
+  "equipmentType": "DRY VAN",
+  "customerRef": "PO123456",
+  "rateAmount": 2500.00,
+
+  "stops": [
+    {
+      "type": "PICKUP",
+      "name": "Salt Lake City DC",
+      "fullAddress": "2200 S 4000 W, Salt Lake City, UT",
+      "city": "Salt Lake City",
+      "state": "UT",
+      "windowFrom": "2025-12-06T08:00:00Z",
+      "windowTo": "2025-12-06T10:00:00Z"
+    },
+    {
+      "type": "DELIVERY",
+      "name": "Boise DC",
+      "fullAddress": "1500 Main St, Boise, ID",
+      "city": "Boise",
+      "state": "ID",
+      "windowFrom": "2025-12-07T08:00:00Z",
+      "windowTo": "2025-12-07T12:00:00Z"
+    }
+  ]
+}
+
+Logic:
+- Get current broker from session. Ignore `brokerEmail` for identity (session is source of truth).
+- Ensure Driver:
+  - Find by `driverPhone` or create new Driver.
+- Generate:
+  - `loadNumber` (e.g. "LD-" + current year + incremental counter or nanoid).
+  - `trackingToken` (e.g. "trk_" + nanoid).
+  - `driverToken` (e.g. "drv_" + nanoid).
+- Create Load entry:
+  - With `brokerId`, `driverId`, fields from body, `status = "PLANNED"`, tokens.
+- Create Stop entries from `stops[]` with `sequence` = index + 1.
+- Call notification helpers:
+  - `sendBrokerVerificationEmail` if broker.emailVerified === false (optional).
+  - `sendDriverAppLink(driverPhone, driverToken)`:
+    - For now log a message with URL `${origin}/driver/${driverToken}`.
+    - `// TODO: integrate Twilio or another SMS provider`.
+
+Response 201:
+{
+  "id": "uuid",
+  "loadNumber": "LD-2025-001",
+  "status": "PLANNED",
+  "trackingToken": "trk_abc123",
+  "driverToken": "drv_xyz789"
+}
+
+------------------------------------------------------------
+4.2. GET /api/loads
+------------------------------------------------------------
+
+Route: `app/api/loads/route.ts` with `GET` handler.
+
+Query parameters (optional):
+- `status`, `search`, `page`, `pageSize`.
+
+Logic:
+- Get current broker from session.
+- Query loads where `brokerId = currentBroker.id`.
+- Join/aggregate origin/destination from stops:
+  - origin = first PICKUP stop,
+  - destination = last DELIVERY stop.
+- Return list in a simple shape for the table.
+
+Response 200:
+{
+  "items": [
+    {
+      "id": "uuid",
+      "loadNumber": "LD-2025-001",
+      "shipperName": "General Mills",
+      "originCity": "Salt Lake City",
+      "originState": "UT",
+      "destinationCity": "Boise",
+      "destinationState": "ID",
+      "status": "IN_TRANSIT",
+      "lastPingAt": "2025-12-06T09:21:00Z"
+    }
+  ],
+  "total": 24,
+  "page": 1,
+  "pageSize": 20
+}
+
+------------------------------------------------------------
+4.3. GET /api/loads/[id]
+------------------------------------------------------------
+
+Route: `app/api/loads/[id]/route.ts` with `GET` handler.
+
+Logic:
+- Get broker from session.
+- Find load by id where `brokerId = currentBroker.id`.
+- Include driver + stops ordered by sequence + optional last ping.
+
+Response 200 example:
+{
+  "id": "uuid",
+  "loadNumber": "LD-2025-001",
+  "status": "IN_TRANSIT",
+  "shipperName": "General Mills",
+  "carrierName": "Best Carrier LLC",
+  "equipmentType": "DRY VAN",
+  "customerRef": "PO123456",
+  "rateAmount": 2500.00,
+  "stops": [
+    {
+      "id": "uuid",
+      "sequence": 1,
+      "type": "PICKUP",
+      "name": "Salt Lake City DC",
+      "city": "Salt Lake City",
+      "state": "UT",
+      "fullAddress": "2200 S 4000 W, Salt Lake City, UT",
+      "windowFrom": "2025-12-06T08:00:00Z",
+      "windowTo": "2025-12-06T10:00:00Z",
+      "arrivedAt": "2025-12-06T08:33:00Z",
+      "departedAt": "2025-12-06T08:45:00Z"
+    },
+    {
+      "id": "uuid",
+      "sequence": 2,
+      "type": "DELIVERY",
+      "name": "Boise DC",
+      "city": "Boise",
+      "state": "ID",
+      "fullAddress": "1500 Main St, Boise, ID",
+      "windowFrom": "2025-12-07T08:00:00Z",
+      "windowTo": "2025-12-07T12:00:00Z",
+      "arrivedAt": null,
+      "departedAt": null
+    }
+  ],
+  "driver": {
+    "id": "uuid",
+    "phone": "+15551234567"
+  }
+}
+
+============================================================
+PART 5 – DRIVER MINI-APP API
+============================================================
+
+These endpoints are **NOT auth’d by broker session**, they use `driverToken`.
+
+------------------------------------------------------------
+5.1. GET /api/driver/[driverToken]
+------------------------------------------------------------
+
+Route: `app/api/driver/[driverToken]/route.ts` with `GET`.
+
+Logic:
+- Find load by `driverToken`.
+- Return minimal info needed by driver mini-app: stops, status, loadNumber.
+
+Response 200:
+{
+  "loadNumber": "LD-2025-001",
+  "status": "IN_TRANSIT",
+  "stops": [
+    {
+      "sequence": 1,
+      "type": "PICKUP",
+      "name": "Salt Lake City DC",
+      "city": "Salt Lake City",
+      "state": "UT",
+      "arrivedAt": "2025-12-06T08:33:00Z",
+      "departedAt": "2025-12-06T08:45:00Z"
+    },
+    {
+      "sequence": 2,
+      "type": "DELIVERY",
+      "name": "Boise DC",
+      "city": "Boise",
+      "state": "ID",
+      "arrivedAt": null,
+      "departedAt": null
+    }
+  ]
+}
+
+------------------------------------------------------------
+5.2. POST /api/driver/[driverToken]/status
+------------------------------------------------------------
+
+Method: `POST`
+
+Body:
+{
+  "stopSequence": 1,
+  "event": "ARRIVED"  // or "DEPARTED"
+}
+
+Logic:
+- Find load by `driverToken`.
+- Find Stop by `loadId` + `sequence`.
+- If event = ARRIVED -> set `arrivedAt = now`.
+- If event = DEPARTED -> set `departedAt = now`.
+- Optionally update load.status:
+  - If arrived at pickup → `status = "AT_PICKUP"`,
+  - If departed pickup → `status = "IN_TRANSIT"`,
+  - If arrived at delivery → `status = "AT_DELIVERY"`,
+  - If departed final delivery → `status = "DELIVERED"`.
+
+Return:
+{ "ok": true }
+
+------------------------------------------------------------
+5.3. POST /api/driver/[driverToken]/ping (optional)
+------------------------------------------------------------
+
+Body:
+{
+  "lat": 40.123456,
+  "lng": -111.654321,
+  "accuracy": 12.5
+}
+
+Logic:
+- Find load + driver by driverToken.
+- Insert TrackingPing.
+- Optionally update load.deliveryEta later.
+
+============================================================
+PART 6 – PUBLIC TRACKING API (SHIPPER/RECEIVER)
+============================================================
+
+------------------------------------------------------------
+6.1. GET /api/track/[trackingToken]
+------------------------------------------------------------
+
+Route: `app/api/track/[trackingToken]/route.ts` with `GET`.
+
+Logic:
+- Find load by trackingToken.
+- Derive origin (first PICKUP) and destination (last DELIVERY).
+- Get last TrackingPing if exists.
+- Build minimal JSON for public view.
+
+Response 200:
+{
+  "loadNumber": "LD-2025-001",
+  "brokerName": "Soar Transportation Group",
+  "shipperName": "General Mills",
+  "origin": { "city": "Salt Lake City", "state": "UT" },
+  "destination": { "city": "Boise", "state": "ID" },
+  "status": "IN_TRANSIT",
+  "eta": "2025-12-07T10:30:00Z",
+  "stops": [
+    {
+      "sequence": 1,
+      "type": "PICKUP",
+      "city": "Salt Lake City",
+      "state": "UT",
+      "arrivedAt": "2025-12-06T08:33:00Z",
+      "departedAt": "2025-12-06T08:45:00Z"
+    },
+    {
+      "sequence": 2,
+      "type": "DELIVERY",
+      "city": "Boise",
+      "state": "ID",
+      "arrivedAt": null,
+      "departedAt": null
+    }
+  ],
+  "lastPing": {
+    "lat": 41.123456,
+    "lng": -112.345678,
+    "timestamp": "2025-12-06T09:21:00Z"
+  }
+}
+
+============================================================
+PART 7 – RATE CONFIRMATION UPLOAD API (STUB)
+============================================================
+
+------------------------------------------------------------
+7.1. POST /api/rate-confirmation/upload
+------------------------------------------------------------
+
+Route: `app/api/rate-confirmation/upload/route.ts`
+
+Method: `POST` (multipart/form-data)
+
+Form fields:
+- `file` (PDF/JPG/PNG)
+- `loadId` (optional – if the load already exists)
+
+Logic:
+- Parse multipart form.
+- Store file in local storage or a fake “uploads” folder for now.
+  - `// TODO: integrate S3/Cloud storage`
+- Create RateConfirmationFile row with:
+  - `loadId` (if provided or matched),
+  - `fileUrl` (public or internal URL),
+  - `originalName`.
+- Return the created record.
+
+Response 201:
+{
+  "id": "uuid",
+  "loadId": "uuid",
+  "fileUrl": "https://cdn.pingpoint.io/rc/abc123.pdf",
+  "uploadedAt": "2025-12-06T10:00:00Z"
+}
+
+============================================================
+PART 8 – FRONTEND INTEGRATION NOTES
+============================================================
+
+DO NOT break existing frontend, only wire it to the new backend:
+
+- New Load page (`/app/loads/new`):
+  - On submit:
+    - Call `POST /api/brokers/ensure` (if not already known).
+    - Call `POST /api/brokers/send-verification` for new brokers (optional).
+    - Call `POST /api/loads` with all form fields (including brokerEmail, driverPhone).
+    - On success:
+      - Redirect to `/app/loads` (broker console).
+
+- Broker console (`/app/loads`):
+  - On mount:
+    - Call `GET /api/brokers/me` to get broker name/email.
+    - Call `GET /api/loads` to fetch list of loads.
+  - Show:
+    - Header: “Welcome, {broker.name} – Your Loads”.
+    - Buttons: “Create Load” (link to `/app/loads/new`), “Upload Rate Confirmation” (opens modal or triggers upload flow).
+
+- Driver mini-app (`/driver/[driverToken]`):
+  - On mount:
+    - Call `GET /api/driver/[driverToken]`.
+  - Buttons “Arrived / Departed” call `POST /api/driver/[driverToken]/status`.
+
+- Public tracking page (`/track/[trackingToken]`):
+  - On mount:
+    - Call `GET /api/track/[trackingToken]` and render timeline + map.
+
+Mark all unimplemented parts (real email, SMS, file storage, billing) with `// TODO` to be handled later.
+
+Implement all of the above now in the PingPoint project, keeping changes minimal and consistent with existing code style and architecture.
