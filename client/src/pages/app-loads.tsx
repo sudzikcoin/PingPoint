@@ -1,5 +1,4 @@
 import { AppLayout } from "@/components/app-layout";
-import { getLoads, Load } from "@/lib/mock-data";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Plus, Copy, Search, Filter, ChevronRight, Menu, X, Settings, CloudLightning, Truck } from "lucide-react";
@@ -9,7 +8,7 @@ import { useTheme } from "@/context/theme-context";
 import { useState, useEffect } from "react";
 import { format } from "date-fns";
 import { toast } from "sonner";
-import { getCurrentBroker, BrokerWorkspace } from "@/lib/brokerWorkspace";
+import { api, type BrokerWorkspace } from "@/lib/api";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -22,14 +21,33 @@ import {
 export default function AppLoads() {
   const [, setLocation] = useLocation();
   const { theme } = useTheme();
-  const loads = getLoads(); // In real app this would be useQuery
   const [broker, setBroker] = useState<BrokerWorkspace | null>(null);
-  const [showVerificationBanner, setShowVerificationBanner] = useState(true);
+  const [loads, setLoads] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [showVerificationBanner, setShowVerificationBanner] = useState(false);
 
   useEffect(() => {
-    const current = getCurrentBroker();
-    setBroker(current);
-  }, []);
+    const fetchData = async () => {
+      try {
+        // Fetch current broker
+        const brokerData = await api.brokers.me();
+        setBroker(brokerData);
+        setShowVerificationBanner(!brokerData.emailVerified);
+
+        // Fetch loads
+        const loadsData = await api.loads.list();
+        setLoads(loadsData.items || []);
+      } catch (error) {
+        console.error("Failed to fetch data:", error);
+        // If unauthorized, redirect to home
+        setLocation("/");
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchData();
+  }, [setLocation]);
 
   const copyLink = (e: React.MouseEvent, link: string | null | undefined) => {
     e.stopPropagation();
@@ -38,8 +56,6 @@ export default function AppLoads() {
     toast.success("Tracking link copied");
   };
 
-  // TODO: Filter loads by broker.workspaceId in real backend
-  // const myLoads = loads.filter(l => l.brokerWorkspaceId === broker?.id);
   const myLoads = loads; 
 
   return (
