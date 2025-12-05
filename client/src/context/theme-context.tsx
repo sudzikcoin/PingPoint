@@ -12,13 +12,18 @@ interface ThemeContextType {
 const ThemeContext = createContext<ThemeContextType | undefined>(undefined);
 
 export function ThemeProvider({ children }: { children: ReactNode }) {
-  const [theme, setTheme] = useState<Theme>("premium");
+  // Default theme is now "arcade90s" (WarCat Mode 90). "premium" is the secondary mode.
+  const [theme, setTheme] = useState<Theme>("arcade90s");
 
   useEffect(() => {
-    // Optional: Load from local storage if desired
+    // Load from local storage
     const saved = localStorage.getItem("app-theme") as Theme;
+    // If a saved theme exists and is valid, use it. 
+    // Otherwise, fallback to the new default "arcade90s".
     if (saved && (saved === "premium" || saved === "arcade90s")) {
       setTheme(saved);
+    } else {
+      setTheme("arcade90s");
     }
   }, []);
 

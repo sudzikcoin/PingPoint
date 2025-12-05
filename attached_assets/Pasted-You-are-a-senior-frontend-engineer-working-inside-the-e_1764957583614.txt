@@ -1,0 +1,129 @@
+You are a senior frontend engineer working inside the existing PingPoint frontend project on Replit.
+
+GOAL:
+Make the Arcade 90s / WarCat theme the DEFAULT (primary) theme for the whole app. The current “Premium Dark” theme becomes the secondary option. On first visit, the app should open in Arcade 90s; if the user manually switches to Premium Dark, remember that choice (e.g. via localStorage) and respect it on future visits.
+
+Do NOT remove the theme toggle and do NOT break any routes (`/`, `/driver/*`, `/app/loads/*`). Only adjust how the theme is initialized and persisted.
+
+============================================================
+1. FIND THE CURRENT THEME SYSTEM
+============================================================
+
+1) Search the repo for:
+   - “Arcade 90s”, “Premium Dark”, “WarCat”, or similar strings.
+   - Theme context/hooks such as `ThemeProvider`, `useTheme`, `ThemeContext`.
+   - Any localStorage usage for theme (keys like "pingpoint-theme", "theme", etc.).
+
+2) Identify:
+   - Where the initial theme value is chosen (default state / server-side default).
+   - Where theme changes are handled (toggle button handlers).
+   - How the theme is applied (e.g. a `data-theme` or CSS class on `<body>` or root wrapper).
+
+Do NOT refactor the architecture of this system; just change the defaults and persistence behavior.
+
+============================================================
+2. SET ARCADE 90s AS DEFAULT THEME
+============================================================
+
+Wherever the initial theme is set, change the default from Premium to Arcade:
+
+- If you see something conceptually like:
+
+  const [theme, setTheme] = useState<Theme>("premium");
+
+  change it to:
+
+  const [theme, setTheme] = useState<Theme>("arcade");
+
+- If the initial theme comes from localStorage with a fallback:
+
+  const stored = window.localStorage.getItem("pingpoint-theme");
+  const initial =
+    stored === "premium" || stored === "arcade" ? stored : "premium";
+
+  change the fallback to “arcade”:
+
+  const initial =
+    stored === "premium" || stored === "arcade" ? stored : "arcade";
+
+- If there is server-side default logic (e.g. in `app/layout.tsx`), also update that default to “arcade” so the first SSR render matches.
+
+Add a small comment near the default:
+
+// Default theme is now "arcade" (WarCat Mode 90). "premium" is the secondary mode.
+
+============================================================
+3. ENSURE PERSISTENCE WORKS
+============================================================
+
+1) Confirm that on theme change the chosen theme is stored in localStorage under a single consistent key (e.g. "pingpoint-theme").
+2) Keep existing behavior:
+   - When user toggles theme, update state AND write the new value to localStorage.
+   - On first client load, read localStorage and override the default if a stored value exists.
+3) With the new fallback, behavior should be:
+   - No stored value → theme = "arcade".
+   - Stored "premium" → theme = "premium".
+   - Stored "arcade" → theme = "arcade".
+
+If no theme persistence exists yet, add a minimal client-side effect in the theme provider/hook:
+
+- On mount, read localStorage and update theme if a valid value is found.
+- Whenever `theme` changes, write it back to localStorage.
+- Guard access to `window` with `if (typeof window !== "undefined")` to avoid SSR issues.
+
+============================================================
+4. UPDATE THE TOGGLE UI (VISUALS)
+============================================================
+
+Find the UI element that lets the user switch between Premium Dark and Arcade 90s (e.g. a pill with “Premium” and “Arcade 90s” labels or a mode switch).
+
+Requirements:
+- When the app loads without stored preference, the Arcade 90s side must appear active by default.
+- When `theme === "arcade"`:
+  - Highlight the Arcade 90s option (glow, active state, border, etc.).
+- When `theme === "premium"`:
+  - Highlight the Premium option instead.
+
+If there is a two-button pill:
+- Map classnames so:
+
+  theme === "arcade"   → Arcade button has active styles.
+  theme === "premium"  → Premium button has active styles.
+
+If there is a single toggle:
+- Ensure label / icon semantics still make sense: “Arcade 90s” should look like the main mode, with Premium as the alternate.
+
+Add a brief comment:
+
+// Arcade 90s is the primary theme; Premium Dark is the alternate. Toggle reflects `theme` state.
+
+============================================================
+5. VERIFY ALL MAIN ROUTES USE THE THEME
+============================================================
+
+Manual tests after changes:
+
+1) Clear localStorage for the app domain (or open in an incognito window).
+2) Open `/`:
+   - The UI (landing page, intro, role selector) should appear in Arcade 90s mode by default (scanlines, WarCat glow, etc.).
+3) Navigate to `/driver` and `/app/loads`:
+   - They should also render in Arcade 90s (no regression in styling or JS errors).
+4) Use the theme toggle:
+   - Switch to Premium Dark → all visible pages update styling.
+   - Refresh the page → Premium Dark remains active.
+   - Switch back to Arcade 90s and refresh → Arcade stays active.
+
+If different parts of the app use separate theme states:
+- Normalize them so there is a single source of truth (one ThemeProvider at the top level, e.g. in `app/layout.tsx` or equivalent).
+- Remove duplicate theme states where safe, and use context/props instead.
+
+============================================================
+6. SAFETY AND CLEANUP
+============================================================
+
+- Do NOT delete Premium Dark styles; they must still be fully functional.
+- Do NOT hardcode Arcade-specific classes without respecting the theme state if existing code already toggles them.
+- Maintain TypeScript types (e.g. union type `Theme = "arcade" | "premium"`). If needed, add “arcade” as a valid value where missing.
+- Add `// TODO` comments wherever future refinement is needed (e.g. company-level theme preferences or server-side user settings).
+
+After making these changes, ensure the dev server builds cleanly and there are no TypeScript or runtime errors.

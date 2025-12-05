@@ -6,21 +6,11 @@ import { cn } from "@/lib/utils";
 export function ThemeToggle() {
   const { theme, setTheme } = useTheme();
 
+  // Arcade 90s is the primary theme; Premium Dark is the alternate. Toggle reflects `theme` state.
   return (
     <div className={cn("flex items-center gap-1 p-1 rounded-full border transition-colors",
       theme === "arcade90s" ? "bg-[#040816] border-[#22d3ee]" : "bg-brand-card border-brand-border"
     )}>
-      <button
-        onClick={() => setTheme("premium")}
-        className={cn(
-          "text-[10px] px-2 py-1 rounded-full transition-all font-medium",
-          theme === "premium" 
-            ? "bg-brand-gold text-[#6b3b05] shadow-sm" 
-            : "text-brand-muted hover:text-brand-text"
-        )}
-      >
-        Premium
-      </button>
       <button
         onClick={() => setTheme("arcade90s")}
         className={cn(
@@ -31,6 +21,17 @@ export function ThemeToggle() {
         )}
       >
         Arcade 90s
+      </button>
+      <button
+        onClick={() => setTheme("premium")}
+        className={cn(
+          "text-[10px] px-2 py-1 rounded-full transition-all font-medium",
+          theme === "premium" 
+            ? "bg-brand-gold text-[#6b3b05] shadow-sm" 
+            : "text-brand-muted hover:text-brand-text"
+        )}
+      >
+        Premium
       </button>
     </div>
   );
