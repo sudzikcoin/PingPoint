@@ -9,6 +9,7 @@ import { format } from "date-fns";
 import { useState, useEffect, useRef } from "react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
+import { useTheme } from "@/context/theme-context";
 
 // --- StopRow Component ---
 
@@ -203,13 +204,12 @@ function StopRow({ stop, onStatusUpdate }: StopRowProps) {
   );
 }
 
-// --- Main Page Component ---
-
 export default function LoadDetails() {
   const [, params] = useRoute("/driver/loads/:id");
   const [, setLocation] = useLocation();
   const [load, setLoad] = useState<Load | undefined>(undefined);
   const [loading, setLoading] = useState(true);
+  const { theme } = useTheme();
 
   useEffect(() => {
     // Simulate fetching data
@@ -246,65 +246,167 @@ export default function LoadDetails() {
     toast.success(`Stop marked as ${newStatus.toLowerCase()}`);
   };
 
+  const copyToClipboard = async (text: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      toast.success("Address copied to clipboard");
+    } catch (err) {
+      console.error("Failed to copy address", err);
+      toast.error("Failed to copy address");
+    }
+  };
+
   if (loading) {
-    return <div className="min-h-screen flex items-center justify-center bg-brand-bg text-brand-muted"><p>Loading...</p></div>;
+    return <div className={cn("min-h-screen flex items-center justify-center", theme === "arcade90s" ? "arcade-bg text-arc-primary" : "bg-brand-bg text-brand-muted")}><p>Loading...</p></div>;
   }
 
   if (!load) {
     return (
-      <div className="min-h-screen flex items-center justify-center flex-col gap-4 bg-brand-bg text-brand-text">
-        <p className="text-brand-muted">Load not found</p>
+      <div className={cn("min-h-screen flex items-center justify-center flex-col gap-4", theme === "arcade90s" ? "arcade-bg text-arc-text" : "bg-brand-bg text-brand-text")}>
+        <p className={cn(theme === "arcade90s" ? "text-arc-muted arcade-pixel-font" : "text-brand-muted")}>Load not found</p>
         <Button variant="outline" onClick={() => setLocation("/driver")}>Go Back</Button>
       </div>
     );
   }
 
+  const pickupStop = load.stops[0];
+  const deliveryStop = load.stops[load.stops.length - 1];
+  const pickupFullAddress = `${pickupStop.addressLine1}, ${pickupStop.city}, ${pickupStop.state} ${pickupStop.zip || ''}`;
+  const deliveryFullAddress = `${deliveryStop.addressLine1}, ${deliveryStop.city}, ${deliveryStop.state} ${deliveryStop.zip || ''}`;
+
+  const pickupMapsUrl = "https://www.google.com/maps/search/?api=1&query=" + encodeURIComponent(pickupFullAddress);
+  const deliveryMapsUrl = "https://www.google.com/maps/search/?api=1&query=" + encodeURIComponent(deliveryFullAddress);
+
   return (
-    <div className="min-h-screen bg-brand-bg pb-10 font-sans">
+    <div className={cn("min-h-screen pb-10 font-sans transition-colors duration-300", 
+      theme === "arcade90s" ? "arcade-bg text-arc-text" : "bg-brand-bg"
+    )}>
       {/* Header */}
-      <header className="sticky top-0 z-10 bg-brand-bg/80 backdrop-blur-md border-b border-brand-border">
+      <header className={cn("sticky top-0 z-10 backdrop-blur-md border-b transition-colors duration-300",
+        theme === "arcade90s" ? "bg-arc-bg/90 border-arc-secondary/30 shadow-[0_0_15px_rgba(34,211,238,0.1)]" : "bg-brand-bg/80 border-brand-border"
+      )}>
         <div className="container mx-auto px-4 h-16 flex items-center gap-4">
-          <button className="p-2 rounded-full bg-brand-card border border-brand-border text-brand-muted hover:text-white transition-colors" onClick={() => setLocation("/driver")}>
+          <button 
+            className={cn("p-2 transition-colors",
+              theme === "arcade90s" ? "text-arc-secondary hover:text-arc-primary" : "rounded-full bg-brand-card border border-brand-border text-brand-muted hover:text-white"
+            )}
+            onClick={() => setLocation("/driver")}
+          >
             <ArrowLeft className="h-5 w-5" />
           </button>
           <div className="flex-1">
-            <p className="text-[10px] uppercase tracking-widest text-brand-muted font-bold mb-0.5">Load #{load.externalLoadId}</p>
-            <h1 className="text-base font-bold text-white truncate">{load.brokerName}</h1>
+            <p className={cn("text-[10px] uppercase tracking-widest font-bold mb-0.5", theme === "arcade90s" ? "text-arc-muted arcade-pixel-font" : "text-brand-muted")}>Load #{load.externalLoadId}</p>
+            <h1 className={cn("text-base font-bold truncate", theme === "arcade90s" ? "text-arc-primary arcade-pixel-font tracking-wide" : "text-white")}>{load.brokerName}</h1>
           </div>
-          <div className={`px-3 py-1 rounded-full text-[10px] font-bold tracking-wider uppercase shadow-sm ${
-            load.status === "IN_TRANSIT" 
-              ? "bg-gradient-to-r from-brand-gold-light via-brand-gold to-brand-gold-dark text-[#6b3b05]" 
-              : "bg-brand-dark-pill border border-brand-border text-brand-muted"
-          }`}>
+          <div className={cn("px-3 py-1 rounded-full text-[10px] font-bold tracking-wider uppercase shadow-sm transition-all",
+            theme === "arcade90s"
+              ? "arcade-badge bg-transparent border-arc-secondary text-arc-secondary shadow-[0_0_5px_rgba(34,211,238,0.5)]"
+              : load.status === "IN_TRANSIT" 
+                ? "bg-gradient-to-r from-brand-gold-light via-brand-gold to-brand-gold-dark text-[#6b3b05]" 
+                : "bg-brand-dark-pill border border-brand-border text-brand-muted"
+          )}>
             {load.status.replace("_", " ")}
           </div>
         </div>
       </header>
 
       <main className="container mx-auto p-4 space-y-6">
-        {/* Map Placeholder */}
-        <div className="aspect-[16/9] bg-brand-card rounded-2xl border border-brand-border flex items-center justify-center relative overflow-hidden shadow-lg shadow-black/30 group">
-          <div className="absolute inset-0 opacity-20 bg-[radial-gradient(#f5c550_1px,transparent_1px)] [background-size:20px_20px]" />
-          
-          {/* Map Content */}
-          <div className="flex flex-col items-center gap-3 text-brand-muted z-10">
-            <div className="h-12 w-12 rounded-full bg-brand-dark-pill border border-brand-border flex items-center justify-center shadow-pill-dark">
-               <Map className="h-6 w-6 text-brand-gold" />
+        {/* Route Overview Section */}
+        <section className={cn(
+          "mb-6 rounded-2xl border p-4 transition-all duration-300",
+          theme === "arcade90s" 
+            ? "arcade-panel border-arc-border bg-arc-panel shadow-[0_0_10px_rgba(4,8,22,0.8)]" 
+            : "border-brand-border bg-brand-card/50 shadow-md"
+        )}>
+          <h3 className={cn(
+            "mb-3 text-[11px] font-semibold uppercase tracking-[0.2em]",
+            theme === "arcade90s" ? "text-arc-muted arcade-pixel-font" : "text-brand-muted"
+          )}>
+            Route overview
+          </h3>
+
+          {/* Pickup row */}
+          <div className="mb-5 flex items-start justify-between gap-3">
+            <div>
+              <p className={cn(
+                "mb-1 text-[10px] font-semibold uppercase tracking-[0.18em]",
+                theme === "arcade90s" ? "text-arc-primary arcade-pixel-font" : "text-emerald-400"
+              )}>
+                Pickup
+              </p>
+              <a
+                href={pickupMapsUrl}
+                target="_blank"
+                rel="noreferrer"
+                className={cn(
+                  "block text-lg font-semibold leading-tight underline-offset-4 hover:underline transition-colors",
+                  theme === "arcade90s" ? "text-arc-text arcade-pixel-font tracking-wide" : "text-slate-50"
+                )}
+              >
+                {pickupStop.city}, {pickupStop.state}
+              </a>
+              <p className={cn("text-xs mt-1", theme === "arcade90s" ? "text-arc-muted font-mono" : "text-brand-muted")}>
+                {pickupStop.addressLine1}
+              </p>
             </div>
-            <span className="text-xs font-bold uppercase tracking-widest text-brand-text/60">Interactive Map View</span>
+
+            <button
+              type="button"
+              onClick={() => copyToClipboard(pickupFullAddress)}
+              className={cn(
+                "shrink-0 rounded-full border px-3 py-1 text-[11px] font-medium uppercase tracking-[0.16em] transition-all hover:bg-white/5",
+                theme === "arcade90s" 
+                  ? "border-arc-secondary text-arc-secondary rounded-none arcade-pixel-font hover:bg-arc-secondary/10" 
+                  : "border-brand-border text-brand-muted hover:text-white hover:border-white/20"
+              )}
+            >
+              Copy
+            </button>
           </div>
-          
-          {/* Floating Navigate Button */}
-          <div className="absolute bottom-4 right-4 z-20">
-            <PillButton variant="gold" size="md" icon={<Navigation className="w-3.5 h-3.5" />}>
-               Navigate
-            </PillButton>
+
+          {/* Delivery row */}
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <p className={cn(
+                "mb-1 text-[10px] font-semibold uppercase tracking-[0.18em]",
+                theme === "arcade90s" ? "text-arc-secondary arcade-pixel-font" : "text-brand-gold"
+              )}>
+                Delivery
+              </p>
+              <a
+                href={deliveryMapsUrl}
+                target="_blank"
+                rel="noreferrer"
+                className={cn(
+                  "block text-lg font-semibold leading-tight underline-offset-4 hover:underline transition-colors",
+                  theme === "arcade90s" ? "text-arc-text arcade-pixel-font tracking-wide" : "text-slate-50"
+                )}
+              >
+                {deliveryStop.city}, {deliveryStop.state}
+              </a>
+              <p className={cn("text-xs mt-1", theme === "arcade90s" ? "text-arc-muted font-mono" : "text-brand-muted")}>
+                {deliveryStop.addressLine1}
+              </p>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => copyToClipboard(deliveryFullAddress)}
+              className={cn(
+                "shrink-0 rounded-full border px-3 py-1 text-[11px] font-medium uppercase tracking-[0.16em] transition-all hover:bg-white/5",
+                theme === "arcade90s" 
+                  ? "border-arc-secondary text-arc-secondary rounded-none arcade-pixel-font hover:bg-arc-secondary/10" 
+                  : "border-brand-border text-brand-muted hover:text-white hover:border-white/20"
+              )}
+            >
+              Copy
+            </button>
           </div>
-        </div>
+        </section>
 
         {/* Stops List */}
         <div className="space-y-4">
-          <h2 className="text-xs font-bold text-brand-muted uppercase tracking-widest pl-2">Route Plan</h2>
+          <h2 className={cn("text-xs font-bold uppercase tracking-widest pl-2", theme === "arcade90s" ? "text-arc-purple arcade-pixel-font" : "text-brand-muted")}>Route Plan</h2>
           <div className="space-y-4">
             {load.stops.map((stop) => (
               <StopRow 

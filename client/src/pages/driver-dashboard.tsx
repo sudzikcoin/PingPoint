@@ -110,8 +110,8 @@ export default function DriverDashboard() {
                   )}
                   onClick={() => setLocation(`/driver/loads/${load.id}`)}
                 >
-                  <CardHeader className="p-5 pb-3 flex flex-row items-start justify-between space-y-0">
-                    <div className="space-y-2">
+                  <CardHeader className="p-5 pb-2 flex flex-col items-start space-y-1">
+                    <div className="w-full flex items-center justify-between mb-2">
                       <div className="flex items-center gap-3">
                         <div className={cn(
                           "px-3 py-1 rounded-full text-[10px] font-bold tracking-wider uppercase shadow-sm transition-all",
@@ -124,72 +124,78 @@ export default function DriverDashboard() {
                           {load.status.replace("_", " ")}
                         </div>
                         <span className={cn(
-                          "text-xs font-mono tracking-wider transition-colors",
-                          theme === "arcade90s" ? "text-arc-primary arcade-pixel-font text-[10px]" : "text-brand-muted"
+                          "text-[11px] uppercase tracking-[0.18em] font-mono",
+                          theme === "arcade90s" ? "text-arc-muted" : "text-brand-muted"
                         )}>{load.externalLoadId}</span>
                       </div>
-                      <CardTitle className={cn(
-                        "text-base font-bold leading-tight transition-colors",
-                        theme === "arcade90s" 
-                          ? "text-arc-text group-hover:text-arc-secondary arcade-pixel-font tracking-wide" 
-                          : "text-white group-hover:text-brand-gold"
+                      
+                      <div className={cn(
+                        "h-8 w-8 flex items-center justify-center transition-all duration-300",
+                        theme === "arcade90s"
+                          ? "text-arc-secondary group-hover:animate-ping"
+                          : "rounded-full bg-brand-dark-pill border border-brand-border group-hover:bg-brand-gold group-hover:text-[#6b3b05]"
                       )}>
-                        {load.brokerName}
-                      </CardTitle>
+                         <ChevronRight className="h-4 w-4" />
+                      </div>
                     </div>
+
                     <div className={cn(
-                      "h-8 w-8 flex items-center justify-center transition-all duration-300",
-                      theme === "arcade90s"
-                        ? "text-arc-secondary group-hover:animate-ping"
-                        : "rounded-full bg-brand-dark-pill border border-brand-border group-hover:bg-brand-gold group-hover:text-[#6b3b05]"
+                      "text-[11px] uppercase tracking-[0.18em] font-bold transition-colors",
+                      theme === "arcade90s" ? "text-arc-muted" : "text-brand-muted/70"
                     )}>
-                       <ChevronRight className="h-4 w-4" />
+                      {load.brokerName}
                     </div>
                   </CardHeader>
-                  <CardContent className="p-5 pt-2 space-y-5">
-                    {/* Route Visualization */}
-                    <div className={cn(
-                      "relative pl-4 border-l space-y-6 my-2 ml-2 transition-colors",
-                      theme === "arcade90s" ? "border-arc-border" : "border-brand-border"
-                    )}>
-                      {load.stops.map((stop, idx) => (
-                        <div key={stop.id} className="relative">
-                          <div className={cn(
-                            "absolute -left-[21px] top-1 h-3 w-3 rounded-full shadow-md transition-all",
-                            theme === "arcade90s"
-                              ? idx === 0 
-                                ? "bg-arc-secondary shadow-arc-glow-cyan rounded-none rotate-45" // Diamond for start
-                                : idx === load.stops.length - 1 
-                                  ? "bg-arc-primary shadow-arc-glow-yellow rounded-none" // Square for end
-                                  : "bg-arc-purple rounded-full"
-                              : idx === 0 
-                                ? "bg-emerald-500 ring-4 ring-brand-card" 
-                                : idx === load.stops.length - 1 
-                                  ? "bg-brand-gold ring-4 ring-brand-card" 
-                                  : "bg-brand-border ring-4 ring-brand-card"
-                          )} />
-                          <div className="space-y-1">
-                            <div className="flex items-baseline justify-between">
-                              <p className={cn(
-                                "text-sm font-semibold transition-colors",
-                                theme === "arcade90s" ? "text-arc-text arcade-pixel-font text-[10px] tracking-wide" : "text-brand-text"
-                              )}>{stop.city}, {stop.state}</p>
-                            </div>
-                            <div className={cn(
-                              "flex items-center gap-2 text-xs transition-colors",
-                              theme === "arcade90s" ? "text-arc-muted font-mono" : "text-brand-muted"
-                            )}>
-                              <Calendar className="h-3 w-3" />
-                              <span>{format(new Date(stop.windowStart), "MMM d, h:mm a")}</span>
-                            </div>
-                          </div>
-                        </div>
-                      ))}
+                  
+                  <CardContent className="p-5 pt-2 space-y-6">
+                    {/* Big Address Groups */}
+                    <div className="space-y-5">
+                      {/* Pickup Group */}
+                      <div>
+                         <p className={cn(
+                           "text-[10px] font-bold uppercase tracking-[0.2em] mb-1",
+                           theme === "arcade90s" ? "text-arc-primary" : "text-brand-muted"
+                         )}>Pickup</p>
+                         <div className={cn(
+                           "text-xl sm:text-2xl font-bold leading-tight transition-colors",
+                           theme === "arcade90s" ? "text-arc-text arcade-pixel-font tracking-wide" : "text-slate-50"
+                         )}>
+                           {load.stops[0].city}, {load.stops[0].state}
+                         </div>
+                         <div className={cn(
+                           "flex items-center gap-2 text-xs mt-1",
+                           theme === "arcade90s" ? "text-arc-muted font-mono" : "text-brand-muted"
+                         )}>
+                            <Calendar className="h-3 w-3" />
+                            <span>{format(new Date(load.stops[0].windowStart), "MMM d, h:mm a")}</span>
+                         </div>
+                      </div>
+
+                      {/* Delivery Group */}
+                      <div>
+                         <p className={cn(
+                           "text-[10px] font-bold uppercase tracking-[0.2em] mb-1",
+                           theme === "arcade90s" ? "text-arc-secondary" : "text-brand-muted"
+                         )}>Delivery</p>
+                         <div className={cn(
+                           "text-xl sm:text-2xl font-bold leading-tight transition-colors",
+                           theme === "arcade90s" ? "text-arc-text arcade-pixel-font tracking-wide" : "text-slate-50"
+                         )}>
+                           {load.stops[load.stops.length - 1].city}, {load.stops[load.stops.length - 1].state}
+                         </div>
+                         <div className={cn(
+                           "flex items-center gap-2 text-xs mt-1",
+                           theme === "arcade90s" ? "text-arc-muted font-mono" : "text-brand-muted"
+                         )}>
+                            <Calendar className="h-3 w-3" />
+                            <span>{format(new Date(load.stops[load.stops.length - 1].windowStart), "MMM d, h:mm a")}</span>
+                         </div>
+                      </div>
                     </div>
 
                     {load.lastLocationCity && (
                       <div className={cn(
-                        "flex items-center gap-3 text-xs p-3 transition-all",
+                        "flex items-center gap-3 text-xs p-3 transition-all mt-2",
                         theme === "arcade90s"
                           ? "text-arc-primary border border-arc-primary/30 bg-arc-primary/5 arcade-pixel-font text-[10px] tracking-wider"
                           : "text-brand-gold bg-brand-gold/5 rounded-xl border border-brand-gold/10"

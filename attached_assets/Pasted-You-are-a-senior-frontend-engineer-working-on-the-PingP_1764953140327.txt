@@ -1,0 +1,169 @@
+You are a senior frontend engineer working on the PingPoint driver UI (Framer / React with Tailwind-style classes). Your job is to modify ONLY layout and styles in JSX – do NOT change any data fetching, routing, types, or business logic. Keep all props and API calls exactly as they are and ONLY touch JSX structure and CSS classes where required.
+
+GOAL SUMMARY
+1) /driver (loads list): in each load card, make the pickup and delivery city/state text MUCH larger and more readable on mobile, so it becomes the main focus of the card. You may reduce the visual weight of the broker name.
+2) /driver/loads/[loadId] (load details / tracking): remove the “Interactive Map View” block and “Navigate” button, and replace them with a compact “Route overview” section showing pickup and delivery addresses with:
+   – Address text as links (tapping opens maps),
+   – A Copy button for each address that copies the full address to the clipboard.
+Keep the existing ROUTE PLAN section and Arrived/Departed logic fully intact.
+
+====================================================================
+A. /driver – load card: enlarge addresses, shrink broker name
+====================================================================
+
+1. Find the component that renders a single load card on the /driver “Today / Upcoming / History” view. It might be named something like DriverLoadCard, LoadListItem, or similar.
+2. Do not modify props or data sources. Only change typography-related classes and simple layout inside the card.
+
+Current structure is conceptually like:
+- Status badge (e.g. “IN TRANSIT”) and load number “LD-2025-001”
+- Broker name “Soar Transportation Group”
+- Pickup city/state + date/time
+- Delivery city/state + date/time
+- Last ping info, etc.
+
+Change visual hierarchy as follows:
+
+• Broker name (secondary):
+  - Make noticeably smaller and calmer.
+  - Use something like:
+    - text-[11px] or text-xs
+    - tracking-[0.18em] uppercase
+    - text-slate-400 (or similar subdued color)
+  - Place a small margin below it.
+
+• Pickup and delivery city/state (primary):
+  - Make them 2–3x larger than they are now.
+  - Use text-xl or text-2xl (on mobile) with font-semibold or font-bold.
+  - Color: bright, e.g. text-slate-50, with leading-tight.
+  - Dates/times under each city can stay small (text-[11px] or text-xs, text-slate-400).
+
+Approximate structure you should arrive at (adapt to actual component names/props):
+
+// inside load card render
+- Top row: status badge + small load number (text-[11px], text-slate-400, tracking-[0.18em], uppercase).
+- Broker name below as small, secondary label (text-[11px], tracking-[0.18em], uppercase, text-slate-400).
+- Block with two big address groups:
+  - First group: large pickupCityState (text-xl or text-2xl, font-semibold, text-slate-50, leading-tight) + small pickupDateTime below.
+  - Second group: large deliveryCityState with the same styling + small deliveryDateTime below.
+- Keep “Last ping” section and any other content unchanged.
+
+Do NOT remove any existing click handlers (e.g., onClick to open details) and do NOT change overall card container structure except for spacing and font-related classes.
+
+====================================================================
+B. /driver/loads/[loadId] – remove map, add Route overview with links + copy
+====================================================================
+
+1. Find the component that renders the load details / tracking page for a single load (e.g. DriverLoadDetailsPage or similar).
+2. Locate and REMOVE the “Interactive Map View” block and its “Navigate” button completely from the JSX. This includes any container that shows a large dotted map placeholder and the navigation button.
+
+3. In place of that removed block (between the header section and the ROUTE PLAN section), add a new “Route overview” section.
+
+Data assumptions (use whatever fields already exist; do not change API):
+- You have or can construct:
+  - pickupCityState (e.g. “Salt Lake City, UT”)
+  - pickupStreet (e.g. “2200 S 4000 W”)
+  - pickupFullAddress (string that combines street + city + state + zip)
+  - deliveryCityState
+  - deliveryStreet
+  - deliveryFullAddress
+- If FullAddress fields do not exist, create them locally by concatenating existing fields; keep this purely on the frontend and do not change backend types.
+
+Construct map URLs like this:
+- const pickupMapsUrl = "https://www.google.com/maps/search/?api=1&query=" + encodeURIComponent(pickupFullAddress);
+- const deliveryMapsUrl = "https://www.google.com/maps/search/?api=1&query=" + encodeURIComponent(deliveryFullAddress);
+
+Add a small clipboard helper if the project doesn’t have one yet (or reuse existing):
+
+// utils/copyToClipboard.ts (or equivalent location)
+// TODO: if project already has a shared copy helper, reuse it instead of this.
+export async function copyToClipboard(text: string) {
+  try {
+    await navigator.clipboard.writeText(text);
+    // Optional: trigger toast/snackbar if there is already a notification system.
+  } catch (err) {
+    console.error("Failed to copy address", err);
+  }
+}
+
+Now create the “Route overview” JSX block. Insert it where the map card used to be, before the “ROUTE PLAN” heading. Use styling consistent with the PingPoint arcade theme but keep semantics as described:
+
+<section className="mb-6 rounded-2xl border border-slate-800 bg-slate-950/60 p-4">
+  <h3 className="mb-3 text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-400">
+    Route overview
+  </h3>
+
+  {/* Pickup row */}
+  <div className="mb-3 flex items-start justify-between gap-3">
+    <div>
+      <p className="mb-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-teal-300">
+        Pickup
+      </p>
+      <a
+        href={pickupMapsUrl}
+        target="_blank"
+        rel="noreferrer"
+        className="block text-lg font-semibold text-slate-50 leading-tight underline-offset-4 hover:underline"
+      >
+        {pickupCityState}
+      </a>
+      <p className="text-xs text-slate-400">
+        {pickupStreet}
+      </p>
+    </div>
+
+    <button
+      type="button"
+      onClick={() => copyToClipboard(pickupFullAddress)}
+      className="shrink-0 rounded-full border border-slate-700 px-3 py-1 text-[11px] font-medium uppercase tracking-[0.16em]"
+    >
+      Copy
+    </button>
+  </div>
+
+  {/* Delivery row */}
+  <div className="flex items-start justify-between gap-3">
+    <div>
+      <p className="mb-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-amber-300">
+        Delivery
+      </p>
+      <a
+        href={deliveryMapsUrl}
+        target="_blank"
+        rel="noreferrer"
+        className="block text-lg font-semibold text-slate-50 leading-tight underline-offset-4 hover:underline"
+      >
+        {deliveryCityState}
+      </a>
+      <p className="text-xs text-slate-400">
+        {deliveryStreet}
+      </p>
+    </div>
+
+    <button
+      type="button"
+      onClick={() => copyToClipboard(deliveryFullAddress)}
+      className="shrink-0 rounded-full border border-slate-700 px-3 py-1 text-[11px] font-medium uppercase tracking-[0.16em]"
+    >
+      Copy
+    </button>
+  </div>
+</section>
+
+4. IMPORTANT: Leave the existing ROUTE PLAN section, pickup/delivery cards, and Arrived/Departed buttons exactly as they are (same logic, same state). The new section is just an additional, simplified top-level view of the route addresses.
+
+====================================================================
+C. Checks / TODOs
+====================================================================
+
+– Do NOT modify any backend code, API routes, or TypeScript types. Only JSX + styling.
+– Keep all existing click handlers, navigation, and status logic unchanged.
+– Add TODO comments where integration might be needed, e.g.:
+// TODO: verify pickupFullAddress / deliveryFullAddress structure from API
+// TODO: replace hard-coded map URLs with existing navigation helper if the project already has one.
+
+When you are done, run the app in a mobile viewport and verify:
+1) On /driver: pickup and delivery city/state text is clearly larger and easily readable at a glance; broker name is smaller but still visible.
+2) On /driver/loads/[id]: there is no map block; instead, there is a “Route overview” section with:
+   – Pickup and delivery rows, each with a link that opens maps,
+   – A Copy button that successfully copies the full address,
+   – ROUTE PLAN and status buttons behaving exactly as before.
