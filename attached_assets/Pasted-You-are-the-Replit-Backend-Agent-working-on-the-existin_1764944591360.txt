@@ -1,0 +1,151 @@
+You are the Replit Backend Agent working on the existing `agentos-tracking-core` project.
+
+GOAL: On the **driver dashboard page** (`/driver` → `src/app/driver/page.tsx`), remove the current “My Loads / DRIVER: JOHN DOE” header and replace it with a **silver metal header bar** inspired by the middle pill button (silver) in the reference image.
+
+The new header must:
+- Have a silver / metallic gradient background.
+- Be full-width at the top of the page.
+- Show centered text:
+  - Big line: `Tracking Core`
+  - Smaller line below: `by SuVerse labs`
+- The text should look **engraved into metal** (subtle embossed/debossed effect).
+- The words “Tracking Core” must be several times larger than “by SuVerse labs”.
+
+Do NOT change any backend logic; only update layout and styles on the `/driver` page and global CSS.
+
+────────────────────────
+1. GLOBAL STYLES FOR METAL / ENGRAVED TEXT
+────────────────────────
+
+Open `tailwind.config.js` and make sure we have the light pill gradient and colors (if not already present):
+
+In `theme.extend` ensure:
+
+- colors:
+  - `brand-light-pill`: `#f5f5f7`  (or similar)
+  - `brand-light-pill-edge`: `#e5e7eb` (optional)
+  - `brand-light-pill-deep`: `#cbd0d8` (optional)
+  - `brand-muted`: `#9ca3af` (already used)
+
+- backgroundImage:
+  - `pill-light`: `'linear-gradient(135deg, #ffffff, #f5f5f7, #e5e7eb)'`
+
+Next, open `src/app/globals.css` and add custom classes for metal engraved text.
+
+At the bottom of `globals.css`, add:
+
+.metal-header {
+  background-image: linear-gradient(135deg, #ffffff, #f5f5f7, #e1e5ee);
+  box-shadow: 0 14px 30px rgba(0, 0, 0, 0.55);
+}
+
+.metal-engraved-main {
+  color: #a5acb8;
+  letter-spacing: 0.3em;
+  text-transform: uppercase;
+  font-weight: 600;
+  text-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.65),   /* top highlight */
+    0 -1px 0 rgba(0, 0, 0, 0.75);        /* inner shadow */
+}
+
+.metal-engraved-sub {
+  color: #8b92a0;
+  letter-spacing: 0.25em;
+  text-transform: uppercase;
+  font-weight: 500;
+  text-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.55),
+    0 -1px 0 rgba(0, 0, 0, 0.7);
+}
+
+These classes will give the “stamped into metal” look.
+
+────────────────────────
+2. UPDATE /DRIVER PAGE HEADER
+────────────────────────
+
+Open: `src/app/driver/page.tsx`.
+
+Find the current header section that renders:
+
+- “My Loads”
+- “DRIVER: JOHN DOE”
+- any avatar / driver info at the top.
+
+Remove that entire block of text and driver info. We only want the new silver bar at the top, nothing else above the tabs.
+
+Immediately inside the page’s top-level container (before the Today/Upcoming/History tabs), add a new header block:
+
+Example structure (adapt to your component style):
+
+<header className="w-full mb-4">
+  <div
+    className="
+      metal-header
+      mx-[-1rem]  /* stretch slightly edge-to-edge if needed */
+      px-4
+      py-5
+      rounded-b-3xl
+      flex flex-col items-center justify-center
+      shadow-pill-dark/50
+    "
+  >
+    <h1 className="metal-engraved-main text-xl sm:text-2xl md:text-3xl text-center">
+      TRACKING CORE
+    </h1>
+    <p className="metal-engraved-sub mt-1 text-[10px] sm:text-xs text-center">
+      BY SUVVERSE LABS
+    </p>
+  </div>
+</header>
+
+Notes:
+- Use `metal-header` class for the silver gradient + heavy shadow.
+- `rounded-b-3xl` makes it feel like a metal bar with a soft bottom edge.
+- On small screens, `text-xl` or `text-2xl` is fine; on larger, `md:text-3xl`.
+- “Tracking Core” (main line) is several times larger than the subline “by SuVerse labs” because:
+  - main: text-xl/2xl/3xl
+  - sub: 10–12px.
+- Keep everything centered (`items-center`, `text-center`).
+
+If the main page container applies horizontal padding (e.g. `px-4`), you can use `mx-[-16px]` or `mx-[-1rem]` on the header to make the bar visually touch the screen edges, similar to a pill stretched across the top.
+
+────────────────────────
+3. ENSURE TABS SIT DIRECTLY UNDER THE NEW HEADER
+────────────────────────
+
+Below the new `<header>...</header>` block, keep the existing tabs (Today / Upcoming / History) but ensure they now appear right under the silver bar with a small gap (`mt-3` or `mb-3` on the header).
+
+For example, your overall page layout should roughly look like:
+
+<div className="...">
+  <header> ... new silver bar ... </header>
+
+  <section className="mt-4">
+    {/* existing tab-switch component (Today / Upcoming / History) */}
+  </section>
+
+  {/* rest of the driver loads list stays unchanged */}
+</div>
+
+Do NOT alter the tab logic, only their vertical position.
+
+────────────────────────
+4. FINAL CHECK
+────────────────────────
+
+After changes:
+
+1) Open `/driver` in Preview:
+   - The old top block “My Loads / DRIVER: JOHN DOE” and any driver avatar/info is **gone**.
+   - At the very top, you see a **silver metal bar** with:
+     - “TRACKING CORE” in large engraved-looking text.
+     - “BY SUVVERSE LABS” below, smaller and also engraved.
+   - Both lines are centered.
+
+2) The rest of the page (tabs + load cards) keeps the existing dark/gold design and still functions normally.
+
+3) No backend logic, routes, or data fetching were touched — only header markup and styles.
+
+END OF INSTRUCTIONS

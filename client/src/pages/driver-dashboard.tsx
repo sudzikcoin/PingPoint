@@ -17,21 +17,30 @@ export default function DriverDashboard() {
   return (
     <div className="min-h-screen bg-brand-bg text-brand-text pb-20 font-sans">
       {/* Header */}
-      <header className="sticky top-0 z-10 border-b border-brand-border bg-brand-bg/80 backdrop-blur-md">
-        <div className="container mx-auto px-4 py-4 flex items-center justify-between">
-          <div>
-            <h1 className="text-xl font-bold tracking-tight text-white">My Loads</h1>
-            <p className="text-xs text-brand-muted uppercase tracking-widest mt-1">Driver: John Doe</p>
-          </div>
-          <div className="h-10 w-10 rounded-full bg-brand-card border border-brand-border flex items-center justify-center text-brand-gold font-bold text-sm shadow-lg">
-            JD
-          </div>
+      <header className="w-full mb-3">
+        <div
+          className="
+            metal-header
+            mx-[-1rem]
+            px-4
+            py-5
+            rounded-b-3xl
+            flex flex-col items-center justify-center
+            shadow-pill-dark/50
+          "
+        >
+          <h1 className="metal-engraved-main text-xl sm:text-2xl md:text-3xl text-center">
+            TRACKING CORE
+          </h1>
+          <p className="metal-engraved-sub mt-1 text-[10px] sm:text-xs text-center">
+            BY SUVERSE LABS
+          </p>
         </div>
       </header>
 
       <main className="container mx-auto px-4 py-6 space-y-6">
         {/* Status Tabs */}
-        <Tabs defaultValue="today" onValueChange={(v) => setActiveTab(v as any)} className="w-full">
+        <Tabs defaultValue="today" onValueChange={(v) => setActiveTab(v as any)} className="w-full mt-4">
           <TabsList className="grid w-full grid-cols-3 bg-brand-card p-1 rounded-full border border-brand-border">
             <TabsTrigger 
               value="today" 
