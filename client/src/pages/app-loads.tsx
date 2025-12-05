@@ -54,9 +54,11 @@ export default function AppLoads() {
         </div>
 
         {/* Table / List */}
-        <div className={cn("overflow-hidden", 
-          theme === "arcade90s" ? "border-2 border-arc-border arcade-panel rounded-none" : "border border-brand-border rounded-xl bg-brand-card shadow-lg"
+        <div className={cn("overflow-hidden relative", 
+          theme === "arcade90s" ? "border-2 border-arc-border arcade-panel rounded-none arcade-scanline" : "border border-brand-border rounded-xl bg-brand-card shadow-lg"
         )}>
+          {theme === "arcade90s" && <div className="absolute top-0 left-0 w-full h-1 bg-arc-secondary/50 shadow-[0_0_15px_rgba(34,211,238,0.8)] z-20 pointer-events-none animate-[scanline_3s_linear_infinite] opacity-20" />}
+          
           <div className="overflow-x-auto">
             <table className="w-full text-sm text-left">
               <thead className={cn(
@@ -78,12 +80,12 @@ export default function AppLoads() {
                     key={load.id}
                     onClick={() => setLocation(`/app/loads/${load.id}`)}
                     className={cn(
-                      "group cursor-pointer transition-colors",
-                      theme === "arcade90s" ? "hover:bg-arc-secondary/5 border-arc-border" : "hover:bg-brand-border/30 border-brand-border/50"
+                      "group cursor-pointer transition-colors relative",
+                      theme === "arcade90s" ? "hover:bg-arc-secondary/10 border-arc-border hover:shadow-[inset_0_0_10px_rgba(34,211,238,0.1)]" : "hover:bg-brand-border/30 border-brand-border/50"
                     )}
                   >
                     <td className="px-6 py-4 font-mono font-medium whitespace-nowrap">
-                      <span className={cn(theme === "arcade90s" ? "text-arc-secondary" : "text-white")}>
+                      <span className={cn(theme === "arcade90s" ? "text-arc-secondary group-hover:arcade-flicker" : "text-white")}>
                         {load.externalLoadId}
                       </span>
                     </td>

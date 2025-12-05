@@ -103,20 +103,22 @@ export default function DriverDashboard() {
                 <Card 
                   key={load.id} 
                   className={cn(
-                    "overflow-hidden transition-all duration-300 cursor-pointer group",
+                    "overflow-hidden transition-all duration-300 cursor-pointer group relative",
                     theme === "arcade90s"
-                      ? "arcade-panel rounded-none border-2 border-arc-border hover:border-arc-secondary hover:shadow-arc-glow-cyan hover:scale-[1.01]"
+                      ? "arcade-panel rounded-none border-2 border-arc-border hover:border-arc-secondary hover:shadow-arc-glow-cyan hover:scale-[1.01] arcade-scanline"
                       : "border-brand-border bg-brand-card shadow-lg shadow-black/20 rounded-2xl hover:border-brand-gold/30"
                   )}
                   onClick={() => setLocation(`/driver/loads/${load.id}`)}
                 >
-                  <CardHeader className="p-5 pb-2 flex flex-col items-start space-y-1">
+                  {theme === "arcade90s" && <div className="absolute inset-0 bg-arc-secondary/5 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-0" />}
+                  
+                  <CardHeader className="p-5 pb-2 flex flex-col items-start space-y-1 relative z-10">
                     <div className="w-full flex items-center justify-between mb-2">
                       <div className="flex items-center gap-3">
                         <div className={cn(
                           "px-3 py-1 rounded-full text-[10px] font-bold tracking-wider uppercase shadow-sm transition-all",
                           theme === "arcade90s"
-                            ? "arcade-badge bg-transparent border-arc-secondary text-arc-secondary shadow-[0_0_5px_rgba(34,211,238,0.5)]"
+                            ? "arcade-badge bg-transparent border-arc-secondary text-arc-secondary shadow-[0_0_5px_rgba(34,211,238,0.5)] group-hover:arcade-pulse-glow"
                             : load.status === "IN_TRANSIT" 
                               ? "bg-gradient-to-r from-brand-gold-light via-brand-gold to-brand-gold-dark text-[#6b3b05]" 
                               : "bg-brand-dark-pill border border-brand-border text-brand-muted"
@@ -125,14 +127,14 @@ export default function DriverDashboard() {
                         </div>
                         <span className={cn(
                           "text-[11px] uppercase tracking-[0.18em] font-mono",
-                          theme === "arcade90s" ? "text-arc-muted" : "text-brand-muted"
+                          theme === "arcade90s" ? "text-arc-muted arcade-flicker" : "text-brand-muted"
                         )}>{load.externalLoadId}</span>
                       </div>
                       
                       <div className={cn(
                         "h-8 w-8 flex items-center justify-center transition-all duration-300",
                         theme === "arcade90s"
-                          ? "text-arc-secondary group-hover:animate-ping"
+                          ? "text-arc-secondary group-hover:animate-bounce"
                           : "rounded-full bg-brand-dark-pill border border-brand-border group-hover:bg-brand-gold group-hover:text-[#6b3b05]"
                       )}>
                          <ChevronRight className="h-4 w-4" />
@@ -141,13 +143,13 @@ export default function DriverDashboard() {
 
                     <div className={cn(
                       "text-[11px] uppercase tracking-[0.18em] font-bold transition-colors",
-                      theme === "arcade90s" ? "text-arc-muted" : "text-brand-muted/70"
+                      theme === "arcade90s" ? "text-arc-muted group-hover:text-arc-primary group-hover:arcade-hover-glitch" : "text-brand-muted/70"
                     )}>
                       {load.brokerName}
                     </div>
                   </CardHeader>
                   
-                  <CardContent className="p-5 pt-2 space-y-6">
+                  <CardContent className="p-5 pt-2 space-y-6 relative z-10">
                     {/* Big Address Groups */}
                     <div className="space-y-5">
                       {/* Pickup Group */}

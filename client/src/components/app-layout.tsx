@@ -35,20 +35,23 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
             return (
               <Link key={item.name} href={item.href}>
                 <div className={cn(
-                  "flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all cursor-pointer group",
+                  "flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all cursor-pointer group relative overflow-hidden",
                   isActive 
                     ? theme === "arcade90s" 
-                      ? "bg-arc-secondary/20 text-arc-secondary shadow-arc-glow-cyan border border-arc-secondary/50" 
+                      ? "bg-arc-secondary/20 text-arc-secondary shadow-arc-glow-cyan border border-arc-secondary/50 arcade-flicker" 
                       : "bg-brand-dark-pill text-white border border-brand-border shadow-sm"
                     : theme === "arcade90s"
-                      ? "text-arc-muted hover:text-arc-text hover:bg-arc-bg"
+                      ? "text-arc-muted hover:text-arc-text hover:bg-arc-bg hover:arcade-hover-glitch"
                       : "text-brand-muted hover:text-white hover:bg-brand-dark-pill/50"
                 )}>
-                  <item.icon className={cn("w-4 h-4", 
+                  {isActive && theme === "arcade90s" && (
+                    <div className="absolute inset-0 bg-arc-secondary/10 animate-pulse pointer-events-none" />
+                  )}
+                  <item.icon className={cn("w-4 h-4 relative z-10", 
                     isActive && theme === "arcade90s" && "text-arc-secondary",
                     isActive && theme !== "arcade90s" && "text-brand-gold"
                   )} />
-                  <span className={cn(theme === "arcade90s" && "arcade-pixel-font text-xs tracking-wide")}>{item.name}</span>
+                  <span className={cn("relative z-10", theme === "arcade90s" && "arcade-pixel-font text-xs tracking-wide")}>{item.name}</span>
                 </div>
               </Link>
             );
