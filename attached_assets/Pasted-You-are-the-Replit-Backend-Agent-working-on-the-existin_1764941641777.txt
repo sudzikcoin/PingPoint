@@ -1,0 +1,221 @@
+You are the Replit Backend Agent working on the existing `agentos-tracking-core` project.
+
+TASK: On the driver load details page (`/driver/loads/[id]`) make the UI closer to MacroPoint:
+1) REMOVE the big blue “Update Load Status” button at the bottom.
+2) REMOVE the large “Upload POD / BOL” card (the big DOCUMENTS rectangle).
+3) INSTEAD, add a small file icon button on each stop card (like in MacroPoint) that is responsible for uploading documents for that specific stop (POD/BOL for delivery, BOL for pickup).
+
+Keep all existing logic, types, and routes. Just refactor and reuse what already exists for document upload.
+
+────────────────────────
+1. REMOVE BLUE BUTTON + BIG DOCUMENT CARD
+────────────────────────
+
+Open file: `src/app/driver/loads/[id]/page.tsx`
+
+In this page you will see:
+- a section for “DOCUMENTS” or similar, with a large card that says “Upload POD / BOL – Tap to scan or upload document”.
+- a large primary button at the bottom, something like: `<button>Update Load Status</button>`.
+
+Do the following:
+
+1) Completely remove the large “Update Load Status” button from this page.
+   - All logic that updated the load status should now be handled only through:
+     - individual stop buttons (Arrive / Departed),
+     - Mark as Delivered (if present in header or elsewhere).
+
+2) Remove the large DOCUMENTS card section (header “DOCUMENTS”, big rectangle with upload area).
+   - Do NOT delete any underlying helper functions/components if they are used elsewhere.
+   - If there is a reusable upload component, keep it, but it will be triggered from the new icon button (see below).
+
+After removal, the page layout should be:
+- Header with load info + status.
+- Map/Interactive map placeholder (if present).
+- “ROUTE PLAN” section with stops list.
+- No big document card.
+- No big blue button at the bottom.
+
+────────────────────────
+2. SMALL FILE ICON BUTTON PER STOP
+────────────────────────
+
+We already have a client-side component for each stop row (e.g. `StopRowClient` or similar), used on `/driver/loads/[id]` to render:
+- stop type,
+- address,
+- time window,
+- status pill,
+- Arrive / Departed buttons.
+
+We need to add a small “file icon” button on each stop card.
+
+If the stop-row is inside `page.tsx`, extract or update the client component as needed. The important part:
+
+• Each stop row should receive:
+  - `stop.id`
+  - `loadId` (the parent load id)
+  - `stop.type`
+  - and, if available, `driverId` (current driver on this page).
+
+You may pass `loadId` and `driverId` from the main page down into the stop component via props.
+
+Placement:
+- On the right side of the row, together with Arrive/Departed buttons.
+- Layout suggestion:
+
+  - Outer container: `flex flex-row items-center justify-between gap-3`
+  - Right-side block: `flex flex-row items-center gap-2`
+
+  Inside right-side block:
+  [ File icon button ] [ Arrive button ] [ Departed button ]
+
+The file icon button should be a small square/icon-like button.
+
+Example Tailwind classes (you can adjust but keep similar style):
+
+Base icon button:
+"inline-flex items-center justify-center w-8 h-8 rounded-md border border-slate-600 bg-slate-900 text-slate-200 hover:bg-slate-800 hover:border-slate-400 transition disabled:opacity-40 disabled:cursor-not-allowed"
+
+Use a simple inline SVG for the file icon, e.g.:
+
+- A minimal “document” icon with a folded corner. Keep it inline (no external icon library).
+
+────────────────────────
+3. REUSE EXISTING DOCUMENT UPLOAD LOGIC
+────────────────────────
+
+Important: DO NOT invent completely new upload logic; reuse or refactor what already exists behind the big “Upload POD / BOL” card.
+
+Find how the previous DOCUMENTS card worked:
+
+- Locate the component or code that handled document upload:
+  - It may already use a hidden `<input type="file">` and onChange handler.
+  - Or use some helper (e.g. `handleUploadDocument(loadId)`).
+
+Refactor it so that:
+
+1) The actual upload logic is moved into a reusable helper function OR a small hook.
+
+   For example, in `src/app/driver/loads/[id]/page.tsx` or in a helper file under `src/components/driver` / `src/lib`:
+
+   - Create a function (or hook) like `useStopDocumentUpload(loadId: string, driverId?: string, stopId?: string)`.
+   - Or simply a function `uploadDocumentForStop({ loadId, driverId, stopId, file })` that:
+     - uploads the file (if you already had logic to upload to some storage),
+     - then calls `/api/tracking/documents` with:
+       {
+         loadId,
+         driverId,
+         stopId,
+         type: (decide based on stop.type: for PICKUP "BOL", for DELIVERY "POD"),
+         fileUrl, fileName, contentType, sizeBytes
+       }
+
+2) The new icon button should own the file picker and call this upload logic.
+
+Inside the stop client component:
+
+- Add:
+
+  - `const fileInputRef = useRef<HTMLInputElement | null>(null);`
+
+  - A hidden file input:
+
+    `<input
+       ref={fileInputRef}
+       type="file"
+       accept="image/*,application/pdf"
+       className="hidden"
+       onChange={handleFileChange}
+     />`
+
+- Icon button `onClick` handler:
+
+  ```ts
+  const handleOpenFilePicker = () => {
+    if (fileInputRef.current) {
+      fileInputRef.current.click();
+    }
+  };
+
+	•	handleFileChange:
+
+const [isUploading, setIsUploading] = useState(false);
+
+const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  const file = e.target.files?.[0];
+  if (!file) return;
+
+  try {
+    setIsUploading(true);
+    // TODO: reuse existing upload logic that was used by the big DOCUMENTS card.
+    // For example:
+    //   const fileUrl = await uploadToStorage(file);
+    //   await fetch("/api/tracking/documents", {
+    //     method: "POST",
+    //     headers: { "Content-Type": "application/json" },
+    //     body: JSON.stringify({
+    //       loadId,
+    //       driverId,
+    //       stopId: stop.id,
+    //       type: stop.type === "DELIVERY" ? "POD" : "BOL",
+    //       fileUrl,
+    //       fileName: file.name,
+    //       contentType: file.type,
+    //       sizeBytes: file.size
+    //     })
+    //   });
+    //
+    // If such logic already exists (for the old card), extract it into a helper and call it here.
+
+    // After success, you can optionally refresh the page or show a toast.
+    // router.refresh();
+  } catch (err) {
+    console.error(err);
+    alert("Failed to upload document");
+  } finally {
+    setIsUploading(false);
+    // Clear input so selecting the same file again works:
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  }
+};
+
+•	While isUploading is true:
+	•	Disable the icon button (disabled attribute).
+	•	Optionally add a small spinner or change icon opacity.
+
+IMPORTANT:
+If you cannot easily refactor the existing upload card logic (for example, it is too entangled), at minimum:
+	•	remove the big card visually from the page,
+	•	wire the icon button to call the same handler/function that the card used, just passing stopId so the backend knows for which stop the document is.
+
+────────────────────────
+4. LIMIT ICON TO RELEVANT STOPS
+────────────────────────
+
+To mimic MacroPoint:
+	•	Show the file icon button at least on DELIVERY stops (for POD).
+	•	Optional: also show on PICKUP stops for BOL.
+
+Implementation:
+	•	In the stop client component:
+
+const canUploadDoc = stop.type === "PICKUP" || stop.type === "DELIVERY";
+
+•	Render the icon button only if canUploadDoc is true.
+
+────────────────────────
+5. FINAL CHECK
+────────────────────────
+
+After changes:
+	1.	On /driver/loads/[id]:
+	•	No big blue “Update Load Status” button at the bottom.
+	•	No large DOCUMENTS card with “Upload POD / BOL”.
+	2.	Each relevant stop card (pickup / delivery) has:
+	•	status pill, Arrive / Departed buttons,
+	•	and a small file icon button on the right side.
+	3.	Clicking the file icon opens file picker and triggers the same document upload logic that previously used the big card (or a refactored version of it).
+	4.	The project still builds, and all TypeScript types are correct.
+
+Keep styles consistent with the existing dark theme and current Tailwind usage.
+
+END OF INSTRUCTIONS

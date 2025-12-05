@@ -1,12 +1,11 @@
 import { useRoute, useLocation } from "wouter";
 import { getLoadById, Load, Stop, StopStatus } from "@/lib/mock-data";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
-import { ArrowLeft, Map, Navigation, Upload, CheckCircle2, Clock, Play, Square } from "lucide-react";
+import { ArrowLeft, Map, Navigation, CheckCircle2, Clock, Play, Square, FileText, Loader2 } from "lucide-react";
 import { format } from "date-fns";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 
@@ -20,6 +19,8 @@ interface StopRowProps {
 function StopRow({ stop, onStatusUpdate }: StopRowProps) {
   const [isArriveLoading, setIsArriveLoading] = useState(false);
   const [isDepartLoading, setIsDepartLoading] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const handleUpdate = async (newStatus: "ARRIVED" | "DEPARTED") => {
     if (newStatus === "ARRIVED") setIsArriveLoading(true);
@@ -33,6 +34,31 @@ function StopRow({ stop, onStatusUpdate }: StopRowProps) {
     } finally {
       if (newStatus === "ARRIVED") setIsArriveLoading(false);
       else setIsDepartLoading(false);
+    }
+  };
+
+  const handleOpenFilePicker = () => {
+    if (fileInputRef.current) {
+      fileInputRef.current.click();
+    }
+  };
+
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    try {
+      setIsUploading(true);
+      // Simulate upload logic
+      // In a real app: await uploadDocument({ stopId: stop.id, file });
+      await new Promise(resolve => setTimeout(resolve, 1500));
+      toast.success(`Document uploaded for ${stop.type.toLowerCase()}`);
+    } catch (err) {
+      console.error(err);
+      toast.error("Failed to upload document");
+    } finally {
+      setIsUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
     }
   };
 
@@ -76,6 +102,7 @@ function StopRow({ stop, onStatusUpdate }: StopRowProps) {
 
   // Button Logic
   const showButtons = stop.type === "PICKUP" || stop.type === "DELIVERY";
+  const canUploadDoc = stop.type === "PICKUP" || stop.type === "DELIVERY";
   
   const baseBtn = "inline-flex items-center justify-center px-2.5 py-1 text-xs font-medium rounded-md border transition disabled:opacity-40 disabled:cursor-not-allowed h-8";
   const primaryBtn = cn(baseBtn, "border-emerald-500 bg-emerald-600 text-white hover:bg-emerald-500");
@@ -105,9 +132,6 @@ function StopRow({ stop, onStatusUpdate }: StopRowProps) {
     departBtnClass = disabledBtn;
     departDisabled = true;
   } else if (isPlannedOrEnRoute) {
-    // Can't depart before arriving (usually), but spec says:
-    // "When status PLANNED or EN_ROUTE: Departed: secondaryBtn"
-    // So we leave it enabled but secondary.
     departBtnClass = secondaryBtn;
   }
 
@@ -157,6 +181,26 @@ function StopRow({ stop, onStatusUpdate }: StopRowProps) {
         {/* Buttons */}
         {showButtons && (
           <div className="flex flex-row gap-2 mt-1">
+            {canUploadDoc && (
+              <>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/*,application/pdf"
+                  className="hidden"
+                  onChange={handleFileChange}
+                />
+                <button
+                  className="inline-flex items-center justify-center w-8 h-8 rounded-md border border-slate-600 bg-slate-900 text-slate-200 hover:bg-slate-800 hover:border-slate-400 transition disabled:opacity-40 disabled:cursor-not-allowed"
+                  disabled={isUploading}
+                  onClick={handleOpenFilePicker}
+                  title="Upload Document"
+                >
+                  {isUploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileText className="h-4 w-4" />}
+                </button>
+              </>
+            )}
+
             <button
               className={arriveBtnClass}
               disabled={arriveDisabled || isArriveLoading}
@@ -235,7 +279,7 @@ export default function LoadDetails() {
   }
 
   return (
-    <div className="min-h-screen bg-background pb-24">
+    <div className="min-h-screen bg-background pb-10">
       {/* Header */}
       <header className="sticky top-0 z-10 bg-background/80 backdrop-blur-md border-b border-border/40">
         <div className="container mx-auto px-4 h-14 flex items-center gap-4">
@@ -279,37 +323,7 @@ export default function LoadDetails() {
             ))}
           </div>
         </div>
-
-        <Separator className="bg-border/50" />
-
-        {/* Documents Section Mockup */}
-        <div className="space-y-3">
-           <div className="flex items-center justify-between">
-             <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider pl-1">Documents</h2>
-             <Button variant="ghost" size="sm" className="h-6 text-xs text-primary">View All</Button>
-           </div>
-           <Card className="bg-card/30 border-dashed border-border">
-             <CardContent className="p-4 flex items-center justify-center flex-col gap-2 py-8 cursor-pointer hover:bg-card/50 transition-colors">
-               <div className="h-10 w-10 rounded-full bg-muted flex items-center justify-center">
-                 <Upload className="h-5 w-5 text-muted-foreground" />
-               </div>
-               <div className="text-center">
-                 <p className="text-sm font-medium">Upload POD / BOL</p>
-                 <p className="text-xs text-muted-foreground">Tap to scan or upload document</p>
-               </div>
-             </CardContent>
-           </Card>
-        </div>
       </main>
-
-      {/* Bottom Action Bar */}
-      <div className="fixed bottom-0 left-0 right-0 p-4 bg-background/80 backdrop-blur-xl border-t border-border/40">
-        <div className="container mx-auto max-w-md flex gap-3">
-          <Button className="w-full font-semibold shadow-lg shadow-primary/20" size="lg">
-            Update Load Status
-          </Button>
-        </div>
-      </div>
     </div>
   );
 }
