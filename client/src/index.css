@@ -239,4 +239,40 @@
   .arcade-pulse-glow {
     animation: pulse-glow 2s infinite;
   }
+
+  /* Landing Page Animations */
+  .landing-neon {
+    text-shadow: 
+      0 0 5px rgba(250, 204, 21, 0.5),
+      0 0 10px rgba(250, 204, 21, 0.3),
+      0 0 20px rgba(250, 204, 21, 0.1);
+    animation: flicker 5s infinite alternate;
+  }
+
+  @keyframes truck-move {
+    0% { left: 0%; transform: scaleX(1); }
+    45% { left: 45%; transform: scaleX(1); }
+    50% { left: 45%; transform: scaleX(-1); } /* Turn */
+    55% { left: 45%; transform: scaleX(-1); }
+    100% { left: 90%; transform: scaleX(-1); }
+  }
+
+  @keyframes dot-eat {
+    0% { opacity: 1; transform: scale(1); }
+    90% { opacity: 1; transform: scale(1); }
+    100% { opacity: 0; transform: scale(0); }
+  }
+
+  @keyframes ghost-drift {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(-10px); }
+  }
+
+  .animate-truck-move {
+    animation: truck-move 3.5s linear forwards;
+  }
+
+  .animate-ghost-drift {
+    animation: ghost-drift 3s ease-in-out infinite;
+  }
 }

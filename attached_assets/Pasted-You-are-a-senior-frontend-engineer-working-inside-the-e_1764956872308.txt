@@ -1,0 +1,140 @@
+You are a senior frontend engineer working inside the existing PingPoint frontend project on Replit.
+
+ASSUME:
+- Stack: Next.js App Router (app/), React, TypeScript, Tailwind CSS.
+- There are already:
+  - Driver views under `/driver/*`.
+  - A control zone for broker/dispatcher under `/app/loads`.
+- Arcade / WarCat Mode 90 animations (scanlines, flicker, etc.) already exist and can be reused.
+
+YOUR TASK:
+Create a new landing / home screen at the root route `/` with:
+1) A short arcade-style intro animation (≈3 seconds).
+2) After that, a simple role selector with two big buttons: “Broker” and “Dispatcher”.
+
+Do NOT break existing routes `/driver/*` or `/app/loads`. Keep edits minimal and consistent with current code style.
+
+============================================================
+1. ROOT PAGE AT "/"
+============================================================
+
+Create or update `app/page.tsx` to be a client component (because it uses state and effects).
+
+Behavior:
+- When user opens `/`, show a full-screen intro animation for about 3 seconds.
+- After 3 seconds, fade/transition to a role selection screen.
+- The rest of the app (driver zone and control zone) must remain reachable directly via `/driver` and `/app/loads`.
+
+Implementation idea:
+- Use `useState` with boolean `showIntro` (initially true).
+- In `useEffect`, call `setTimeout(() => setShowIntro(false), 3000)` and clear timeout on cleanup.
+- Render:
+  - If `showIntro` is true → render `IntroAnimationView`.
+  - Otherwise → render `RoleSelectorView`.
+
+Wrap everything in a full-screen container, for example a `div` with `min-h-screen`, dark background, centered content.
+
+============================================================
+2. INTRO ANIMATION VIEW (PAC-MAN STYLE TRUCK)
+============================================================
+
+Goal: A 3-second arcade animation that visually explains PingPoint.
+
+Layout:
+- Full-screen dark background (same palette as other pages).
+- At the top center: neon sign style text:
+  - Big title: `PINGPOINT`
+  - Small subtitle underneath: `by SuVerse Labs`
+- Below the title: a rounded rectangular “map” area that looks like an arcade game screen.
+
+Inside the map area:
+- A simple route made of dots (like a Pac-Man path).
+  - For example, a horizontal or L-shaped path of small circular dots.
+- A truck icon that moves along the path:
+  - This can be a small square/rounded div or icon styled as a truck.
+  - It should animate from start to end of the path in about 3 seconds.
+- As the truck passes, dots it “eats” should disappear or fade out:
+  - Use CSS animations with `animation-delay` so each dot fades out slightly after the previous one, synchronized with the truck movement.
+- Ghosts:
+  - A few small “ghost” elements (round or ghost-shaped) drift slowly around the route.
+  - They should look a bit like GPT ghosts (e.g. tiny glowing eyes or simple “GPT” text).
+  - Use a gentle floating animation (up/down or left/right).
+
+Styling:
+- Use existing arcade helpers where appropriate:
+  - Wrap the map container in classes like `.arcade-scanline` and `.arcade-flicker` so it feels like a CRT monitor.
+- Add a text glow class for the title, for example:
+  - A utility like `landing-neon` that applies bright text-shadow and subtle pulsing.
+- Add new keyframes in the global CSS (e.g. `globals.css` or `index.css`) to support:
+  - `truck-move` (moves the truck along X/Y axis over 3 seconds).
+  - `dot-eat` (fades dot opacity from 1 to 0 over the duration).
+  - `ghost-drift` (slow oscillation to make ghosts float).
+- Use these classes on the respective elements so the animation runs once and finishes in about 3 seconds.
+
+Important:
+- The intro is purely cosmetic. It does not need user input and should not block navigation once it finishes.
+- Keep performance in mind: limit the number of DOM elements and avoid heavy box-shadow blur if unnecessary.
+
+============================================================
+3. ROLE SELECTOR VIEW (BROKER / DISPATCHER)
+============================================================
+
+After `showIntro` becomes false, show `RoleSelectorView`.
+
+Layout:
+- Full-screen or centered card over the same dark background.
+- At top center:
+  - Same neon title `PINGPOINT` and subtitle `by SuVerse Labs`, but smaller than in the intro.
+- Below that, some small text like “Choose your console” (optional).
+- In the center, two large neon buttons:
+  - Button 1: “Broker”
+  - Button 2: “Dispatcher”
+- Buttons should feel like arcade-style pill buttons:
+  - Reuse existing `PillButton` or `Button` component if available (e.g. from `client/src/components/ui/pill-button.tsx`).
+  - Add glow and subtle hover/press animations by reusing WarCat Mode classes.
+
+Behavior:
+- Clicking “Broker”:
+  - Navigate to `/app/loads?role=broker`.
+- Clicking “Dispatcher”:
+  - Navigate to `/app/loads?role=dispatcher`.
+
+You can use Next.js `Link` components or `useRouter().push` for navigation.
+Add a comment: `// TODO: later enforce real auth/role-based access; currently the role is only a UI hint via query string`.
+
+Optional:
+- If `/app/loads` already supports reading `role` from search params, you can adjust labels (e.g. show “Broker View” in header). Otherwise, just pass the param for now and leave a `// TODO` to wire it later.
+
+============================================================
+4. CSS AND ANIMATION NOTES
+============================================================
+
+In the main CSS file:
+- Add a `.landing-neon` class for the PingPoint title:
+  - Strong text-shadow in yellow/amber, slight pulsing with keyframes if desired.
+- Add keyframes:
+  - `@keyframes truck-move { 0% { transform: translateX(0%); } 100% { transform: translateX(100%); } }`
+  - `@keyframes dot-eat { 0% { opacity: 1; } 80% { opacity: 1; } 100% { opacity: 0; } }`
+  - `@keyframes ghost-drift { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-6px); } }`
+- Add simple classes like `.truck-icon`, `.truck-dot`, `.ghost` that apply these animations with appropriate duration and delay.
+
+Apply them in your JSX so that:
+- The truck moves across the route once in 3 seconds.
+- Dots fade out sequentially behind the truck.
+- Ghosts constantly float up and down.
+
+============================================================
+5. INTEGRATION AND SAFETY CHECKS
+============================================================
+
+- Ensure `/driver` still renders the existing driver dashboard unchanged.
+- Ensure `/app/loads` still opens the Broker/Dispatcher control zone.
+- Visiting `/` now shows:
+  - 3-second intro animation with map, truck eating dots, and GPT ghosts.
+  - Then automatically switches to the role selector with two neon buttons.
+- Test on mobile and desktop in Replit preview to verify:
+  - Animation runs smoothly.
+  - Buttons navigate correctly to `/app/loads?role=broker` and `/app/loads?role=dispatcher`.
+- Keep all new code consistent with project patterns. Add `// TODO` comments where later backend integration or auth will be required.
+
+Implement this landing page now in the PingPoint project.

@@ -10,20 +10,16 @@ import PublicTracking from "@/pages/public-tracking";
 import AppLoads from "@/pages/app-loads";
 import AppLoadNew from "@/pages/app-load-new";
 import AppLoadDetails from "@/pages/app-load-details";
+import LandingPage from "@/pages/landing";
 import { useEffect } from "react";
 import { ThemeProvider } from "@/context/theme-context";
 
 function Router() {
-  const [location, setLocation] = useLocation();
-
-  useEffect(() => {
-    if (location === "/") {
-      setLocation("/driver");
-    }
-  }, [location, setLocation]);
-
   return (
     <Switch>
+      {/* Root Landing */}
+      <Route path="/" component={LandingPage} />
+
       {/* Driver Zone */}
       <Route path="/driver" component={DriverDashboard} />
       <Route path="/driver/loads/:id" component={LoadDetails} />
