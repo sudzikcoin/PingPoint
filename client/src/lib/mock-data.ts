@@ -47,6 +47,10 @@ export interface Load {
   driver?: Driver;
   driverTrackingLink?: string | null;
   customerTrackingLink?: string | null;
+  // New fields
+  brokerEmail?: string;
+  driverPhone?: string;
+  brokerWorkspaceId?: string;
 }
 
 const TODAY = new Date();
@@ -218,6 +222,9 @@ export const createLoad = (loadData: Partial<Load>) => {
     internalReference: loadData.internalReference,
     equipmentType: loadData.equipmentType,
     driver: loadData.driver,
+    brokerEmail: loadData.brokerEmail,
+    driverPhone: loadData.driverPhone,
+    brokerWorkspaceId: loadData.brokerWorkspaceId,
     ...loadData
   } as Load;
 

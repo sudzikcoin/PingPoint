@@ -1,0 +1,175 @@
+You are a senior frontend engineer working inside the existing PingPoint frontend project on Replit.
+
+CONTEXT
+- Stack: Next.js App Router (app/), React, TypeScript, Tailwind CSS.
+- The Broker / Dispatcher console lives under `/app/loads`.
+- The “New Load” page is at `/app/loads/new` and already has fields like:
+  - Broker Name, Shipper Name, Carrier Name, Equipment Type, Customer Ref, Rate Amount, etc.
+- At the bottom there is a primary CTA button (e.g. “Create Load” / “Generate Tracking Links”) that currently just creates a mock load and redirects back to `/app/loads`.
+
+GOAL
+Extend the **New Load** flow to:
+1. Collect **Broker Email** and **Driver Phone** on the “New Load” form.
+2. On submit:
+   - If this broker email is new, create a **lightweight broker account / workspace** and consider the broker “signed in” on this device.
+   - Always create the load as before.
+   - After successful creation, **redirect the broker to their loads dashboard** (personal cabinet) instead of staying on the form.
+   - Trigger two outgoing notifications:
+     - To broker email: a **verification email link** + a link to open their PingPoint console.
+     - To driver phone: a **link to download/open the driver app or tracking mini-app**.
+3. Keep everything as a **frontend-friendly prototype**:
+   - Use simple client-side state or mock API helpers.
+   - Add clear `// TODO` markers where real backend/email/SMS needs to be wired later.
+
+============================================================
+1. UPDATE THE NEW LOAD FORM UI
+============================================================
+
+File: `app/app/loads/new/page.tsx` (or whichever component renders the New Load page).
+
+Add two new required fields in the “General Information” section:
+
+1) **Broker Email**
+   - Label: `BROKER EMAIL`
+   - Placeholder: `E.g. dispatch@soartransport.com`
+   - Type: `email`
+   - Validation:
+     - required,
+     - simple email pattern check.
+   - This will be used to:
+     - identify / create the broker workspace,
+     - send verification and console link.
+
+2) **Driver Phone**
+   - Label: `DRIVER PHONE`
+   - Placeholder: `E.g. +1 (555) 123-4567`
+   - Type: `tel`
+   - (For now) only basic required validation; no strict formatting.
+   - This will be used to send the driver a link to the mini-app / driver app.
+
+Place these fields just after **Broker Name** (for Broker Email) and near the driver-related fields (if they exist), or directly under the General Information block if that’s simpler. Make sure the styling matches existing inputs (same Tailwind classes, error messages, etc.).
+
+============================================================
+2. LIGHTWEIGHT BROKER WORKSPACE CREATION
+============================================================
+
+Create a small client-side helper to simulate “sign up or attach broker workspace”:
+
+- Location example: `client/src/lib/brokerWorkspace.ts` (or similar).
+- Export a function:
+
+```ts
+// TODO: replace with real API call when backend is ready.
+export async function ensureBrokerWorkspace(brokerEmail: string, brokerName?: string) {
+  // 1. Check localStorage for an existing workspace id for this email.
+  // 2. If exists, return it.
+  // 3. If not, create a mock workspace object and persist it.
+  // 4. Return a workspace id or object.
+}
+
+Behavior (prototype version):
+	•	Store a mapping in localStorage like:
+	•	key: "pingpoint-broker-" + brokerEmail
+	•	value: JSON string with { id, email, name, createdAt }.
+	•	If a mapping already exists, reuse it → this simulates “existing broker cabinet”.
+	•	If not, generate a random id (e.g. broker_ + nanoid), save it → this simulates workspace creation.
+	•	This function should be called during the New Load submission (before redirect).
+
+Add a simple BrokerContext or reuse any existing auth-like context to keep the “current broker” in memory for the session:
+	•	Example:
+	•	BrokerProvider wrapping /app/loads/* pages,
+	•	useBroker() hook returning { broker, setBroker }.
+
+When ensureBrokerWorkspace returns data, update the context with that broker, so that after redirect /app/loads displays “Welcome, {Broker Name}” and uses the email as the workspace identity.
+
+Add // TODO comments where a real API (POST /api/brokers) and auth/session should be wired later.
+
+============================================================
+3. EXTEND NEW LOAD SUBMISSION FLOW
+
+On the New Load page, in the submit handler for the main CTA button (e.g. onSubmit):
+	1.	Validate all fields including the new ones:
+	•	If brokerEmail or driverPhone are missing or invalid, show inline errors and do not submit.
+	2.	Call ensureBrokerWorkspace(brokerEmail, brokerName):
+	•	Await the result.
+	•	Update broker context with the returned workspace.
+	3.	Create the load (as the page already does):
+	•	Keep existing logic for creating a mock load / calling /api/loads.
+	•	Make sure the load record now also stores:
+	•	brokerEmail
+	•	driverPhone
+	•	brokerWorkspaceId (if available from step 2)
+	•	Add a // TODO to persist these new fields in real backend/schema later.
+	4.	After successful creation:
+	•	Instead of staying on the form or going to a generic page, redirect to the broker’s loads dashboard:
+	•	e.g. router.push("/app/loads")
+	•	If you have a workspace-aware route, you can use query params:
+router.push("/app/loads?workspace=" + workspace.id).
+
+============================================================
+4. SEND NOTIFICATION PLACEHOLDERS
+
+Create a notification helper module, e.g. client/src/lib/notifications.ts:
+
+// TODO: replace console.log with real email/SMS integrations.
+
+export async function sendBrokerVerificationEmail(params: {
+  email: string;
+  brokerName?: string;
+  workspaceId: string;
+}) {
+  // Construct a mock verification URL like:
+  // const verificationUrl = `${window.location.origin}/verify?token=...`
+  // and a console URL like:
+  // const consoleUrl = `${window.location.origin}/app/loads`;
+  // For now, just console.log both URLs.
+}
+
+export async function sendDriverAppLink(params: {
+  phone: string;
+  loadId: string;
+}) {
+  // Construct a mock driver app URL like:
+  // const appUrl = `${window.location.origin}/driver?load=${loadId}`;
+  // For now, just console.log the SMS text that would be sent.
+}
+
+In the New Load submit handler, after the load is successfully created:
+	•	Call:
+
+await sendBrokerVerificationEmail({
+  email: brokerEmail,
+  brokerName,
+  workspaceId: workspace.id,
+});
+
+await sendDriverAppLink({
+  phone: driverPhone,
+  loadId: createdLoad.id,
+});
+
+Add // TODO comments indicating where real email provider (e.g. SendGrid/Postmark) and SMS provider (e.g. Twilio) should be plugged in.
+
+============================================================
+5. UI FEEDBACK AFTER CREATE
+
+After the user hits the CTA (e.g. “Create Load / Generate Codes”) and the operations above complete:
+	1.	Show a short toast or inline banner before/after redirecting:
+	•	“We’ve created your Broker Workspace and sent a verification link to {brokerEmail}.”
+	•	“We’ve also texted the driver a link to open the PingPoint driver app.”
+	2.	Once redirected to /app/loads, at the top of the page you can show a dismissible banner:
+	•	Title: Broker workspace created
+	•	Text: Check your email at {brokerEmail} to verify your account and save this console for future visits.
+
+Add a // TODO note that this banner should later be driven by real backend flags (e.g. emailVerified).
+
+============================================================
+6. SAFETY & NON-BREAKING CHANGES
+	•	Do NOT break existing mock data or list rendering on /app/loads.
+	•	Ensure that the form still works even if localStorage is disabled or notification calls fail:
+	•	The load should still be created and the user redirected.
+	•	Notification helpers should fail gracefully (try/catch + console.error).
+	•	Keep all new code in TypeScript, with proper types for broker, load, and workspace objects.
+
+Implement these changes now in the PingPoint project.
+

@@ -11,6 +11,8 @@ import { useTheme } from "@/context/theme-context";
 import { cn } from "@/lib/utils";
 import { ArrowLeft, Save } from "lucide-react";
 import { toast } from "sonner";
+import { ensureBrokerWorkspace } from "@/lib/brokerWorkspace";
+import { sendBrokerVerificationEmail, sendDriverAppLink } from "@/lib/notifications";
 
 export default function AppLoadNew() {
   const [, setLocation] = useLocation();
@@ -24,49 +26,97 @@ export default function AppLoadNew() {
     // Collect form data (mock implementation)
     const formData = new FormData(e.currentTarget);
     
-    // Simulate API delay
-    await new Promise(resolve => setTimeout(resolve, 1000));
+    const brokerName = formData.get("brokerName") as string;
+    const brokerEmail = formData.get("brokerEmail") as string;
+    const driverPhone = formData.get("driverPhone") as string;
 
-    const newLoad = createLoad({
-      brokerName: formData.get("brokerName") as string,
-      shipperName: formData.get("shipperName") as string,
-      carrierName: formData.get("carrierName") as string,
-      equipmentType: formData.get("equipmentType") as string,
-      rateAmount: Number(formData.get("rateAmount")),
-      customerReference: formData.get("customerReference") as string,
-      internalReference: formData.get("internalReference") as string,
-      stops: [
-        {
-          id: `stop_${Date.now()}_1`,
-          type: "PICKUP",
-          sequence: 1,
-          name: formData.get("pickupName") as string,
-          addressLine1: formData.get("pickupAddress") as string,
-          city: formData.get("pickupCity") as string,
-          state: formData.get("pickupState") as string,
-          zip: formData.get("pickupZip") as string,
-          windowStart: new Date().toISOString(), // Mock
-          windowEnd: new Date().toISOString(),   // Mock
-          status: "PLANNED"
-        },
-        {
-          id: `stop_${Date.now()}_2`,
-          type: "DELIVERY",
-          sequence: 2,
-          name: formData.get("deliveryName") as string,
-          addressLine1: formData.get("deliveryAddress") as string,
-          city: formData.get("deliveryCity") as string,
-          state: formData.get("deliveryState") as string,
-          zip: formData.get("deliveryZip") as string,
-          windowStart: new Date().toISOString(), // Mock
-          windowEnd: new Date().toISOString(),   // Mock
-          status: "PLANNED"
-        }
-      ]
-    });
+    // Basic validation
+    if (!brokerEmail || !brokerEmail.includes("@")) {
+      toast.error("Please enter a valid broker email");
+      setIsSubmitting(false);
+      return;
+    }
 
-    toast.success("Load created successfully");
-    setLocation(`/app/loads/${newLoad.id}`);
+    if (!driverPhone) {
+      toast.error("Please enter a driver phone number");
+      setIsSubmitting(false);
+      return;
+    }
+
+    try {
+      // Simulate API delay
+      await new Promise(resolve => setTimeout(resolve, 1000));
+
+      // 1. Ensure Workspace
+      const workspace = await ensureBrokerWorkspace(brokerEmail, brokerName);
+      
+      // 2. Create Load
+      const newLoad = createLoad({
+        brokerName: brokerName,
+        brokerEmail: brokerEmail,
+        brokerWorkspaceId: workspace.id,
+        driverPhone: driverPhone,
+        shipperName: formData.get("shipperName") as string,
+        carrierName: formData.get("carrierName") as string,
+        equipmentType: formData.get("equipmentType") as string,
+        rateAmount: Number(formData.get("rateAmount")),
+        customerReference: formData.get("customerReference") as string,
+        internalReference: formData.get("internalReference") as string,
+        stops: [
+          {
+            id: `stop_${Date.now()}_1`,
+            type: "PICKUP",
+            sequence: 1,
+            name: formData.get("pickupName") as string,
+            addressLine1: formData.get("pickupAddress") as string,
+            city: formData.get("pickupCity") as string,
+            state: formData.get("pickupState") as string,
+            zip: formData.get("pickupZip") as string,
+            windowStart: new Date().toISOString(), // Mock
+            windowEnd: new Date().toISOString(),   // Mock
+            status: "PLANNED"
+          },
+          {
+            id: `stop_${Date.now()}_2`,
+            type: "DELIVERY",
+            sequence: 2,
+            name: formData.get("deliveryName") as string,
+            addressLine1: formData.get("deliveryAddress") as string,
+            city: formData.get("deliveryCity") as string,
+            state: formData.get("deliveryState") as string,
+            zip: formData.get("deliveryZip") as string,
+            windowStart: new Date().toISOString(), // Mock
+            windowEnd: new Date().toISOString(),   // Mock
+            status: "PLANNED"
+          }
+        ]
+      });
+
+      // 3. Send Notifications
+      await sendBrokerVerificationEmail({
+        email: brokerEmail,
+        brokerName: brokerName,
+        workspaceId: workspace.id,
+      });
+
+      await sendDriverAppLink({
+        phone: driverPhone,
+        loadId: newLoad.id,
+      });
+
+      // 4. UI Feedback & Redirect
+      toast.success(`Load created! Verification email sent to ${brokerEmail}`);
+      toast.info(`Driver app link sent to ${driverPhone}`);
+      
+      // Redirect to loads dashboard instead of load details
+      setLocation(`/app/loads?workspace=${workspace.id}`);
+    
+    } catch (error) {
+      console.error("Failed to create load", error);
+      toast.error("Failed to create load. Please try again.");
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   const inputClasses = cn(
@@ -113,6 +163,14 @@ export default function AppLoadNew() {
               <div className="space-y-1">
                 <label className={labelClasses}>Broker Name</label>
                 <Input name="brokerName" required className={inputClasses} placeholder="e.g. Soar Transportation" />
+              </div>
+              <div className="space-y-1">
+                <label className={labelClasses}>Broker Email</label>
+                <Input name="brokerEmail" type="email" required className={inputClasses} placeholder="e.g. dispatch@soartransport.com" />
+              </div>
+              <div className="space-y-1">
+                <label className={labelClasses}>Driver Phone</label>
+                <Input name="driverPhone" type="tel" required className={inputClasses} placeholder="e.g. +1 (555) 123-4567" />
               </div>
               <div className="space-y-1">
                 <label className={labelClasses}>Shipper Name</label>
