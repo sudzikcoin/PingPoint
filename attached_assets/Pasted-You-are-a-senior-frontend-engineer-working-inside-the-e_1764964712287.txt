@@ -1,0 +1,115 @@
+You are a senior frontend engineer working inside the existing PingPoint frontend project on Replit.
+
+GOAL
+Design and wire up the **Broker Personal Console** (личный кабинет брокера) on the route `/app/loads` in the **Arcade 90s** style.
+
+CONTEXT
+- Stack: Next.js App Router (app/), React, TypeScript, Tailwind CSS.
+- We already have:
+  - A “Broker Workspace” concept created from the New Load page via broker email.
+  - A `BrokerContext` (or similar) that provides current broker info after verification:
+    - `broker.name` (from BrokerName field),
+    - `broker.email`,
+    - `broker.workspaceId`.
+  - A loads list view at `/app/loads` showing mock loads in a table.
+- Visual style: Arcade / WarCat Mode 90 (scanlines, flicker, neon buttons, dark grid background).
+
+TASK
+Transform `/app/loads` into a **Broker Console Dashboard**:
+
+1. **Header / Welcome Bar**
+   - At the top of `/app/loads`, replace any generic header with a neon arcade-style header block.
+   - Content:
+     - Small label above: `BROKER CONSOLE`.
+     - Main title:  
+       - “Welcome, {BrokerName}” or “{BrokerName} – Your Loads”.
+       - BrokerName берём из поля Broker Name, сохранённого в `BrokerContext`.
+     - Subtitle text:  
+       - “Here is the list of your active and recent loads.”
+
+   - Make sure:
+     - If broker name is missing (edge case), fall back to “Broker Console”.
+     - Header uses existing arcade styles (scanlines, flicker) and fits the current design.
+
+2. **Primary Actions Row**
+   Directly under the header, add an actions row with two main buttons:
+
+   1) **Create Load** (primary)
+      - Text: `Create Load`
+      - Neon yellow arcade style (same as current “New Load” button).
+      - On click: `router.push("/app/loads/new")`.
+
+   2) **Upload Rate Confirmation** (secondary)
+      - Text: `Upload Rate Confirmation`
+      - Neon blue style (we already use this color for the new button near “New Load”).
+      - On click for now:
+        - Open a placeholder modal or slide-over with text:
+          - “TODO: Rate Confirmation upload flow (PDF/IMG upload, parse, attach to load).”
+        - Or navigate to a stub page `/app/rate-confirmation` with a simple message.
+      - Add `// TODO` comments where the real upload logic will be implemented.
+
+   Layout:
+   - Use `flex` with `gap-3` (and `flex-wrap`) so on mobile the buttons can wrap onto two lines.
+   - Keep the existing Filter button if it already exists, but align it with these actions.
+
+3. **Loads List Area**
+   - Under the actions row, keep the existing table / list of loads, but treat it as the **“List of his loads”**.
+   - If this isn’t implemented yet, show a placeholder arcade-styled panel:
+
+     - Title inside panel: `Your Loads`
+     - States:
+       - If there are loads: show them in a table as now (Load #, Shipper, Origin/Destination, Status).
+       - If there are no loads yet: show an empty state message:
+         - “You don’t have any loads yet. Tap ‘Create Load’ to add your first shipment.”
+
+   - Make sure loads are filtered by the current broker workspace if that logic exists; otherwise add a `// TODO` with a comment that in the real backend we will filter by `brokerWorkspaceId`.
+
+4. **Burger Menu (Top Right)**
+   - Add a burger-menu icon (three lines) in the top-right corner of the header area (not the browser bar).
+   - When clicked, it opens an overlay menu or dropdown with the following items:
+
+     1) `Loads`
+        - Action: Close the menu and stay on `/app/loads` (this is the current screen).
+        - Later можно использовать для навигации, но сейчас просто якорь.
+
+     2) `Settings`
+        - Action for now: open a simple modal or navigate to stub `/app/settings` with text:
+          - “Broker settings will live here (profile, notifications, billing).”
+
+     3) `Integrations`
+        - Action for now: open a stub `/app/integrations` or modal:
+          - “Future integrations with TMS, telematics and AgentOS will live here.”
+
+   - Style:
+     - Arcade 90s:
+       - burger icon with neon hover glow,
+       - dropdown/overlay panel with dark background, light grid, neon borders.
+     - Ensure it looks good on mobile (full-screen sheet) and desktop (small dropdown).
+
+   - Add `// TODO` markers for each menu item where real settings/integrations pages will be implemented later.
+
+5. **Verification Awareness (optional banner)**
+   - If `broker.emailVerified === false` (or if you don’t have this flag yet, just assume not verified on first load), show a small dismissible banner at the top of the page:
+
+     - Text:  
+       - “We’ve sent a verification link to {broker.email}. Please confirm your email to fully activate your workspace.”
+     - Style: arcade-style info banner (slight glow, icon, close (X) button).
+     - Dismissal should be local (in state) for now; later this can be tied to real backend verification.
+
+6. **General Requirements**
+   - Keep all existing `/app/loads` functionality intact:
+     - The table still works,
+     - filters and navigation are not broken.
+   - Use TypeScript with proper types for `Broker`, `Load`, etc.
+   - Keep the Arcade 90s theme as default; ensure this page looks consistent with WarCat Mode (scanlines, flicker, neon buttons).
+   - Add `// TODO` comments where later backend integration is expected:
+     - fetching loads by workspace,
+     - real email verification status,
+     - real settings/integrations pages,
+     - real upload Rate Confirmation flow.
+
+Implement these changes now so that after email verification a broker lands in this arcade-style console at `/app/loads` and sees:
+- their name in the header,
+- list of their loads,
+- big buttons “Create Load” and “Upload Rate Confirmation”,
+- burger menu with “Loads / Settings / Integrations”.

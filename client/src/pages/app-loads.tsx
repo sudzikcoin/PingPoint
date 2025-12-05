@@ -2,18 +2,34 @@ import { AppLayout } from "@/components/app-layout";
 import { getLoads, Load } from "@/lib/mock-data";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { Plus, Copy, Search, Filter, ChevronRight } from "lucide-react";
+import { Plus, Copy, Search, Filter, ChevronRight, Menu, X, Settings, CloudLightning, Truck } from "lucide-react";
 import { useLocation } from "wouter";
 import { cn } from "@/lib/utils";
 import { useTheme } from "@/context/theme-context";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { format } from "date-fns";
 import { toast } from "sonner";
+import { getCurrentBroker, BrokerWorkspace } from "@/lib/brokerWorkspace";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 
 export default function AppLoads() {
   const [, setLocation] = useLocation();
   const { theme } = useTheme();
   const loads = getLoads(); // In real app this would be useQuery
+  const [broker, setBroker] = useState<BrokerWorkspace | null>(null);
+  const [showVerificationBanner, setShowVerificationBanner] = useState(true);
+
+  useEffect(() => {
+    const current = getCurrentBroker();
+    setBroker(current);
+  }, []);
 
   const copyLink = (e: React.MouseEvent, link: string | null | undefined) => {
     e.stopPropagation();
@@ -22,150 +38,268 @@ export default function AppLoads() {
     toast.success("Tracking link copied");
   };
 
+  // TODO: Filter loads by broker.workspaceId in real backend
+  // const myLoads = loads.filter(l => l.brokerWorkspaceId === broker?.id);
+  const myLoads = loads; 
+
   return (
     <AppLayout>
       <div className="max-w-6xl mx-auto space-y-6">
-        {/* Header */}
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-          <div>
-            <h1 className={cn("text-2xl font-bold", theme === "arcade90s" ? "arcade-title arcade-pixel-font" : "text-white")}>
-              Loads
-            </h1>
-            <p className={cn("text-sm mt-1", theme === "arcade90s" ? "text-arc-muted font-mono text-xs" : "text-brand-muted")}>
-              Manage shipments and tracking
-            </p>
+        
+        {/* Verification Banner */}
+        {showVerificationBanner && broker && (
+          // TODO: Check real emailVerified flag from backend
+          <div className={cn(
+            "relative flex items-center justify-between p-4 rounded-lg border mb-6",
+            theme === "arcade90s" 
+              ? "bg-arc-panel border-arc-secondary/50 shadow-[0_0_15px_rgba(34,211,238,0.2)] arcade-scanline" 
+              : "bg-brand-card border-brand-gold/30"
+          )}>
+            <div className="flex items-center gap-3">
+              <div className={cn("w-2 h-2 rounded-full animate-pulse", theme === "arcade90s" ? "bg-arc-secondary" : "bg-brand-gold")} />
+              <p className={cn("text-sm", theme === "arcade90s" ? "text-arc-text arcade-pixel-font text-xs tracking-wide" : "text-brand-text")}>
+                We've sent a verification link to <span className={theme === "arcade90s" ? "text-arc-secondary" : "text-brand-gold"}>{broker.email}</span>. Please confirm your email to fully activate your workspace.
+              </p>
+            </div>
+            <button onClick={() => setShowVerificationBanner(false)} className="p-1 hover:opacity-70">
+              <X className="w-4 h-4" />
+            </button>
           </div>
-          <div className="flex flex-wrap items-center gap-3">
-            <Button 
-              variant="outline" 
-              className={cn(theme === "arcade90s" ? "border-arc-border text-arc-muted bg-arc-bg rounded-none hover:text-arc-text" : "border-brand-border bg-brand-card text-brand-muted hover:text-white")}
-            >
-              <Filter className="w-4 h-4 mr-2" />
-              Filter
-            </Button>
-            <Button 
-              onClick={() => setLocation("/app/loads/new")}
-              className={cn(theme === "arcade90s" ? "bg-arc-primary text-black rounded-none border border-arc-primary shadow-arc-glow-yellow hover:bg-arc-primary/90 arcade-pixel-font text-xs font-bold" : "bg-brand-gold text-black hover:bg-brand-gold/90")}
-            >
-              <Plus className="w-4 h-4 mr-2" />
-              New Load
-            </Button>
-            
-            {/* TODO: Implement Rate Confirmation upload flow (file picker, validation, backend upload). */}
-            <Button
-              type="button"
-              onClick={() => {
-                // Placeholder logic
-                console.log("TODO: Upload Rate Confirmation");
-                toast.info("Upload Rate Confirmation feature coming soon!");
-              }}
-              className={cn(
-                "font-bold px-4 py-2 transition-all active:scale-95",
-                theme === "arcade90s"
-                  ? "bg-cyan-500 text-black rounded-none border border-cyan-400 shadow-[0_0_20px_rgba(34,211,238,0.6)] hover:bg-cyan-400 arcade-pixel-font text-xs"
-                  : "bg-cyan-600 text-white hover:bg-cyan-500 shadow-md"
-              )}
-            >
-              Upload Rate Confirmation
-            </Button>
+        )}
+
+        {/* Header */}
+        <div className={cn(
+          "relative p-6 rounded-xl border overflow-hidden",
+          theme === "arcade90s" 
+            ? "bg-arc-panel border-arc-border shadow-[0_0_30px_rgba(250,204,21,0.1)]" 
+            : "bg-brand-card border-brand-border"
+        )}>
+          {theme === "arcade90s" && (
+            <div className="absolute inset-0 pointer-events-none bg-[linear-gradient(rgba(18,16,16,0)50%,rgba(0,0,0,0.25)50%),linear-gradient(90deg,rgba(255,0,0,0.06),rgba(0,255,0,0.02),rgba(0,0,255,0.06))] z-0 bg-[length:100%_2px,3px_100%]" />
+          )}
+          
+          <div className="relative z-10 flex justify-between items-start">
+            <div>
+              <div className={cn("text-[10px] font-bold uppercase tracking-[0.3em] mb-2", theme === "arcade90s" ? "text-arc-secondary arcade-pixel-font" : "text-brand-muted")}>
+                Broker Console
+              </div>
+              <h1 className={cn("text-3xl md:text-4xl font-bold mb-2", theme === "arcade90s" ? "text-arc-primary arcade-pixel-font landing-neon" : "text-white")}>
+                Welcome, {broker?.name || "Broker"}
+              </h1>
+              <p className={cn("text-sm max-w-xl", theme === "arcade90s" ? "text-arc-muted font-mono text-xs" : "text-brand-muted")}>
+                Here is the list of your active and recent loads. Manage assignments and track status in real-time.
+              </p>
+            </div>
+
+            {/* Burger Menu */}
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="ghost" size="icon" className={cn(theme === "arcade90s" ? "text-arc-primary hover:text-arc-secondary hover:bg-arc-secondary/10 hover:shadow-arc-glow-cyan rounded-none" : "text-brand-muted hover:text-white")}>
+                  <Menu className="w-6 h-6" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className={cn(
+                "w-56",
+                theme === "arcade90s" 
+                  ? "bg-arc-panel border-arc-secondary text-arc-text rounded-none shadow-[0_0_20px_rgba(34,211,238,0.3)]" 
+                  : "bg-brand-card border-brand-border text-brand-text"
+              )}>
+                {theme === "arcade90s" && <DropdownMenuLabel className="text-arc-muted arcade-pixel-font text-[10px] tracking-widest uppercase">System Menu</DropdownMenuLabel>}
+                {!theme && <DropdownMenuLabel>My Account</DropdownMenuLabel>}
+                <DropdownMenuSeparator className={cn(theme === "arcade90s" ? "bg-arc-border" : "bg-brand-border")} />
+                
+                <DropdownMenuItem className={cn(theme === "arcade90s" ? "focus:bg-arc-secondary/20 focus:text-arc-secondary arcade-pixel-font text-xs cursor-pointer" : "cursor-pointer")}>
+                  <Truck className="mr-2 h-4 w-4" />
+                  <span>Loads</span>
+                </DropdownMenuItem>
+                
+                {/* TODO: Implement real settings page */}
+                <DropdownMenuItem 
+                  onClick={() => toast.info("Broker settings will live here (profile, notifications, billing).")}
+                  className={cn(theme === "arcade90s" ? "focus:bg-arc-secondary/20 focus:text-arc-secondary arcade-pixel-font text-xs cursor-pointer" : "cursor-pointer")}
+                >
+                  <Settings className="mr-2 h-4 w-4" />
+                  <span>Settings</span>
+                </DropdownMenuItem>
+                
+                {/* TODO: Implement integrations page */}
+                <DropdownMenuItem 
+                  onClick={() => toast.info("Future integrations with TMS, telematics and AgentOS will live here.")}
+                  className={cn(theme === "arcade90s" ? "focus:bg-arc-secondary/20 focus:text-arc-secondary arcade-pixel-font text-xs cursor-pointer" : "cursor-pointer")}
+                >
+                  <CloudLightning className="mr-2 h-4 w-4" />
+                  <span>Integrations</span>
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
           </div>
         </div>
 
-        {/* Table / List */}
-        <div className={cn("overflow-hidden relative", 
-          theme === "arcade90s" ? "border-2 border-arc-border arcade-panel rounded-none arcade-scanline" : "border border-brand-border rounded-xl bg-brand-card shadow-lg"
-        )}>
-          {theme === "arcade90s" && <div className="absolute top-0 left-0 w-full h-1 bg-arc-secondary/50 shadow-[0_0_15px_rgba(34,211,238,0.8)] z-20 pointer-events-none animate-[scanline_3s_linear_infinite] opacity-20" />}
+        {/* Actions Row */}
+        <div className="flex flex-wrap items-center gap-4">
+          <Button 
+            onClick={() => setLocation("/app/loads/new")}
+            className={cn(
+              "h-12 px-6 text-sm font-bold uppercase tracking-wider transition-all hover:-translate-y-0.5 active:translate-y-0",
+              theme === "arcade90s" 
+                ? "bg-arc-primary text-black rounded-none border border-arc-primary shadow-arc-glow-yellow hover:bg-arc-primary/90 arcade-pixel-font" 
+                : "bg-brand-gold text-black hover:bg-brand-gold/90 rounded-full"
+            )}
+          >
+            <Plus className="w-4 h-4 mr-2" />
+            Create Load
+          </Button>
           
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm text-left">
-              <thead className={cn(
-                "text-xs uppercase tracking-wider font-medium border-b",
-                theme === "arcade90s" ? "bg-arc-bg text-arc-muted border-arc-border arcade-pixel-font" : "bg-brand-dark-pill text-brand-muted border-brand-border"
-              )}>
-                <tr>
-                  <th className="px-6 py-4">Load #</th>
-                  <th className="px-6 py-4">Broker / Shipper</th>
-                  <th className="px-6 py-4">Origin & Destination</th>
-                  <th className="px-6 py-4">Status</th>
-                  <th className="px-6 py-4">Driver</th>
-                  <th className="px-6 py-4 text-right">Actions</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-brand-border/50">
-                {loads.map((load) => (
-                  <tr 
-                    key={load.id}
-                    onClick={() => setLocation(`/app/loads/${load.id}`)}
-                    className={cn(
-                      "group cursor-pointer transition-colors relative",
-                      theme === "arcade90s" ? "hover:bg-arc-secondary/10 border-arc-border hover:shadow-[inset_0_0_10px_rgba(34,211,238,0.1)]" : "hover:bg-brand-border/30 border-brand-border/50"
-                    )}
-                  >
-                    <td className="px-6 py-4 font-mono font-medium whitespace-nowrap">
-                      <span className={cn(theme === "arcade90s" ? "text-arc-secondary group-hover:arcade-flicker" : "text-white")}>
-                        {load.externalLoadId}
-                      </span>
-                    </td>
-                    <td className="px-6 py-4">
-                      <div className={cn("font-medium", theme === "arcade90s" ? "text-arc-text" : "text-white")}>{load.brokerName}</div>
-                      <div className={cn("text-xs mt-0.5", theme === "arcade90s" ? "text-arc-muted" : "text-brand-muted")}>{load.shipperName}</div>
-                    </td>
-                    <td className="px-6 py-4">
-                      <div className="flex flex-col gap-1">
-                        <div className="flex items-center gap-2">
-                          <div className={cn("w-1.5 h-1.5 rounded-full", theme === "arcade90s" ? "bg-arc-primary" : "bg-emerald-500")} />
-                          <span className={theme === "arcade90s" ? "text-arc-text" : "text-brand-text"}>{load.stops[0].city}, {load.stops[0].state}</span>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <div className={cn("w-1.5 h-1.5 rounded-full", theme === "arcade90s" ? "bg-arc-secondary" : "bg-brand-gold")} />
-                          <span className={theme === "arcade90s" ? "text-arc-text" : "text-brand-text"}>{load.stops[load.stops.length-1].city}, {load.stops[load.stops.length-1].state}</span>
-                        </div>
-                      </div>
-                    </td>
-                    <td className="px-6 py-4">
-                      <span className={cn(
-                        "px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wide border",
-                        theme === "arcade90s"
-                          ? "bg-arc-bg border-arc-secondary text-arc-secondary shadow-[0_0_5px_rgba(34,211,238,0.3)] rounded-none arcade-pixel-font"
-                          : load.status === "IN_TRANSIT"
-                            ? "bg-emerald-500/10 border-emerald-500/20 text-emerald-400"
-                            : "bg-brand-dark-pill border-brand-border text-brand-muted"
-                      )}>
-                        {load.status.replace("_", " ")}
-                      </span>
-                    </td>
-                    <td className="px-6 py-4">
-                      {load.driver ? (
-                        <div className="flex items-center gap-2">
-                          <div className={cn("w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold",
-                            theme === "arcade90s" ? "bg-arc-purple text-white rounded-none" : "bg-brand-gold text-black"
-                          )}>
-                            {load.driver.name.charAt(0)}
-                          </div>
-                          <span className={cn("text-sm", theme === "arcade90s" ? "text-arc-text" : "text-brand-text")}>{load.driver.name}</span>
-                        </div>
-                      ) : (
-                        <span className={cn("text-xs italic", theme === "arcade90s" ? "text-arc-muted" : "text-brand-muted")}>Unassigned</span>
-                      )}
-                    </td>
-                    <td className="px-6 py-4 text-right">
-                      <Button
-                        size="icon"
-                        variant="ghost"
-                        className={cn("h-8 w-8", theme === "arcade90s" ? "text-arc-muted hover:text-arc-secondary hover:bg-arc-secondary/10" : "text-brand-muted hover:text-white hover:bg-brand-border")}
-                        onClick={(e) => copyLink(e, load.customerTrackingLink)}
-                        title="Copy Tracking Link"
-                        disabled={!load.customerTrackingLink}
-                      >
-                        <Copy className="w-4 h-4" />
-                      </Button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+          {/* TODO: Implement Rate Confirmation upload flow (file picker, validation, backend upload). */}
+          <Button
+            type="button"
+            onClick={() => {
+              console.log("TODO: Upload Rate Confirmation");
+              toast.info("TODO: Rate Confirmation upload flow (PDF/IMG upload, parse, attach to load).");
+            }}
+            className={cn(
+              "h-12 px-6 text-sm font-bold uppercase tracking-wider transition-all hover:-translate-y-0.5 active:translate-y-0",
+              theme === "arcade90s"
+                ? "bg-cyan-500 text-black rounded-none border border-cyan-400 shadow-[0_0_20px_rgba(34,211,238,0.6)] hover:bg-cyan-400 arcade-pixel-font"
+                : "bg-cyan-600 text-white hover:bg-cyan-500 shadow-md rounded-full"
+            )}
+          >
+            Upload Rate Confirmation
+          </Button>
+
+          <div className="flex-1" /> {/* Spacer */}
+
+          <Button 
+            variant="outline" 
+            className={cn(theme === "arcade90s" ? "border-arc-border text-arc-muted bg-arc-bg rounded-none hover:text-arc-text" : "border-brand-border bg-brand-card text-brand-muted hover:text-white")}
+          >
+            <Filter className="w-4 h-4 mr-2" />
+            Filter
+          </Button>
+        </div>
+
+        {/* Loads List Area */}
+        <div className={cn(
+          "rounded-xl overflow-hidden border min-h-[400px]",
+          theme === "arcade90s" 
+            ? "bg-arc-bg border-arc-border arcade-panel" 
+            : "bg-brand-card border-brand-border shadow-lg"
+        )}>
+          <div className={cn(
+            "px-6 py-4 border-b flex items-center justify-between",
+            theme === "arcade90s" ? "bg-arc-panel border-arc-border" : "bg-brand-card border-brand-border"
+          )}>
+            <h3 className={cn("font-bold uppercase tracking-widest text-sm", theme === "arcade90s" ? "text-arc-text arcade-pixel-font" : "text-brand-text")}>
+              Your Loads
+            </h3>
+            <div className={cn("text-xs", theme === "arcade90s" ? "text-arc-muted font-mono" : "text-brand-muted")}>
+              {myLoads.length} Active
+            </div>
           </div>
+
+          {myLoads.length === 0 ? (
+            <div className="flex flex-col items-center justify-center h-64 text-center p-8">
+              <div className={cn("mb-4 p-4 rounded-full", theme === "arcade90s" ? "bg-arc-panel border border-arc-secondary/30" : "bg-brand-dark-pill")}>
+                <Truck className={cn("w-8 h-8", theme === "arcade90s" ? "text-arc-muted" : "text-brand-muted")} />
+              </div>
+              <p className={cn("mb-2", theme === "arcade90s" ? "text-arc-text arcade-pixel-font text-xs" : "text-white")}>
+                No missions detected
+              </p>
+              <p className={cn("text-sm max-w-xs", theme === "arcade90s" ? "text-arc-muted font-mono text-xs" : "text-brand-muted")}>
+                You don’t have any loads yet. Tap ‘Create Load’ to add your first shipment.
+              </p>
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm text-left">
+                <thead className={cn(
+                  "text-xs uppercase tracking-wider font-medium border-b",
+                  theme === "arcade90s" ? "bg-arc-panel text-arc-muted border-arc-border arcade-pixel-font" : "bg-brand-dark-pill text-brand-muted border-brand-border"
+                )}>
+                  <tr>
+                    <th className="px-6 py-4">Load #</th>
+                    <th className="px-6 py-4">Broker / Shipper</th>
+                    <th className="px-6 py-4">Origin & Destination</th>
+                    <th className="px-6 py-4">Status</th>
+                    <th className="px-6 py-4">Driver</th>
+                    <th className="px-6 py-4 text-right">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-brand-border/50">
+                  {myLoads.map((load) => (
+                    <tr 
+                      key={load.id}
+                      onClick={() => setLocation(`/app/loads/${load.id}`)}
+                      className={cn(
+                        "group cursor-pointer transition-colors relative",
+                        theme === "arcade90s" ? "hover:bg-arc-secondary/10 border-arc-border hover:shadow-[inset_0_0_10px_rgba(34,211,238,0.1)]" : "hover:bg-brand-border/30 border-brand-border/50"
+                      )}
+                    >
+                      <td className="px-6 py-4 font-mono font-medium whitespace-nowrap">
+                        <span className={cn(theme === "arcade90s" ? "text-arc-secondary group-hover:arcade-flicker" : "text-white")}>
+                          {load.externalLoadId}
+                        </span>
+                      </td>
+                      <td className="px-6 py-4">
+                        <div className={cn("font-medium", theme === "arcade90s" ? "text-arc-text" : "text-white")}>{load.brokerName}</div>
+                        <div className={cn("text-xs mt-0.5", theme === "arcade90s" ? "text-arc-muted" : "text-brand-muted")}>{load.shipperName}</div>
+                      </td>
+                      <td className="px-6 py-4">
+                        <div className="flex flex-col gap-1">
+                          <div className="flex items-center gap-2">
+                            <div className={cn("w-1.5 h-1.5 rounded-full", theme === "arcade90s" ? "bg-arc-primary" : "bg-emerald-500")} />
+                            <span className={theme === "arcade90s" ? "text-arc-text" : "text-brand-text"}>{load.stops[0].city}, {load.stops[0].state}</span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <div className={cn("w-1.5 h-1.5 rounded-full", theme === "arcade90s" ? "bg-arc-secondary" : "bg-brand-gold")} />
+                            <span className={theme === "arcade90s" ? "text-arc-text" : "text-brand-text"}>{load.stops[load.stops.length-1].city}, {load.stops[load.stops.length-1].state}</span>
+                          </div>
+                        </div>
+                      </td>
+                      <td className="px-6 py-4">
+                        <span className={cn(
+                          "px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wide border",
+                          theme === "arcade90s"
+                            ? "bg-arc-bg border-arc-secondary text-arc-secondary shadow-[0_0_5px_rgba(34,211,238,0.3)] rounded-none arcade-pixel-font"
+                            : load.status === "IN_TRANSIT"
+                              ? "bg-emerald-500/10 border-emerald-500/20 text-emerald-400"
+                              : "bg-brand-dark-pill border-brand-border text-brand-muted"
+                        )}>
+                          {load.status.replace("_", " ")}
+                        </span>
+                      </td>
+                      <td className="px-6 py-4">
+                        {load.driver ? (
+                          <div className="flex items-center gap-2">
+                            <div className={cn("w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold",
+                              theme === "arcade90s" ? "bg-arc-purple text-white rounded-none" : "bg-brand-gold text-black"
+                            )}>
+                              {load.driver.name.charAt(0)}
+                            </div>
+                            <span className={cn("text-sm", theme === "arcade90s" ? "text-arc-text" : "text-brand-text")}>{load.driver.name}</span>
+                          </div>
+                        ) : (
+                          <span className={cn("text-xs italic", theme === "arcade90s" ? "text-arc-muted" : "text-brand-muted")}>Unassigned</span>
+                        )}
+                      </td>
+                      <td className="px-6 py-4 text-right">
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          className={cn("h-8 w-8", theme === "arcade90s" ? "text-arc-muted hover:text-arc-secondary hover:bg-arc-secondary/10" : "text-brand-muted hover:text-white hover:bg-brand-border")}
+                          onClick={(e) => copyLink(e, load.customerTrackingLink)}
+                          title="Copy Tracking Link"
+                          disabled={!load.customerTrackingLink}
+                        >
+                          <Copy className="w-4 h-4" />
+                        </Button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
       </div>
     </AppLayout>
