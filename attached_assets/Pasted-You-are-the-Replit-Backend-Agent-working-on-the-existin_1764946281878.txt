@@ -1,0 +1,302 @@
+You are the Replit Backend Agent working on the existing `agentos-tracking-core` project.
+
+GOAL: Add a SECOND visual theme called **"arcade90s"** (inspired by 90s computer/arcade games like Pac-Man), while keeping the existing **premium dark/gold** theme as the default.
+
+We must:
+- Introduce a simple theme system: `"premium"` (current) and `"arcade90s"` (new).
+- Add a small theme toggle in the UI to switch between them at runtime.
+- Apply the arcade90s theme styling to the main driver views and public tracking views:
+  - `/driver`
+  - `/driver/loads/[id]`
+  - `/public/track/[token]`
+- NOT break existing backend logic, routes, or APIs. Only modify UI / styling, and add minimal React context/helpers as needed.
+
+────────────────────────
+1. THEME CONTEXT: PREMIUM VS ARCADE90S
+────────────────────────
+
+Create a theme context so the app can switch between `"premium"` and `"arcade90s"`.
+
+1) Create file: `src/context/theme-context.tsx`
+
+Content (adapt for TypeScript):
+
+- `"use client";`
+- Define type `Theme = "premium" | "arcade90s"`.
+- Create React context with:
+  - `theme: Theme`
+  - `setTheme: (t: Theme) => void`
+
+- Default theme = `"premium"`.
+
+Implement `ThemeProvider`:
+
+- Use `useState<Theme>("premium")`.
+- Provide `{ theme, setTheme }` to children.
+- Optionally persist theme to `localStorage` (if running on client) – simple optional TODO.
+
+2) Wrap the main layout in this provider:
+
+Open `src/app/layout.tsx` (root layout):
+
+- Import `ThemeProvider` from `src/context/theme-context`.
+- Wrap the existing `<body>...</body>` content with `<ThemeProvider>...</ThemeProvider>`.
+
+Example sketch:
+
+<body className="...">
+  <ThemeProvider>
+    {children}
+  </ThemeProvider>
+</body>
+
+Keep all existing layout structure; just add the provider.
+
+────────────────────────
+2. THEME TOGGLE COMPONENT
+────────────────────────
+
+Add a small toggle that lets the user switch between themes.
+
+1) Create file: `src/components/ui/ThemeToggle.tsx`
+
+- Mark as client component: `"use client";`
+- Import `useThemeContext` hook from the theme context (you can create this hook in `theme-context.tsx`).
+- Render two small buttons or pill-switch:
+
+  - One labeled `Premium`
+  - One labeled `Arcade 90s`
+
+- When user clicks:
+  - `setTheme("premium")` or `setTheme("arcade90s")`.
+
+- Visually:
+  - The active theme button should look highlighted.
+  - Keep it small and unobtrusive, e.g. in top-right area of `/driver` header or near page title.
+
+Use Tailwind classes, for example:
+
+- Wrapper: `flex items-center gap-2`
+- Button base: `text-[10px] px-2 py-1 rounded-full border transition`
+- Active: `bg-brand-gold text-black` (for premium), `bg-cyan-500 text-black` (for arcade).
+- Inactive: `bg-transparent border-brand-border text-brand-muted`.
+
+2) Place the toggle:
+
+On `/driver` page (`src/app/driver/page.tsx`):
+
+- In the top header (where you show `PingPoint by SuVerse labs`), add the `ThemeToggle` component aligned to the right.
+
+Pseudo layout:
+
+<header ...>
+  <div className="flex w-full items-center justify-between">
+    {/* Left/center: PingPoint by SuVerse labs */}
+    <h1>...</h1>
+    {/* Right: Theme toggle */}
+    <ThemeToggle />
+  </div>
+</header>
+
+Keep the PingPoint text and header logic as previously defined; just add the toggle so user can switch theme.
+
+────────────────────────
+3. TAILWIND: ARCADE90S COLORS & EFFECTS
+────────────────────────
+
+Update `tailwind.config.js` to add a new palette for arcade90s.
+
+In `theme.extend.colors`, ensure you add:
+
+- `arc-bg`: "#02040a"            // almost black, arcade background
+- `arc-panel`: "#040816"         // slightly lighter for panels
+- `arc-border`: "#111827"        // dark border
+- `arc-primary`: "#facc15"       // neon yellow (Pac-Man style)
+- `arc-secondary`: "#22d3ee"     // neon cyan
+- `arc-purple`: "#a855f7"        // neon purple
+- `arc-pink`: "#ec4899"          // neon pink
+- `arc-text`: "#e5e7eb"          // light text
+- `arc-muted`: "#9ca3af"         // muted grey
+
+In `theme.extend.backgroundImage`, add:
+
+- `arcade-grid`: `'radial-gradient(circle at 1px 1px, #1f2937 1px, #02040a 0)'`  
+  (for a subtle grid effect, or another simple pattern).
+
+In `theme.extend.boxShadow`, add:
+
+- `arc-glow-yellow`: `"0 0 20px rgba(250, 204, 21, 0.7)"`
+- `arc-glow-cyan`: `"0 0 20px rgba(34, 211, 238, 0.7)"`
+
+Do NOT remove existing brand colors; just extend with the arcade palette.
+
+────────────────────────
+4. GLOBAL ARCADE CLASSES (PIXEL FEEL)
+────────────────────────
+
+Open `src/app/globals.css` and add a few helper classes for the arcade theme:
+
+```css
+.arcade-bg {
+  background-color: #02040a;
+  background-image: radial-gradient(circle at 1px 1px, #1f2937 1px, #02040a 0);
+  background-size: 20px 20px;
+}
+
+.arcade-panel {
+  background-color: #040816;
+  border: 1px solid #111827;
+}
+
+.arcade-pixel-font {
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.arcade-title {
+  color: #facc15;
+  text-shadow:
+    0 0 8px rgba(250, 204, 21, 0.9),
+    0 0 16px rgba(250, 204, 21, 0.7);
+}
+
+.arcade-subtitle {
+  color: #22d3ee;
+  text-shadow:
+    0 0 6px rgba(34, 211, 238, 0.8);
+}
+
+.arcade-badge {
+  border-radius: 9999px;
+  border: 1px solid #22d3ee;
+  padding: 2px 8px;
+  font-size: 10px;
+  color: #e5e7eb;
+  text-shadow:
+    0 0 5px rgba(34, 211, 238, 0.8);
+}
+
+These classes will be applied conditionally when theme === "arcade90s".
+
+────────────────────────
+5. APPLY THEME IN DRIVER PAGES
+────────────────────────
+
+We now need to conditionally style key pages based on the current theme value from context.
+
+For each of these pages:
+	•	src/app/driver/page.tsx
+	•	src/app/driver/loads/[id]/page.tsx
+	•	src/app/public/track/[token]/page.tsx
+
+do the following:
+	1.	Import the theme context hook:
+
+	•	For example: import { useTheme } from "@/context/theme-context";
+	•	Mark the top-level page component as a client component if needed, or:
+	•	Keep the main page as a server component that renders a child client component responsible for theming/layout.
+	•	The simplest is: wrap the main page content in a "use client" component that reads the theme.
+
+If these pages are currently server components only, create a small client wrapper, e.g.:
+	•	src/components/driver/DriverPageShell.tsx (client)
+	•	src/components/driver/LoadDetailShell.tsx (client)
+	•	etc.
+
+The shell receives the server-fetched data as props and applies conditional classNames based on theme.
+	2.	Conditional classes:
+
+At the top-level container of each page, set className based on theme:
+
+Example (inside client shell):
+
+const { theme } = useTheme();
+
+const containerClasses =
+  theme === "arcade90s"
+    ? "min-h-screen arcade-bg text-arc-text"
+    : "min-h-screen bg-brand-bg text-brand-text";
+
+Use containerClasses on the main div.
+
+For cards/panels:
+	•	When theme === "arcade90s":
+	•	apply arcade-panel class instead of the existing premium card classes.
+
+•	Example:
+
+const cardClasses =
+  theme === "arcade90s"
+    ? "arcade-panel rounded-2xl p-3"
+    : "bg-brand-card border border-brand-border rounded-2xl p-3";
+
+For titles / headers:
+	•	If arcade theme:
+	•	Add arcade-pixel-font + arcade-title for the main header text.
+	•	Example: className={theme === "arcade90s" ? "arcade-pixel-font arcade-title text-base" : "text-sm font-semibold text-brand-text"}
+
+For status badges:
+	•	When arcade theme:
+	•	use arcade-badge for status pill (IN_TRANSIT, DELIVERED, etc.).
+	•	change colors slightly based on status (optional).
+	•	When premium:
+	•	keep current golden gradient badges.
+
+For buttons (Arrive / Departed / Navigate / View):
+	•	Keep using your existing PillButton, but:
+	•	in arcade theme, you can adjust the variant to feel more neon:
+Inside PillButton, read theme via context (mark PillButton as client if not already), and change classes conditionally:
+	•	For arcade:
+	•	GOLD variant → neon yellow style: bg-arc-primary text-black shadow-arc-glow-yellow.
+	•	DARK variant → bg-[#020617] text-arc-text border-arc-border shadow-arc-glow-cyan.
+Important: do this conditionally WITHOUT changing the API of PillButton (same props), just internal styles based on theme.
+
+────────────────────────
+6. PUBLIC TRACKING PAGE ARCADE LOOK
+────────────────────────
+
+In src/app/public/track/[token]/page.tsx:
+	•	Wrap page content in theme-aware container like above.
+	•	If theme === "arcade90s":
+	•	Use arcade-bg or similar for background.
+	•	Top title: PINGPOINT – LOAD SCORE (optional), styled with arcade-title.
+	•	Use arcade-panel for the card showing load info (carrier/broker/status).
+	•	Show status as badges with arcade-badge.
+	•	The progress / last location can look like an arcade HUD line:
+	•	LAST PING: CITY, ST in arcade-subtitle.
+
+Premium theme should remain exactly as before (dark/gold styling).
+
+────────────────────────
+7. DON’T TOUCH BACKEND / LOGIC
+────────────────────────
+
+While implementing the theme:
+	•	DO NOT modify Prisma schema, DB, or API routes.
+	•	DO NOT change the business logic (tracking, status updates, webhooks).
+	•	ONLY adjust:
+	•	Tailwind config,
+	•	global CSS,
+	•	UI components (classNames, layout),
+	•	new ThemeContext,
+	•	new ThemeToggle.
+
+Make sure the types and imports remain correct.
+
+────────────────────────
+8. FINAL CHECK
+────────────────────────
+
+When you are done:
+	1.	The app still builds and runs without TypeScript errors.
+	2.	By default, the theme is "premium" and UI looks like the existing premium dark/gold design.
+	3.	On /driver:
+	•	The header shows PingPoint by SuVerse labs.
+	•	There is a small theme toggle (Premium / Arcade 90s).
+	•	Switching to Arcade 90s:
+	•	background becomes arcade-style (grid/dark),
+	•	cards and headers use neon colors and pixel-like styling,
+	•	buttons glow like arcade buttons.
+	4.	On /driver/loads/[id] and /public/track/[token], the theme switch applies as well (same structure, only styles change).
+
+END OF INSTRUCTIONS

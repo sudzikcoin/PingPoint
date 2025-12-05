@@ -8,6 +8,7 @@ import DriverDashboard from "@/pages/driver-dashboard";
 import LoadDetails from "@/pages/load-details";
 import PublicTracking from "@/pages/public-tracking";
 import { useEffect } from "react";
+import { ThemeProvider } from "@/context/theme-context";
 
 function Router() {
   const [location, setLocation] = useLocation();
@@ -31,10 +32,12 @@ function Router() {
 function App() {
   return (
     <QueryClientProvider client={queryClient}>
-      <TooltipProvider>
-        <Toaster />
-        <Router />
-      </TooltipProvider>
+      <ThemeProvider>
+        <TooltipProvider>
+          <Toaster />
+          <Router />
+        </TooltipProvider>
+      </ThemeProvider>
     </QueryClientProvider>
   );
 }
