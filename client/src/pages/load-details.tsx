@@ -1,9 +1,10 @@
 import { useRoute, useLocation } from "wouter";
 import { getLoadById, Load, Stop, StopStatus } from "@/lib/mock-data";
 import { Button } from "@/components/ui/button";
+import { PillButton } from "@/components/ui/pill-button";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
-import { ArrowLeft, Map, Navigation, CheckCircle2, Clock, Play, Square, FileText, Loader2 } from "lucide-react";
+import { ArrowLeft, Map, Navigation, CheckCircle2, Clock, Play, Square, FileText, Loader2, Upload, Check } from "lucide-react";
 import { format } from "date-fns";
 import { useState, useEffect, useRef } from "react";
 import { toast } from "sonner";
@@ -30,7 +31,6 @@ function StopRow({ stop, onStatusUpdate }: StopRowProps) {
       await onStatusUpdate(stop.id, newStatus);
     } catch (error) {
       console.error(error);
-      // Toast is handled in parent, but we could add one here too if needed
     } finally {
       if (newStatus === "ARRIVED") setIsArriveLoading(false);
       else setIsDepartLoading(false);
@@ -49,8 +49,6 @@ function StopRow({ stop, onStatusUpdate }: StopRowProps) {
 
     try {
       setIsUploading(true);
-      // Simulate upload logic
-      // In a real app: await uploadDocument({ stopId: stop.id, file });
       await new Promise(resolve => setTimeout(resolve, 1500));
       toast.success(`Document uploaded for ${stop.type.toLowerCase()}`);
     } catch (err) {
@@ -70,23 +68,23 @@ function StopRow({ stop, onStatusUpdate }: StopRowProps) {
     switch (status) {
       case "PLANNED":
         text = "Planned";
-        classes = "bg-gray-800 text-gray-200";
+        classes = "bg-brand-dark-pill text-brand-muted border border-brand-border";
         break;
       case "EN_ROUTE":
         text = "En route";
-        classes = "bg-blue-900 text-blue-200";
+        classes = "bg-blue-900/30 text-blue-200 border border-blue-800/50";
         break;
       case "ARRIVED":
         text = "Arrived";
-        classes = "bg-emerald-900 text-emerald-200";
+        classes = "bg-emerald-900/30 text-emerald-200 border border-emerald-800/50";
         break;
       case "DEPARTED":
         text = "Departed";
-        classes = "bg-teal-900 text-teal-200";
+        classes = "bg-teal-900/30 text-teal-200 border border-teal-800/50";
         break;
       case "SKIPPED":
         text = "Skipped";
-        classes = "bg-red-900 text-red-200";
+        classes = "bg-red-900/30 text-red-200 border border-red-800/50";
         break;
       default:
         text = status;
@@ -94,94 +92,67 @@ function StopRow({ stop, onStatusUpdate }: StopRowProps) {
     }
 
     return (
-      <div className={cn("inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium", classes)}>
+      <div className={cn("inline-flex items-center rounded-full px-3 py-1 text-[10px] font-bold tracking-wider uppercase shadow-sm", classes)}>
         {text}
       </div>
     );
   };
 
-  // Button Logic
   const showButtons = stop.type === "PICKUP" || stop.type === "DELIVERY";
   const canUploadDoc = stop.type === "PICKUP" || stop.type === "DELIVERY";
   
-  const baseBtn = "inline-flex items-center justify-center px-2.5 py-1 text-xs font-medium rounded-md border transition disabled:opacity-40 disabled:cursor-not-allowed h-8";
-  const primaryBtn = cn(baseBtn, "border-emerald-500 bg-emerald-600 text-white hover:bg-emerald-500");
-  const secondaryBtn = cn(baseBtn, "border-slate-500 bg-slate-800 text-slate-100 hover:bg-slate-700");
-  const disabledBtn = cn(baseBtn, "border-slate-700 bg-slate-900 text-slate-400");
-
   const isArrived = stop.status === "ARRIVED";
   const isDeparted = stop.status === "DEPARTED";
   const isPlannedOrEnRoute = stop.status === "PLANNED" || stop.status === "EN_ROUTE";
 
-  // Arrive Button State
-  let arriveBtnClass = primaryBtn;
-  let arriveDisabled = false;
-
-  if (isArrived || isDeparted) {
-    arriveBtnClass = disabledBtn;
-    arriveDisabled = true;
-  }
-
-  // Depart Button State
-  let departBtnClass = secondaryBtn;
-  let departDisabled = false;
-
-  if (isArrived) {
-    departBtnClass = primaryBtn; // Active step
-  } else if (isDeparted) {
-    departBtnClass = disabledBtn;
-    departDisabled = true;
-  } else if (isPlannedOrEnRoute) {
-    departBtnClass = secondaryBtn;
-  }
-
   return (
-    <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 rounded-lg bg-slate-900/60 px-3 py-2 border border-slate-800">
-      {/* Left Column */}
-      <div className="flex flex-col gap-1">
-        {/* Type & Sequence */}
-        <div className="text-xs uppercase tracking-wide text-slate-400">
-          {stop.type === "PICKUP" ? "Pickup" : stop.type === "DELIVERY" ? "Delivery" : stop.type} #{stop.sequence}
-        </div>
-        
-        {/* Name (City/State or Facility Name if available) */}
-        <div className="text-sm font-medium text-slate-50">
-          {stop.city}, {stop.state}
+    <div className="flex flex-col gap-4 rounded-2xl bg-brand-card px-4 py-4 border border-brand-border shadow-lg shadow-black/20 relative overflow-hidden group">
+      {/* Decorative gradient glow */}
+      {isArrived && <div className="absolute top-0 left-0 w-1 h-full bg-emerald-500" />}
+      {isDeparted && <div className="absolute top-0 left-0 w-1 h-full bg-teal-600" />}
+      {isPlannedOrEnRoute && <div className="absolute top-0 left-0 w-1 h-full bg-brand-border" />}
+
+      {/* Top Row: Info & Status */}
+      <div className="flex flex-row items-start justify-between gap-2">
+        <div className="flex flex-col gap-1">
+          <div className="text-[10px] uppercase tracking-widest font-bold text-brand-muted flex items-center gap-2">
+            <span className={cn("w-2 h-2 rounded-full", 
+              stop.type === "PICKUP" ? "bg-brand-gold" : "bg-emerald-400"
+            )} />
+            {stop.type} #{stop.sequence}
+          </div>
+          
+          <div className="text-base font-bold text-white mt-1">
+            {stop.city}, {stop.state}
+          </div>
+
+          <div className="text-xs text-brand-muted">
+            {stop.addressLine1}
+          </div>
         </div>
 
-        {/* Address */}
-        <div className="text-xs text-slate-300">
-          {stop.addressLine1} {stop.zip}
-        </div>
-
-        {/* Time Window */}
-        <div className="text-xs text-slate-400">
-           {format(new Date(stop.windowStart), "MM/dd HH:mm")} – {format(new Date(stop.windowEnd), "HH:mm")}
+        <div className="flex flex-col items-end gap-2">
+          {getStatusPill(stop.status)}
+          <div className="text-[10px] text-brand-muted font-mono flex items-center gap-1 bg-brand-dark-pill px-2 py-1 rounded-md border border-brand-border">
+             <Clock className="w-3 h-3" />
+             {format(new Date(stop.windowStart), "HH:mm")} - {format(new Date(stop.windowEnd), "HH:mm")}
+          </div>
         </div>
       </div>
 
-      {/* Right Column */}
-      <div className="flex flex-col items-start sm:items-end gap-2 w-full sm:w-auto">
-        {/* Status Pill & Timestamps */}
-        <div className="flex flex-col items-end gap-1">
-          {getStatusPill(stop.status)}
-          
-          {stop.arrivedAt && (
-             <span className="text-[10px] text-slate-400 font-mono">
-               Arrived: {format(new Date(stop.arrivedAt), "HH:mm")}
-             </span>
-          )}
-          {stop.departedAt && (
-             <span className="text-[10px] text-slate-400 font-mono">
-               Departed: {format(new Date(stop.departedAt), "HH:mm")}
-             </span>
-          )}
+      {/* Timestamps if available */}
+      {(stop.arrivedAt || stop.departedAt) && (
+        <div className="flex gap-3 text-[10px] text-brand-muted font-mono pl-3 border-l border-brand-border">
+          {stop.arrivedAt && <span>Arr: {format(new Date(stop.arrivedAt), "HH:mm")}</span>}
+          {stop.departedAt && <span>Dep: {format(new Date(stop.departedAt), "HH:mm")}</span>}
         </div>
+      )}
 
-        {/* Buttons */}
-        {showButtons && (
-          <div className="flex flex-row gap-2 mt-1">
-            {canUploadDoc && (
+      {/* Actions Row */}
+      {showButtons && (
+        <div className="flex items-center gap-3 pt-2 border-t border-brand-border/50">
+           {/* Upload Button */}
+           {canUploadDoc && (
               <>
                 <input
                   ref={fileInputRef}
@@ -191,33 +162,43 @@ function StopRow({ stop, onStatusUpdate }: StopRowProps) {
                   onChange={handleFileChange}
                 />
                 <button
-                  className="inline-flex items-center justify-center w-8 h-8 rounded-md border border-slate-600 bg-slate-900 text-slate-200 hover:bg-slate-800 hover:border-slate-400 transition disabled:opacity-40 disabled:cursor-not-allowed"
+                  className="inline-flex items-center justify-center w-10 h-10 rounded-full border border-brand-border bg-brand-dark-pill text-brand-muted hover:bg-brand-border hover:text-white transition-all active:scale-95 shadow-inner"
                   disabled={isUploading}
                   onClick={handleOpenFilePicker}
                   title="Upload Document"
                 >
-                  {isUploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileText className="h-4 w-4" />}
+                  {isUploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
                 </button>
               </>
             )}
+            
+            <div className="flex-1 flex gap-2 justify-end">
+              {/* Arrive Button */}
+              <PillButton 
+                variant="gold" 
+                size="md"
+                className={cn("flex-1", (isArrived || isDeparted) && "opacity-50 grayscale")}
+                disabled={isArrived || isDeparted || isArriveLoading}
+                onClick={() => handleUpdate("ARRIVED")}
+                icon={isArrived || isDeparted ? <Check className="w-3 h-3" /> : <Play className="w-3 h-3 fill-current" />}
+              >
+                {isArrived || isDeparted ? "Arrived" : isArriveLoading ? "Arriving..." : "Arrive"}
+              </PillButton>
 
-            <button
-              className={arriveBtnClass}
-              disabled={arriveDisabled || isArriveLoading}
-              onClick={() => handleUpdate("ARRIVED")}
-            >
-              {isArriveLoading ? "Arriving..." : "Arrive"}
-            </button>
-            <button
-              className={departBtnClass}
-              disabled={departDisabled || isDepartLoading}
-              onClick={() => handleUpdate("DEPARTED")}
-            >
-              {isDepartLoading ? "Departing..." : "Departed"}
-            </button>
-          </div>
-        )}
-      </div>
+              {/* Depart Button */}
+              <PillButton 
+                variant="dark" 
+                size="md"
+                className={cn("flex-1", isDeparted && "opacity-50")}
+                disabled={!isArrived || isDeparted || isDepartLoading} // Enabled only after arrived
+                onClick={() => handleUpdate("DEPARTED")}
+                icon={isDeparted ? <Check className="w-3 h-3" /> : <Square className="w-3 h-3 fill-current" />}
+              >
+                {isDeparted ? "Departed" : isDepartLoading ? "Departing..." : "Departed"}
+              </PillButton>
+            </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -266,54 +247,65 @@ export default function LoadDetails() {
   };
 
   if (loading) {
-    return <div className="min-h-screen flex items-center justify-center bg-background"><p className="text-muted-foreground">Loading...</p></div>;
+    return <div className="min-h-screen flex items-center justify-center bg-brand-bg text-brand-muted"><p>Loading...</p></div>;
   }
 
   if (!load) {
     return (
-      <div className="min-h-screen flex items-center justify-center flex-col gap-4">
-        <p className="text-muted-foreground">Load not found</p>
+      <div className="min-h-screen flex items-center justify-center flex-col gap-4 bg-brand-bg text-brand-text">
+        <p className="text-brand-muted">Load not found</p>
         <Button variant="outline" onClick={() => setLocation("/driver")}>Go Back</Button>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-background pb-10">
+    <div className="min-h-screen bg-brand-bg pb-10 font-sans">
       {/* Header */}
-      <header className="sticky top-0 z-10 bg-background/80 backdrop-blur-md border-b border-border/40">
-        <div className="container mx-auto px-4 h-14 flex items-center gap-4">
-          <Button variant="ghost" size="icon" className="-ml-2" onClick={() => setLocation("/driver")}>
+      <header className="sticky top-0 z-10 bg-brand-bg/80 backdrop-blur-md border-b border-brand-border">
+        <div className="container mx-auto px-4 h-16 flex items-center gap-4">
+          <button className="p-2 rounded-full bg-brand-card border border-brand-border text-brand-muted hover:text-white transition-colors" onClick={() => setLocation("/driver")}>
             <ArrowLeft className="h-5 w-5" />
-          </Button>
+          </button>
           <div className="flex-1">
-            <p className="text-xs text-muted-foreground font-mono">LOAD #{load.externalLoadId}</p>
-            <h1 className="text-sm font-bold">{load.brokerName}</h1>
+            <p className="text-[10px] uppercase tracking-widest text-brand-muted font-bold mb-0.5">Load #{load.externalLoadId}</p>
+            <h1 className="text-base font-bold text-white truncate">{load.brokerName}</h1>
           </div>
-          <Badge variant={load.status === "IN_TRANSIT" ? "default" : "secondary"} className="text-[10px]">
-            {load.status}
-          </Badge>
+          <div className={`px-3 py-1 rounded-full text-[10px] font-bold tracking-wider uppercase shadow-sm ${
+            load.status === "IN_TRANSIT" 
+              ? "bg-gradient-to-r from-brand-gold-light via-brand-gold to-brand-gold-dark text-[#6b3b05]" 
+              : "bg-brand-dark-pill border border-brand-border text-brand-muted"
+          }`}>
+            {load.status.replace("_", " ")}
+          </div>
         </div>
       </header>
 
       <main className="container mx-auto p-4 space-y-6">
         {/* Map Placeholder */}
-        <div className="aspect-[16/9] bg-muted/30 rounded-lg border border-border/50 flex items-center justify-center relative overflow-hidden group">
-          <div className="absolute inset-0 opacity-20 bg-[radial-gradient(#3b82f6_1px,transparent_1px)] [background-size:16px_16px]" />
-          <div className="flex flex-col items-center gap-2 text-muted-foreground z-10">
-            <Map className="h-8 w-8 opacity-50" />
-            <span className="text-xs font-medium uppercase tracking-widest">Interactive Map View</span>
+        <div className="aspect-[16/9] bg-brand-card rounded-2xl border border-brand-border flex items-center justify-center relative overflow-hidden shadow-lg shadow-black/30 group">
+          <div className="absolute inset-0 opacity-20 bg-[radial-gradient(#f5c550_1px,transparent_1px)] [background-size:20px_20px]" />
+          
+          {/* Map Content */}
+          <div className="flex flex-col items-center gap-3 text-brand-muted z-10">
+            <div className="h-12 w-12 rounded-full bg-brand-dark-pill border border-brand-border flex items-center justify-center shadow-pill-dark">
+               <Map className="h-6 w-6 text-brand-gold" />
+            </div>
+            <span className="text-xs font-bold uppercase tracking-widest text-brand-text/60">Interactive Map View</span>
           </div>
-          {/* Floating Action Button on Map */}
-          <Button size="sm" className="absolute bottom-4 right-4 shadow-lg gap-2">
-            <Navigation className="h-3 w-3" /> Navigate
-          </Button>
+          
+          {/* Floating Navigate Button */}
+          <div className="absolute bottom-4 right-4 z-20">
+            <PillButton variant="gold" size="md" icon={<Navigation className="w-3.5 h-3.5" />}>
+               Navigate
+            </PillButton>
+          </div>
         </div>
 
         {/* Stops List */}
         <div className="space-y-4">
-          <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider pl-1">Route Plan</h2>
-          <div className="space-y-3">
+          <h2 className="text-xs font-bold text-brand-muted uppercase tracking-widest pl-2">Route Plan</h2>
+          <div className="space-y-4">
             {load.stops.map((stop) => (
               <StopRow 
                 key={stop.id} 

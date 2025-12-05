@@ -9,123 +9,66 @@
   --radius-lg: var(--radius);
   --radius-xl: calc(var(--radius) + 4px);
 
-  --color-background: hsl(var(--background));
-  --color-foreground: hsl(var(--foreground));
-  --color-card: hsl(var(--card));
-  --color-card-foreground: hsl(var(--card-foreground));
-  --color-popover: hsl(var(--popover));
-  --color-popover-foreground: hsl(var(--popover-foreground));
-  --color-primary: hsl(var(--primary));
-  --color-primary-foreground: hsl(var(--primary-foreground));
-  --color-secondary: hsl(var(--secondary));
-  --color-secondary-foreground: hsl(var(--secondary-foreground));
-  --color-muted: hsl(var(--muted));
-  --color-muted-foreground: hsl(var(--muted-foreground));
-  --color-accent: hsl(var(--accent));
-  --color-accent-foreground: hsl(var(--accent-foreground));
+  --color-brand-bg: #050608;
+  --color-brand-card: #101522;
+  --color-brand-border: #1f2633;
+  --color-brand-text: #e5e7eb;
+  --color-brand-muted: #9ca3af;
+  --color-brand-gold: #f5c550;
+  --color-brand-gold-dark: #c89628;
+  --color-brand-gold-light: #ffe9a9;
+  --color-brand-dark-pill: #1f2933;
+  --color-brand-light-pill: #f5f5f7;
+
+  --color-background: var(--color-brand-bg);
+  --color-foreground: var(--color-brand-text);
+  --color-card: var(--color-brand-card);
+  --color-card-foreground: var(--color-brand-text);
+  --color-popover: var(--color-brand-card);
+  --color-popover-foreground: var(--color-brand-text);
+  --color-primary: var(--color-brand-gold);
+  --color-primary-foreground: #6b3b05;
+  --color-secondary: var(--color-brand-dark-pill);
+  --color-secondary-foreground: var(--color-brand-text);
+  --color-muted: var(--color-brand-border);
+  --color-muted-foreground: var(--color-brand-muted);
+  --color-accent: var(--color-brand-gold);
+  --color-accent-foreground: #6b3b05;
   --color-destructive: hsl(var(--destructive));
   --color-destructive-foreground: hsl(var(--destructive-foreground));
-  --color-border: hsl(var(--border));
-  --color-input: hsl(var(--input));
-  --color-ring: hsl(var(--ring));
-  --color-chart-1: hsl(var(--chart-1));
-  --color-chart-2: hsl(var(--chart-2));
-  --color-chart-3: hsl(var(--chart-3));
-  --color-chart-4: hsl(var(--chart-4));
-  --color-chart-5: hsl(var(--chart-5));
-  --color-sidebar: hsl(var(--sidebar));
-  --color-sidebar-foreground: hsl(var(--sidebar-foreground));
-  --color-sidebar-primary: hsl(var(--sidebar-primary));
-  --color-sidebar-primary-foreground: hsl(var(--sidebar-primary-foreground));
-  --color-sidebar-accent: hsl(var(--sidebar-accent));
-  --color-sidebar-accent-foreground: hsl(var(--sidebar-accent-foreground));
-  --color-sidebar-border: hsl(var(--sidebar-border));
-  --color-sidebar-ring: hsl(var(--sidebar-ring));
+  --color-border: var(--color-brand-border);
+  --color-input: var(--color-brand-border);
+  --color-ring: var(--color-brand-gold);
+  
+  --color-sidebar: var(--color-brand-bg);
+  --color-sidebar-foreground: var(--color-brand-text);
+  --color-sidebar-primary: var(--color-brand-gold);
+  --color-sidebar-primary-foreground: #6b3b05;
+  --color-sidebar-accent: var(--color-brand-card);
+  --color-sidebar-accent-foreground: var(--color-brand-text);
+  --color-sidebar-border: var(--color-brand-border);
+  --color-sidebar-ring: var(--color-brand-gold);
 
   --font-sans: 'Inter', sans-serif;
   --font-mono: 'JetBrains Mono', monospace;
+  
+  --shadow-pill-gold: 0 10px 24px rgba(245, 197, 80, 0.35);
+  --shadow-pill-dark: 0 10px 24px rgba(0, 0, 0, 0.6);
+  
+  --image-pill-gold: linear-gradient(135deg, #ffe9a9, #f5c550, #c89628);
+  --image-pill-dark: linear-gradient(135deg, #111827, #111827, #020617);
+  --image-pill-light: linear-gradient(135deg, #ffffff, #f5f5f7, #e5e7eb);
 }
 
-/* LOGISTICS DARK THEME - COMMAND CENTER AESTHETIC */
 :root {
-  /* Base - Deep Slate/Zinc */
-  --background: 222 47% 11%; /* #0f172a */
-  --foreground: 210 40% 98%; /* #f8fafc */
-
-  /* Cards - Slightly lighter slate */
-  --card: 217 33% 17%; /* #1e293b */
-  --card-foreground: 210 40% 98%;
-
-  /* Popovers */
-  --popover: 222 47% 11%;
-  --popover-foreground: 210 40% 98%;
-
-  /* Primary - Electric Blue */
-  --primary: 199 89% 48%; /* #0ea5e9 */
-  --primary-foreground: 0 0% 100%;
-
-  /* Secondary - Muted Blue Grey */
-  --secondary: 215 25% 27%; /* #334155 */
-  --secondary-foreground: 210 40% 98%;
-
-  /* Muted - Low contrast text */
-  --muted: 217 33% 17%;
-  --muted-foreground: 215 20.2% 65.1%;
-
-  /* Accent - Highlight interactions */
-  --accent: 199 89% 48%;
-  --accent-foreground: 0 0% 100%;
-
-  /* Destructive - Red/Orange */
   --destructive: 0 62.8% 30.6%;
   --destructive-foreground: 210 40% 98%;
-
-  /* Borders & Inputs */
-  --border: 217 33% 17%; /* #1e293b */
-  --input: 217 33% 17%;
-  --ring: 199 89% 48%;
-
   --radius: 0.5rem;
-
-  /* Charts */
-  --chart-1: 199 89% 48%;
-  --chart-2: 160 84% 39%;
-  --chart-3: 30 80% 55%;
-  --chart-4: 280 65% 60%;
-  --chart-5: 340 75% 55%;
-
-  /* Sidebar */
-  --sidebar: 222 47% 11%;
-  --sidebar-foreground: 210 40% 98%;
-  --sidebar-primary: 199 89% 48%;
-  --sidebar-primary-foreground: 0 0% 100%;
-  --sidebar-accent: 217 33% 17%;
-  --sidebar-accent-foreground: 210 40% 98%;
-  --sidebar-border: 217 33% 17%;
-  --sidebar-ring: 199 89% 48%;
 }
 
 .dark {
-  /* Reusing the same variables as root for this dark-default app */
-  --background: 222 47% 11%;
-  --foreground: 210 40% 98%;
-  --card: 217 33% 17%;
-  --card-foreground: 210 40% 98%;
-  --popover: 222 47% 11%;
-  --popover-foreground: 210 40% 98%;
-  --primary: 199 89% 48%;
-  --primary-foreground: 0 0% 100%;
-  --secondary: 215 25% 27%;
-  --secondary-foreground: 210 40% 98%;
-  --muted: 217 33% 17%;
-  --muted-foreground: 215 20.2% 65.1%;
-  --accent: 217 33% 17%;
-  --accent-foreground: 210 40% 98%;
   --destructive: 0 62.8% 30.6%;
   --destructive-foreground: 210 40% 98%;
-  --border: 217 33% 17%;
-  --input: 217 33% 17%;
-  --ring: 199 89% 48%;
 }
 
 @layer base {
@@ -133,14 +76,13 @@
     @apply border-border;
   }
   body {
-    @apply font-sans antialiased bg-background text-foreground;
+    @apply font-sans antialiased bg-brand-bg text-brand-text;
   }
 }
 
-/* Custom Utilities for the Logistics Look */
 @layer utilities {
   .glass-panel {
-    @apply bg-card/80 backdrop-blur-md border border-white/5 shadow-xl;
+    @apply bg-brand-card/80 backdrop-blur-md border border-white/5 shadow-xl;
   }
   
   .text-technical {

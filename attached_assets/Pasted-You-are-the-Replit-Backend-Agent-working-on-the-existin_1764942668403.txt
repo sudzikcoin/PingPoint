@@ -1,0 +1,275 @@
+You are the Replit Backend Agent working on the existing `agentos-tracking-core` project.
+
+GOAL: Redesign the ENTIRE app (driver + public tracking) to match the look & feel of the three “pill” buttons in the reference image (black, white, gold), and actually use these button styles as the primary CTA components.
+
+Important:
+- Do NOT break existing business logic, APIs, or routes.
+- Only change styling and JSX structure where needed.
+- The whole app should feel like one premium theme: dark background, soft cards, gold accents.
+
+REFERENCE BUTTON THEME:
+- Three pill-style buttons (as in the reference):
+  1) Dark pill: long, black/charcoal metallic with a circular gold cap + arrow on the left.
+  2) Light pill: silver/white metallic.
+  3) Gold pill: bright gold.
+
+Usage:
+- PRIMARY actions (Arrive, Departed, Navigate, Upload, main CTAs) → GOLD pill.
+- SECONDARY actions → DARK pill.
+- Optional/neutral → LIGHT pill (if needed).
+
+────────────────────────
+1. UPDATE TAILWIND THEME
+────────────────────────
+
+Open `tailwind.config.js` and extend the theme with custom colors and backgrounds.
+
+In `theme.extend` add:
+
+- Colors:
+  - `brand-bg`: #050608  (app background, very dark)
+  - `brand-card`: #101522 (main card background)
+  - `brand-border`: #1f2633
+  - `brand-text`: #e5e7eb
+  - `brand-muted`: #9ca3af
+  - `brand-gold`: #f5c550
+  - `brand-gold-dark`: #c89628
+  - `brand-gold-light`: #ffe9a9
+  - `brand-dark-pill`: #1f2933
+  - `brand-light-pill`: #f5f5f7
+
+- Box shadows:
+  - `shadow-pill-gold`: something like `0 10px 24px rgba(245,197,80,0.35)`
+  - `shadow-pill-dark`: `0 10px 24px rgba(0,0,0,0.6)`
+
+- Gradient backgrounds (via `backgroundImage`):
+  - `pill-gold`: left slightly lighter → right slightly darker (brand-gold-light → brand-gold-dark)
+  - `pill-dark`: dark grey / black gradient
+  - `pill-light`: silver gradient
+
+Example (adapt to your Tailwind config):
+
+extend: {
+  colors: {
+    'brand-bg': '#050608',
+    'brand-card': '#101522',
+    'brand-border': '#1f2633',
+    'brand-text': '#e5e7eb',
+    'brand-muted': '#9ca3af',
+    'brand-gold': '#f5c550',
+    'brand-gold-dark': '#c89628',
+    'brand-gold-light': '#ffe9a9',
+    'brand-dark-pill': '#1f2933',
+    'brand-light-pill': '#f5f5f7',
+  },
+  backgroundImage: {
+    'pill-gold': 'linear-gradient(135deg, #ffe9a9, #f5c550, #c89628)',
+    'pill-dark': 'linear-gradient(135deg, #111827, #111827, #020617)',
+    'pill-light': 'linear-gradient(135deg, #ffffff, #f5f5f7, #e5e7eb)',
+  },
+  boxShadow: {
+    'pill-gold': '0 10px 24px rgba(245,197,80,0.35)',
+    'pill-dark': '0 10px 24px rgba(0,0,0,0.6)',
+  },
+}
+
+Replace any old hard-coded blues/greys (e.g. `bg-blue-500`) with these new brand colors.
+
+────────────────────────
+2. GLOBAL BACKGROUND AND TEXT
+────────────────────────
+
+Open `src/app/globals.css` and adjust base styles so that:
+
+- `body`:
+  - applies `bg-brand-bg text-brand-text;`
+  - keep the existing font or system font; optional: slightly increase letter-spacing for headings for a premium feel.
+
+- Main layout containers:
+  - background: `bg-brand-bg` or a slightly lighter very dark tone (e.g. `bg-[#060913]`).
+  - default text: `text-brand-text`.
+
+- Card surfaces (load cards, stop cards, map sections, public tracking panels):
+  - `bg-brand-card border border-brand-border rounded-2xl shadow-lg shadow-black/40`
+  - padding around `px-4 py-3` or similar.
+
+Remove/replace legacy colors like `bg-slate-900` / `bg-gray-900` with the new palette.
+
+────────────────────────
+3. CREATE A REUSABLE PILL BUTTON COMPONENT
+────────────────────────
+
+Create `src/components/ui/PillButton.tsx`.
+
+This must be a client component:
+
+- At the top: `"use client";`
+
+Props:
+
+- `variant?: "gold" | "dark" | "light"` (default `"gold"`).
+- `size?: "md" | "lg"` (optional).
+- `icon?: React.ReactNode` (by default: the circular gold disc with arrow).
+- `children?: React.ReactNode` (label text).
+- `className?: string`
+- Plus all standard `<button>` props (onClick, disabled, type, etc.).
+
+Base button styles:
+
+- `inline-flex items-center justify-between gap-3 rounded-full px-6 py-2 transition-all select-none`
+- `cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed`.
+
+Variant styles:
+
+1) GOLD:
+   - `bg-pill-gold text-[#6b3b05] shadow-pill-gold`
+   - maybe `font-semibold tracking-wide`.
+   - hover: `hover:-translate-y-0.5 hover:shadow-[...]`.
+
+2) DARK:
+   - `bg-pill-dark text-brand-text shadow-pill-dark border border-black/40`.
+
+3) LIGHT:
+   - `bg-pill-light text-slate-700 shadow-md border border-white/40`.
+
+Inside button, structure:
+
+- Left: circular gold icon container:
+
+  - `flex items-center justify-center w-8 h-8 rounded-full bg-gradient-to-br from-brand-gold-light via-brand-gold to-brand-gold-dark shadow-pill-gold`.
+
+  Inside this div, render a simple right-arrow SVG (no external icon library).
+
+- Right: label text:
+
+  - `span` with `flex-1 text-center text-sm font-semibold tracking-wide`.
+
+Rough JSX:
+
+<button ...className={computedClasses}>
+  <span className="flex items-center justify-center w-8 h-8 rounded-full ...">
+    {/* inline SVG arrow */}
+  </span>
+  <span className="flex-1 text-center">
+    {children}
+  </span>
+</button>
+
+You may add support for `size="lg"` to increase padding and width for prominent CTAs.
+
+────────────────────────
+4. REPLACE MAIN APP BUTTONS WITH PILLBUTTON
+────────────────────────
+
+Find all major CTAs and replace them with `PillButton`:
+
+1) `/driver/loads/[id]` (driver load detail):
+
+- Buttons `Arrive` / `Departed` next to each stop.
+- `Navigate` button in the map section (if present).
+- Any “Mark as Delivered” or similar CTA.
+
+Use:
+
+- Arrive → `<PillButton variant="gold">Arrive</PillButton>`
+- Departed → `<PillButton variant="dark">Departed</PillButton>`
+
+If status is already ARRIVED / DEPARTED:
+
+- Pass `disabled={true}`.
+- Optionally slightly change opacity via CSS.
+
+- Navigate → `<PillButton variant="gold">Navigate</PillButton>`.
+
+2) `/driver` (driver dashboard: Today / History / Upcoming):
+
+- Buttons like “View” → use a small dark or light pill:
+  - `<PillButton variant="dark" size="md">View</PillButton>`.
+
+3) `/public/track/[token]`:
+
+- Buttons like “Open in Maps”, “Share link” → gold/dark pill buttons.
+
+Make sure no big legacy blue buttons remain.
+
+────────────────────────
+5. UPDATE CARDS, HEADERS, AND STATUS BADGES
+────────────────────────
+
+Unify the rest of the UI to match the new theme.
+
+1) Load header (Soar Transportation Group, Load ID, IN_TRANSIT badge):
+
+- Container:
+  - `bg-brand-card border border-brand-border rounded-2xl px-4 py-3 flex items-center justify-between gap-3`.
+
+- Status badge:
+
+  - `inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold`.
+
+  Colors:
+  - IN_TRANSIT → gradient gold pill:
+    - `bg-gradient-to-r from-brand-gold-light via-brand-gold to-brand-gold-dark text-[#6b3b05]`.
+  - DELIVERED → green/gold:
+    - e.g. `from-emerald-500 to-brand-gold`.
+  - PAUSED/ERROR → darker / red-tinged gradient.
+
+2) Stop cards:
+
+- Wrapper:
+
+  - `bg-brand-card border border-brand-border rounded-2xl px-3 py-2 flex flex-row items-center justify-between gap-3`.
+
+- Status badge (current stop status):
+
+  - Use pill style with colors tuned to the new scheme:
+    - PLANNED → neutral grey pill.
+    - EN_ROUTE → blue-gold mix if you want, or teal.
+    - ARRIVED → emerald/gold.
+    - DEPARTED → teal or subdued gold.
+    - SKIPPED → red/dark pill.
+
+3) Map section (“INTERACTIVE MAP VIEW”):
+
+- Background:
+
+  - `bg-brand-card border border-brand-border rounded-2xl px-4 py-6`.
+
+- Optionally add a subtle dotted overlay or pattern using CSS, but keep it simple.
+
+- The “Navigate” button under/inside the map should be a gold pill.
+
+────────────────────────
+6. DO NOT CHANGE LOGIC, ONLY STYLING
+────────────────────────
+
+Critical:
+
+- Do NOT modify Prisma schema, API contracts, or route structures.
+- Only change:
+  - Tailwind config,
+  - global styles,
+  - TSX/JSX components (classNames, minor markup for layout),
+  - and introduce the new `PillButton` component.
+- When refactoring components to use `PillButton`, keep the same props and event handlers (`onClick`, etc.) so the behavior remains identical.
+
+────────────────────────
+7. FINAL CHECK
+────────────────────────
+
+After all changes:
+
+1) The app builds and runs without TypeScript or runtime errors.
+
+2) UI:
+   - No old generic blue buttons left.
+   - All main actions (Arrive, Departed, Navigate, Upload, View) use the new pill buttons (gold/dark/light variants).
+   - The overall appearance is:
+     - dark premium background (`brand-bg`),
+     - soft rounded cards (`brand-card`),
+     - status badges as small pills,
+     - gold accents as in the reference buttons.
+
+3) Both driver UI and public tracking UI follow the same visual system, so they feel like parts of a single, polished product.
+
+END OF INSTRUCTIONS

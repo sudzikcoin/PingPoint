@@ -2,14 +2,12 @@ import { useRoute } from "wouter";
 import { getLoadById } from "@/lib/mock-data";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Map, Package, Truck, Clock, MapPin } from "lucide-react";
+import { Map, Package, Truck, Clock, MapPin, Share2 } from "lucide-react";
 import { format } from "date-fns";
+import { PillButton } from "@/components/ui/pill-button";
 
 // Mock function to decode token (in real app this would be an API call)
-// For this mockup, we'll just treat the token as an ID or mapping to ID
 const getLoadFromToken = (token: string) => {
-  // Mock: simply return the first load for any token for demo purposes
-  // or try to match ID if token looks like an ID
   return getLoadById("ld_cuid123456"); 
 };
 
@@ -19,7 +17,7 @@ export default function PublicTracking() {
 
   if (!load) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-background text-foreground">
+      <div className="min-h-screen flex items-center justify-center bg-brand-bg text-brand-text">
         <p>Tracking link invalid or expired.</p>
       </div>
     );
@@ -28,69 +26,78 @@ export default function PublicTracking() {
   const currentStop = load.stops.find(s => s.status === "PLANNED" || s.status === "EN_ROUTE") || load.stops[load.stops.length - 1];
 
   return (
-    <div className="min-h-screen bg-zinc-950 text-zinc-100 font-sans">
+    <div className="min-h-screen bg-brand-bg text-brand-text font-sans">
       {/* Top Bar */}
-      <nav className="bg-zinc-900 border-b border-zinc-800 px-6 py-4 flex justify-between items-center">
-        <div className="flex items-center gap-2">
-          <div className="h-8 w-8 bg-blue-600 rounded-md flex items-center justify-center">
-            <Package className="h-5 w-5 text-white" />
+      <nav className="bg-brand-card border-b border-brand-border px-6 py-4 flex justify-between items-center shadow-lg relative z-20">
+        <div className="flex items-center gap-3">
+          <div className="h-9 w-9 bg-gradient-to-br from-brand-gold-light to-brand-gold-dark rounded-lg flex items-center justify-center shadow-pill-gold">
+            <Package className="h-5 w-5 text-[#6b3b05]" />
           </div>
-          <span className="font-bold text-lg tracking-tight">AgentOS Tracking</span>
+          <div>
+            <span className="font-bold text-lg tracking-tight text-white block leading-none">AgentOS</span>
+            <span className="text-[10px] uppercase tracking-widest text-brand-muted font-bold">Tracking Core</span>
+          </div>
         </div>
-        <Badge variant="outline" className="border-zinc-700 text-zinc-400 font-mono hidden sm:flex">
-          REF: {load.externalLoadId}
-        </Badge>
+        <div className="flex items-center gap-3">
+          <div className="px-3 py-1 rounded-full border border-brand-border bg-brand-dark-pill text-brand-muted font-mono text-xs hidden sm:flex">
+            REF: {load.externalLoadId}
+          </div>
+          <PillButton variant="dark" size="md" icon={<Share2 className="w-3 h-3" />} className="hidden sm:flex">
+            Share
+          </PillButton>
+        </div>
       </nav>
 
-      <div className="grid lg:grid-cols-3 h-[calc(100vh-65px)]">
+      <div className="grid lg:grid-cols-3 h-[calc(100vh-73px)]">
         {/* Map Area (2/3 width on desktop) */}
-        <div className="lg:col-span-2 bg-zinc-900/50 relative order-2 lg:order-1 min-h-[300px]">
-          <div className="absolute inset-0 flex items-center justify-center bg-[url('https://images.unsplash.com/photo-1524661135-423995f22d0b?q=80&w=2074&auto=format&fit=crop')] bg-cover bg-center opacity-20 grayscale"></div>
+        <div className="lg:col-span-2 bg-brand-bg relative order-2 lg:order-1 min-h-[300px] border-r border-brand-border">
+          <div className="absolute inset-0 flex items-center justify-center bg-[url('https://images.unsplash.com/photo-1524661135-423995f22d0b?q=80&w=2074&auto=format&fit=crop')] bg-cover bg-center opacity-10 grayscale"></div>
           <div className="absolute inset-0 flex items-center justify-center">
-            <div className="bg-zinc-950/80 backdrop-blur-sm p-6 rounded-xl border border-zinc-800 flex flex-col items-center gap-3 text-center max-w-xs mx-4">
-              <div className="h-12 w-12 rounded-full bg-blue-500/20 flex items-center justify-center animate-pulse">
-                <Map className="h-6 w-6 text-blue-500" />
+            <div className="bg-brand-card/90 backdrop-blur-md p-8 rounded-3xl border border-brand-border flex flex-col items-center gap-4 text-center max-w-sm mx-4 shadow-2xl">
+              <div className="h-16 w-16 rounded-full bg-brand-dark-pill border border-brand-border flex items-center justify-center shadow-pill-dark relative">
+                <div className="absolute inset-0 rounded-full bg-brand-gold/10 animate-ping" />
+                <Map className="h-8 w-8 text-brand-gold" />
               </div>
               <div>
-                <h3 className="font-medium text-white">Live Tracking Active</h3>
-                <p className="text-sm text-zinc-400 mt-1">Vehicle location is updated every 15 minutes.</p>
+                <h3 className="text-xl font-bold text-white">Live Tracking Active</h3>
+                <p className="text-sm text-brand-muted mt-2 leading-relaxed">Vehicle location is updated every 15 minutes via secure GPS link.</p>
               </div>
               {load.lastLocationCity && (
-                 <Badge className="mt-2 bg-blue-600 hover:bg-blue-700 border-none">
+                 <div className="mt-2 px-4 py-1.5 rounded-full bg-brand-gold/10 border border-brand-gold/20 text-brand-gold text-xs font-bold tracking-wide uppercase">
                    Near {load.lastLocationCity}, {load.lastLocationState}
-                 </Badge>
+                 </div>
               )}
             </div>
           </div>
         </div>
 
         {/* Sidebar Info (1/3 width) */}
-        <div className="bg-zinc-950 border-l border-zinc-800 order-1 lg:order-2 overflow-y-auto">
+        <div className="bg-brand-card order-1 lg:order-2 overflow-y-auto border-l border-brand-border shadow-2xl relative z-10">
           <div className="p-6 space-y-8">
             {/* Header Info */}
-            <div className="space-y-4">
+            <div className="space-y-5">
               <div>
-                <p className="text-sm text-zinc-500 uppercase tracking-wider font-bold mb-1">Current Status</p>
-                <div className="flex items-center gap-3">
-                  <h1 className="text-3xl font-bold text-white">{load.status.replace("_", " ")}</h1>
-                  <div className="h-3 w-3 rounded-full bg-emerald-500 animate-pulse shadow-[0_0_10px_rgba(16,185,129,0.5)]" />
+                <p className="text-xs text-brand-muted uppercase tracking-widest font-bold mb-2">Current Status</p>
+                <div className="flex items-center gap-4">
+                  <h1 className="text-3xl font-bold text-white tracking-tight">{load.status.replace("_", " ")}</h1>
+                  <div className="h-3 w-3 rounded-full bg-emerald-500 animate-pulse shadow-[0_0_15px_rgba(16,185,129,0.6)]" />
                 </div>
-                <p className="text-zinc-400 mt-2 text-sm">
-                  Your shipment is on schedule. Estimated arrival at destination: <span className="text-white font-mono">{format(new Date(load.stops[load.stops.length-1].windowStart), "MMM d, h:mm a")}</span>
+                <p className="text-brand-text/80 mt-3 text-sm leading-relaxed">
+                  Your shipment is on schedule. Estimated arrival at destination: <span className="text-brand-gold font-mono">{format(new Date(load.stops[load.stops.length-1].windowStart), "MMM d, h:mm a")}</span>
                 </p>
               </div>
             </div>
 
             {/* Progress Visual */}
-            <div className="space-y-4">
-               <div className="flex items-center justify-between text-xs font-medium text-zinc-500 uppercase tracking-wider">
+            <div className="space-y-4 bg-brand-dark-pill/50 p-4 rounded-2xl border border-brand-border/50">
+               <div className="flex items-center justify-between text-[10px] font-bold text-brand-muted uppercase tracking-widest">
                  <span>Origin</span>
                  <span>Destination</span>
                </div>
-               <div className="h-2 bg-zinc-800 rounded-full overflow-hidden relative">
-                 <div className="absolute inset-y-0 left-0 w-[65%] bg-blue-600 rounded-full" />
+               <div className="h-2 bg-brand-border rounded-full overflow-hidden relative">
+                 <div className="absolute inset-y-0 left-0 w-[65%] bg-gradient-to-r from-brand-gold-light to-brand-gold-dark rounded-full shadow-pill-gold" />
                </div>
-               <div className="flex items-center justify-between text-sm font-semibold text-white">
+               <div className="flex items-center justify-between text-sm font-bold text-white">
                  <span>{load.stops[0].city}</span>
                  <span>{load.stops[load.stops.length-1].city}</span>
                </div>
@@ -98,28 +105,28 @@ export default function PublicTracking() {
 
             {/* Stop List */}
             <div>
-              <p className="text-sm text-zinc-500 uppercase tracking-wider font-bold mb-4">Route Details</p>
+              <p className="text-xs text-brand-muted uppercase tracking-widest font-bold mb-6 pl-2">Route Details</p>
               <div className="space-y-0 relative pl-2">
-                <div className="absolute top-2 bottom-4 left-[19px] w-0.5 bg-zinc-800" />
+                <div className="absolute top-2 bottom-4 left-[19px] w-0.5 bg-brand-border" />
                 
                 {load.stops.map((stop, idx) => {
                    const isCompleted = stop.status === "DEPARTED" || stop.status === "ARRIVED";
                    const isCurrent = stop.id === currentStop?.id;
 
                    return (
-                    <div key={stop.id} className="relative pl-8 pb-8 last:pb-0">
-                      <div className={`absolute left-[12px] top-1.5 h-4 w-4 rounded-full border-2 z-10 transition-colors ${
-                        isCompleted ? "bg-emerald-500 border-emerald-500" :
-                        isCurrent ? "bg-blue-500 border-blue-500 ring-4 ring-blue-500/20" :
-                        "bg-zinc-900 border-zinc-600"
+                    <div key={stop.id} className="relative pl-10 pb-10 last:pb-0 group">
+                      <div className={`absolute left-[12px] top-1.5 h-4 w-4 rounded-full border-2 z-10 transition-all duration-500 ${
+                        isCompleted ? "bg-emerald-500 border-emerald-500 shadow-[0_0_10px_rgba(16,185,129,0.4)]" :
+                        isCurrent ? "bg-brand-gold border-brand-gold ring-4 ring-brand-gold/20 shadow-[0_0_10px_rgba(245,197,80,0.4)]" :
+                        "bg-brand-card border-brand-border"
                       }`}>
-                        {isCompleted && <div className="h-full w-full flex items-center justify-center text-zinc-950"><div className="h-1.5 w-1.5 bg-zinc-950 rounded-full" /></div>}
+                        {isCompleted && <div className="h-full w-full flex items-center justify-center text-brand-card"><div className="h-1.5 w-1.5 bg-brand-card rounded-full" /></div>}
                       </div>
                       
-                      <div className={`${isCurrent ? "opacity-100" : isCompleted ? "opacity-60" : "opacity-40"}`}>
-                        <h4 className="text-base font-semibold text-zinc-100">{stop.city}, {stop.state}</h4>
-                        <p className="text-sm text-zinc-400 mt-0.5">{stop.addressLine1}</p>
-                        <div className="flex items-center gap-2 mt-2 text-xs text-zinc-500 font-mono">
+                      <div className={`transition-all duration-500 ${isCurrent ? "opacity-100 translate-x-0" : isCompleted ? "opacity-60" : "opacity-40"}`}>
+                        <h4 className="text-base font-bold text-white group-hover:text-brand-gold transition-colors">{stop.city}, {stop.state}</h4>
+                        <p className="text-sm text-brand-muted mt-0.5">{stop.addressLine1}</p>
+                        <div className="flex items-center gap-2 mt-2 text-xs text-brand-muted/80 font-mono bg-brand-dark-pill/50 w-fit px-2 py-1 rounded border border-brand-border/50">
                           <Clock className="h-3 w-3" />
                           {format(new Date(stop.windowStart), "MMM d, HH:mm")}
                         </div>
@@ -132,13 +139,15 @@ export default function PublicTracking() {
           </div>
           
           {/* Footer Area */}
-          <div className="p-6 border-t border-zinc-800 bg-zinc-900/30">
-            <div className="flex items-start gap-3">
-              <Truck className="h-5 w-5 text-zinc-500 mt-0.5" />
+          <div className="p-6 border-t border-brand-border bg-brand-card/50">
+            <div className="flex items-start gap-4">
+              <div className="h-10 w-10 rounded-full bg-brand-dark-pill border border-brand-border flex items-center justify-center shrink-0">
+                 <Truck className="h-5 w-5 text-brand-muted" />
+              </div>
               <div>
-                <p className="text-sm font-medium text-zinc-300">Carrier Information</p>
-                <p className="text-xs text-zinc-500 mt-1">Transport provided by <span className="text-zinc-300">Soar Transportation Group</span></p>
-                <p className="text-xs text-zinc-500">MC: 123456 • DOT: 9876543</p>
+                <p className="text-sm font-bold text-white">Carrier Information</p>
+                <p className="text-xs text-brand-muted mt-1">Transport provided by <span className="text-white font-medium">Soar Transportation Group</span></p>
+                <p className="text-[10px] text-brand-muted font-mono mt-2 uppercase tracking-wide">MC: 123456 • DOT: 9876543</p>
               </div>
             </div>
           </div>
