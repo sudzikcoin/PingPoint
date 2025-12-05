@@ -1,0 +1,831 @@
+You are a senior backend + full-stack engineer working on the **PingPoint** project in Replit.
+
+Your job:  
+Сделать так, чтобы ВСЁ заработало “магическим образом”:
+
+- Подключить Replit Development Database (Postgres).
+- Настроить Prisma + `DATABASE_URL`.
+- Создать таблицы (миграции).
+- Реализовать backend-логику (broker, loads, driver, tracking).
+- Аккуратно подключить это к уже существующему фронту (Arcade 90s, /driver, /app/loads и т.д.).
+- НИЧЕГО не ломать во фронте, делать только минимально необходимые правки.
+
+Если что-то из шагов уже выполнено — просто проверь и пропусти, не ломая рабочую часть.
+
+============================================================
+PART 0 — WIRE REPLIT DEVELOPMENT DATABASE + PRISMA
+============================================================
+
+0.1. Check that the project uses Prisma
+- If `prisma/schema.prisma` does NOT exist:
+  - Create folder `prisma/`.
+  - Create `prisma/schema.prisma` with a minimal placeholder (you will overwrite later).
+
+0.2. Configure datasource to use PostgreSQL + `DATABASE_URL`
+- Open `prisma/schema.prisma`.
+- Ensure the top looks like this (create or update):
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+- Do NOT leave provider as `"sqlite"` or anything else.
+
+0.3. Ensure `DATABASE_URL` is set and points to Replit Development Database
+- In this Replit project, open environment/secrets (usually `.env` + Replit Secrets).
+- If `DATABASE_URL` is already set and points to a Postgres URL from Replit Development Database, keep it.
+- If NOT set:
+  - Use the Replit **Database** panel to:
+    - Make sure a **Development Database** exists.
+    - Copy its PostgreSQL connection string (postgres://...).
+  - Create `.env` file if it does not exist.
+  - Add:
+
+DATABASE_URL="PASTE_YOUR_REPLIT_DEVELOPMENT_DATABASE_URL_HERE"
+
+  - Also add a JWT secret for broker sessions if it does not exist:
+
+PINGPOINT_BROKER_JWT_SECRET="change_me_to_random_long_secret"
+
+- Ensure `.gitignore` ignores `.env` if this is a git repo.
+
+0.4. Install Prisma dependencies (if missing)
+- In the shell, run (only if not already installed):
+
+npm install @prisma/client prisma
+
+- After schema is ready (see Part 1), you will run `npx prisma migrate dev` to create tables.
+
+============================================================
+PART 1 — DATABASE SCHEMA (PRISMA MODELS)
+============================================================
+
+Update `prisma/schema.prisma` to include the following models.  
+If some of them already exist, extend them minimally without breaking existing fields.
+
+/// datasouce + generator from Part 0 stay on top
+
+model Broker {
+  id                 String               @id @default(uuid())
+  name               String
+  email              String               @unique
+  emailVerified      Boolean              @default(false)
+  loads              Load[]
+  verificationTokens VerificationToken[]
+  createdAt          DateTime             @default(now()) @db.Timestamptz
+  updatedAt          DateTime             @updatedAt @db.Timestamptz
+}
+
+model VerificationToken {
+  id        String   @id @default(uuid())
+  broker    Broker   @relation(fields: [brokerId], references: [id])
+  brokerId  String
+  token     String   @unique
+  expiresAt DateTime @db.Timestamptz
+  used      Boolean  @default(false)
+  createdAt DateTime @default(now()) @db.Timestamptz
+}
+
+model Driver {
+  id        String   @id @default(uuid())
+  phone     String
+  loads     Load[]
+  createdAt DateTime @default(now()) @db.Timestamptz
+  updatedAt DateTime @updatedAt @db.Timestamptz
+}
+
+model Load {
+  id                     String               @id @default(uuid())
+  broker                 Broker               @relation(fields: [brokerId], references: [id])
+  brokerId               String
+  driver                 Driver?              @relation(fields: [driverId], references: [id])
+  driverId               String?
+  loadNumber             String               @unique
+  shipperName            String
+  carrierName            String
+  equipmentType          String
+  customerRef            String?
+  rateAmount             Decimal              @db.Decimal(10, 2)
+  status                 String               // PLANNED / IN_TRANSIT / AT_PICKUP / DELIVERED / ...
+  trackingToken          String               @unique
+  driverToken            String               @unique
+  pickupEta              DateTime?            @db.Timestamptz
+  deliveryEta            DateTime?            @db.Timestamptz
+  billingMonth           DateTime?            @db.Date
+  isBillable             Boolean              @default(true)
+  stops                  Stop[]
+  trackingPings          TrackingPing[]
+  rateConfirmationFiles  RateConfirmationFile[]
+  createdAt              DateTime             @default(now()) @db.Timestamptz
+  updatedAt              DateTime             @updatedAt @db.Timestamptz
+}
+
+model Stop {
+  id           String   @id @default(uuid())
+  load         Load     @relation(fields: [loadId], references: [id])
+  loadId       String
+  sequence     Int
+  type         String   // "PICKUP" or "DELIVERY"
+  name         String
+  fullAddress  String
+  city         String
+  state        String
+  lat          Decimal? @db.Decimal(9, 6)
+  lng          Decimal? @db.Decimal(9, 6)
+  windowFrom   DateTime? @db.Timestamptz
+  windowTo     DateTime? @db.Timestamptz
+  arrivedAt    DateTime? @db.Timestamptz
+  departedAt   DateTime? @db.Timestamptz
+  createdAt    DateTime @default(now()) @db.Timestamptz
+  updatedAt    DateTime @updatedAt @db.Timestamptz
+}
+
+model TrackingPing {
+  id         String   @id @default(uuid())
+  load       Load     @relation(fields: [loadId], references: [id])
+  loadId     String
+  driver     Driver   @relation(fields: [driverId], references: [id])
+  driverId   String
+  lat        Decimal  @db.Decimal(9, 6)
+  lng        Decimal  @db.Decimal(9, 6)
+  accuracy   Decimal? @db.Decimal(6, 2)
+  source     String   // DRIVER_APP / MANUAL / ELD / ...
+  createdAt  DateTime @default(now()) @db.Timestamptz
+}
+
+model RateConfirmationFile {
+  id           String   @id @default(uuid())
+  load         Load     @relation(fields: [loadId], references: [id])
+  loadId       String
+  fileUrl      String
+  originalName String
+  uploadedAt   DateTime @default(now()) @db.Timestamptz
+}
+
+1. After editing `schema.prisma`, run in the shell:
+
+npx prisma migrate dev --name init_pingpoint
+
+2. Ensure that the migration succeeds and that in the Replit **Database** panel you can now see tables like `Broker`, `Load`, `Stop`, etc.
+
+============================================================
+PART 2 — PRISMA CLIENT SETUP
+============================================================
+
+Create or update `lib/prisma.ts` (or `src/lib/prisma.ts`) with the standard singleton:
+
+import { PrismaClient } from "@prisma/client";
+
+const globalForPrisma = globalThis as unknown as { prisma?: PrismaClient };
+
+export const prisma =
+  globalForPrisma.prisma ??
+  new PrismaClient({
+    log: ["error", "warn"],
+  });
+
+if (process.env.NODE_ENV !== "production") globalForPrisma.prisma = prisma;
+
+Use this `prisma` instance in all route handlers below.
+
+============================================================
+PART 3 — SIMPLE BROKER SESSION (JWT COOKIE)
+============================================================
+
+Create `lib/auth/brokerSession.ts`:
+
+import { NextRequest, NextResponse } from "next/server";
+import jwt from "jsonwebtoken";
+import { prisma } from "../prisma";
+
+const COOKIE_NAME = "pingpoint_broker_session";
+
+function getSecret() {
+  const secret = process.env.PINGPOINT_BROKER_JWT_SECRET;
+  if (!secret) {
+    throw new Error("PINGPOINT_BROKER_JWT_SECRET is not set");
+  }
+  return secret;
+}
+
+export function createBrokerSession(brokerId: string, res: NextResponse) {
+  const token = jwt.sign({ brokerId }, getSecret(), {
+    expiresIn: "30d",
+  });
+  res.cookies.set(COOKIE_NAME, token, {
+    httpOnly: true,
+    secure: true,
+    sameSite: "lax",
+    path: "/",
+    maxAge: 60 * 60 * 24 * 30,
+  });
+  return res;
+}
+
+export async function getBrokerFromRequest(req: NextRequest) {
+  const token = req.cookies.get(COOKIE_NAME)?.value;
+  if (!token) return null;
+  try {
+    const payload = jwt.verify(token, getSecret()) as { brokerId: string };
+    const broker = await prisma.broker.findUnique({
+      where: { id: payload.brokerId },
+    });
+    return broker;
+  } catch (err) {
+    return null;
+  }
+}
+
+============================================================
+PART 4 — BROKER + VERIFICATION API
+============================================================
+
+All routes below live in `app/api/...`.
+
+------------------------------------------------------------
+4.1. POST /api/brokers/ensure
+------------------------------------------------------------
+
+File: `app/api/brokers/ensure/route.ts`
+
+import { NextRequest, NextResponse } from "next/server";
+import { prisma } from "@/lib/prisma";
+
+export async function POST(req: NextRequest) {
+  const body = await req.json();
+  const emailRaw = (body.email ?? "").toString().trim().toLowerCase();
+  const name = (body.name ?? "").toString().trim() || "Broker";
+
+  if (!emailRaw) {
+    return NextResponse.json({ error: "Email is required" }, { status: 400 });
+  }
+
+  let broker = await prisma.broker.findUnique({ where: { email: emailRaw } });
+  if (!broker) {
+    broker = await prisma.broker.create({
+      data: {
+        email: emailRaw,
+        name,
+      },
+    });
+  }
+
+  return NextResponse.json({
+    id: broker.id,
+    email: broker.email,
+    name: broker.name,
+    emailVerified: broker.emailVerified,
+    createdAt: broker.createdAt,
+    updatedAt: broker.updatedAt,
+  });
+}
+
+------------------------------------------------------------
+4.2. POST /api/brokers/send-verification
+------------------------------------------------------------
+
+File: `app/api/brokers/send-verification/route.ts`
+
+import { NextRequest, NextResponse } from "next/server";
+import { prisma } from "@/lib/prisma";
+import { randomUUID } from "crypto";
+
+async function sendBrokerVerificationEmail(email: string, url: string) {
+  // TODO: integrate real email provider (SendGrid/Postmark/etc.)
+  console.log("[DEV] Send verification email to", email, "URL:", url);
+}
+
+export async function POST(req: NextRequest) {
+  const { brokerId } = await req.json();
+  if (!brokerId) {
+    return NextResponse.json({ error: "brokerId is required" }, { status: 400 });
+  }
+
+  const broker = await prisma.broker.findUnique({ where: { id: brokerId } });
+  if (!broker) {
+    return NextResponse.json({ error: "Broker not found" }, { status: 404 });
+  }
+
+  const token = randomUUID();
+  const expires = new Date();
+  expires.setDate(expires.getDate() + 2);
+
+  await prisma.verificationToken.create({
+    data: {
+      brokerId: broker.id,
+      token,
+      expiresAt: expires,
+    },
+  });
+
+  const origin = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
+  const verificationUrl = `${origin}/api/brokers/verify?token=${token}`;
+
+  await sendBrokerVerificationEmail(broker.email, verificationUrl);
+
+  return NextResponse.json({ ok: true });
+}
+
+------------------------------------------------------------
+4.3. GET /api/brokers/verify?token=...
+------------------------------------------------------------
+
+File: `app/api/brokers/verify/route.ts`
+
+import { NextRequest, NextResponse } from "next/server";
+import { prisma } from "@/lib/prisma";
+import { createBrokerSession } from "@/lib/auth/brokerSession";
+
+export async function GET(req: NextRequest) {
+  const token = req.nextUrl.searchParams.get("token");
+  if (!token) {
+    return NextResponse.redirect(new URL("/verify-error", req.url));
+  }
+
+  const record = await prisma.verificationToken.findUnique({
+    where: { token },
+    include: { broker: true },
+  });
+
+  if (!record || record.used || record.expiresAt < new Date()) {
+    return NextResponse.redirect(new URL("/verify-error", req.url));
+  }
+
+  await prisma.verificationToken.update({
+    where: { id: record.id },
+    data: { used: true },
+  });
+
+  await prisma.broker.update({
+    where: { id: record.brokerId },
+    data: { emailVerified: true },
+  });
+
+  const res = NextResponse.redirect(new URL("/app/loads", req.url));
+  return createBrokerSession(record.brokerId, res);
+}
+
+------------------------------------------------------------
+4.4. GET /api/brokers/me
+------------------------------------------------------------
+
+File: `app/api/brokers/me/route.ts`
+
+import { NextRequest, NextResponse } from "next/server";
+import { getBrokerFromRequest } from "@/lib/auth/brokerSession";
+
+export async function GET(req: NextRequest) {
+  const broker = await getBrokerFromRequest(req);
+  if (!broker) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+  return NextResponse.json({
+    id: broker.id,
+    email: broker.email,
+    name: broker.name,
+    emailVerified: broker.emailVerified,
+  });
+}
+
+============================================================
+PART 5 — LOADS API (BROKER CONSOLE)
+============================================================
+
+All routes below require a valid broker session.
+
+------------------------------------------------------------
+5.1. POST /api/loads
+------------------------------------------------------------
+
+File: `app/api/loads/route.ts` (POST handler)
+
+import { NextRequest, NextResponse } from "next/server";
+import { prisma } from "@/lib/prisma";
+import { getBrokerFromRequest } from "@/lib/auth/brokerSession";
+import { nanoid } from "nanoid";
+
+async function sendDriverAppLink(phone: string, driverToken: string, origin: string) {
+  const url = `${origin}/driver/${driverToken}`;
+  // TODO: integrate real SMS provider (Twilio/etc.)
+  console.log("[DEV] SMS to driver", phone, "URL:", url);
+}
+
+export async function POST(req: NextRequest) {
+  const broker = await getBrokerFromRequest(req);
+  if (!broker) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  const body = await req.json();
+  const {
+    driverPhone,
+    shipperName,
+    carrierName,
+    equipmentType,
+    customerRef,
+    rateAmount,
+    stops,
+  } = body;
+
+  if (!driverPhone || !shipperName || !carrierName || !equipmentType || !Array.isArray(stops) || stops.length === 0) {
+    return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
+  }
+
+  let driver = await prisma.driver.findFirst({ where: { phone: driverPhone } });
+  if (!driver) {
+    driver = await prisma.driver.create({
+      data: { phone: driverPhone },
+    });
+  }
+
+  const loadNumber = `LD-${new Date().getFullYear()}-${Math.floor(Math.random() * 900000 + 100000)}`;
+  const trackingToken = `trk_${nanoid(10)}`;
+  const driverToken = `drv_${nanoid(10)}`;
+
+  const created = await prisma.load.create({
+    data: {
+      brokerId: broker.id,
+      driverId: driver.id,
+      loadNumber,
+      shipperName,
+      carrierName,
+      equipmentType,
+      customerRef,
+      rateAmount,
+      status: "PLANNED",
+      trackingToken,
+      driverToken,
+      stops: {
+        create: stops.map((s: any, idx: number) => ({
+          sequence: idx + 1,
+          type: s.type ?? (idx === 0 ? "PICKUP" : "DELIVERY"),
+          name: s.name ?? "",
+          fullAddress: s.fullAddress ?? "",
+          city: s.city ?? "",
+          state: s.state ?? "",
+          windowFrom: s.windowFrom ? new Date(s.windowFrom) : null,
+          windowTo: s.windowTo ? new Date(s.windowTo) : null,
+        })),
+      },
+    },
+  });
+
+  const origin = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
+  await sendDriverAppLink(driverPhone, driverToken, origin);
+
+  return NextResponse.json(
+    {
+      id: created.id,
+      loadNumber: created.loadNumber,
+      status: created.status,
+      trackingToken: created.trackingToken,
+      driverToken: created.driverToken,
+    },
+    { status: 201 },
+  );
+}
+
+------------------------------------------------------------
+5.2. GET /api/loads
+------------------------------------------------------------
+
+Same file `app/api/loads/route.ts` – add `GET` handler:
+
+export async function GET(req: NextRequest) {
+  const broker = await getBrokerFromRequest(req);
+  if (!broker) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  const url = new URL(req.url);
+  const page = Number(url.searchParams.get("page") ?? "1");
+  const pageSize = Number(url.searchParams.get("pageSize") ?? "20");
+  const skip = (page - 1) * pageSize;
+
+  const [items, total] = await Promise.all([
+    prisma.load.findMany({
+      where: { brokerId: broker.id },
+      orderBy: { createdAt: "desc" },
+      skip,
+      take: pageSize,
+      include: {
+        stops: {
+          orderBy: { sequence: "asc" },
+        },
+      },
+    }),
+    prisma.load.count({ where: { brokerId: broker.id } }),
+  ]);
+
+  const mapped = items.map((load) => {
+    const pickups = load.stops.filter((s) => s.type === "PICKUP");
+    const deliveries = load.stops.filter((s) => s.type === "DELIVERY");
+    const origin = pickups[0];
+    const destination = deliveries[deliveries.length - 1];
+
+    return {
+      id: load.id,
+      loadNumber: load.loadNumber,
+      shipperName: load.shipperName,
+      originCity: origin?.city ?? null,
+      originState: origin?.state ?? null,
+      destinationCity: destination?.city ?? null,
+      destinationState: destination?.state ?? null,
+      status: load.status,
+    };
+  });
+
+  return NextResponse.json({
+    items: mapped,
+    total,
+    page,
+    pageSize,
+  });
+}
+
+------------------------------------------------------------
+5.3. GET /api/loads/[id]
+------------------------------------------------------------
+
+File: `app/api/loads/[id]/route.ts`
+
+import { NextRequest, NextResponse } from "next/server";
+import { prisma } from "@/lib/prisma";
+import { getBrokerFromRequest } from "@/lib/auth/brokerSession";
+
+export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
+  const broker = await getBrokerFromRequest(req);
+  if (!broker) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  const load = await prisma.load.findFirst({
+    where: { id: params.id, brokerId: broker.id },
+    include: {
+      stops: { orderBy: { sequence: "asc" } },
+      driver: true,
+    },
+  });
+
+  if (!load) {
+    return NextResponse.json({ error: "Not found" }, { status: 404 });
+  }
+
+  return NextResponse.json(load);
+}
+
+============================================================
+PART 6 — DRIVER MINI-APP API
+============================================================
+
+------------------------------------------------------------
+6.1. GET /api/driver/[driverToken]
+------------------------------------------------------------
+
+File: `app/api/driver/[driverToken]/route.ts`
+
+import { NextRequest, NextResponse } from "next/server";
+import { prisma } from "@/lib/prisma";
+
+export async function GET(req: NextRequest, { params }: { params: { driverToken: string } }) {
+  const load = await prisma.load.findUnique({
+    where: { driverToken: params.driverToken },
+    include: { stops: { orderBy: { sequence: "asc" } } },
+  });
+
+  if (!load) {
+    return NextResponse.json({ error: "Not found" }, { status: 404 });
+  }
+
+  return NextResponse.json({
+    loadNumber: load.loadNumber,
+    status: load.status,
+    stops: load.stops.map((s) => ({
+      sequence: s.sequence,
+      type: s.type,
+      name: s.name,
+      city: s.city,
+      state: s.state,
+      arrivedAt: s.arrivedAt,
+      departedAt: s.departedAt,
+    })),
+  });
+}
+
+------------------------------------------------------------
+6.2. POST /api/driver/[driverToken]/status
+------------------------------------------------------------
+
+Same file, add `POST`:
+
+export async function POST(req: NextRequest, { params }: { params: { driverToken: string } }) {
+  const body = await req.json();
+  const stopSequence = Number(body.stopSequence);
+  const event = body.event as "ARRIVED" | "DEPARTED";
+
+  if (!stopSequence || !event) {
+    return NextResponse.json({ error: "Invalid payload" }, { status: 400 });
+  }
+
+  const load = await prisma.load.findUnique({
+    where: { driverToken: params.driverToken },
+    include: { stops: { orderBy: { sequence: "asc" } } },
+  });
+
+  if (!load) {
+    return NextResponse.json({ error: "Not found" }, { status: 404 });
+  }
+
+  const stop = load.stops.find((s) => s.sequence === stopSequence);
+  if (!stop) {
+    return NextResponse.json({ error: "Stop not found" }, { status: 404 });
+  }
+
+  const now = new Date();
+
+  if (event === "ARRIVED") {
+    await prisma.stop.update({
+      where: { id: stop.id },
+      data: { arrivedAt: now },
+    });
+  } else if (event === "DEPARTED") {
+    await prisma.stop.update({
+      where: { id: stop.id },
+      data: { departedAt: now },
+    });
+  }
+
+  // Optional: update overall load status
+  // TODO: implement smarter status transitions if needed
+
+  return NextResponse.json({ ok: true });
+}
+
+(You can later add `/ping` endpoint to store GPS pings.)
+
+============================================================
+PART 7 — PUBLIC TRACKING API
+============================================================
+
+------------------------------------------------------------
+7.1. GET /api/track/[trackingToken]
+------------------------------------------------------------
+
+File: `app/api/track/[trackingToken]/route.ts`
+
+import { NextRequest, NextResponse } from "next/server";
+import { prisma } from "@/lib/prisma";
+
+export async function GET(req: NextRequest, { params }: { params: { trackingToken: string } }) {
+  const load = await prisma.load.findUnique({
+    where: { trackingToken: params.trackingToken },
+    include: {
+      stops: { orderBy: { sequence: "asc" } },
+      broker: true,
+      trackingPings: { orderBy: { createdAt: "desc" }, take: 1 },
+    },
+  });
+
+  if (!load) {
+    return NextResponse.json({ error: "Not found" }, { status: 404 });
+  }
+
+  const pickups = load.stops.filter((s) => s.type === "PICKUP");
+  const deliveries = load.stops.filter((s) => s.type === "DELIVERY");
+  const origin = pickups[0];
+  const destination = deliveries[deliveries.length - 1];
+  const lastPing = load.trackingPings[0];
+
+  return NextResponse.json({
+    loadNumber: load.loadNumber,
+    brokerName: load.broker.name,
+    shipperName: load.shipperName,
+    origin: origin
+      ? { city: origin.city, state: origin.state }
+      : null,
+    destination: destination
+      ? { city: destination.city, state: destination.state }
+      : null,
+    status: load.status,
+    eta: load.deliveryEta,
+    stops: load.stops.map((s) => ({
+      sequence: s.sequence,
+      type: s.type,
+      city: s.city,
+      state: s.state,
+      arrivedAt: s.arrivedAt,
+      departedAt: s.departedAt,
+    })),
+    lastPing: lastPing
+      ? {
+          lat: lastPing.lat,
+          lng: lastPing.lng,
+          timestamp: lastPing.createdAt,
+        }
+      : null,
+  });
+}
+
+============================================================
+PART 8 — RATE CONFIRMATION UPLOAD (STUB)
+============================================================
+
+------------------------------------------------------------
+8.1. POST /api/rate-confirmation/upload
+------------------------------------------------------------
+
+File: `app/api/rate-confirmation/upload/route.ts`
+
+import { NextRequest, NextResponse } from "next/server";
+import { prisma } from "@/lib/prisma";
+import { getBrokerFromRequest } from "@/lib/auth/brokerSession";
+import { randomUUID } from "crypto";
+import path from "path";
+import { promises as fs } from "fs";
+import os from "os";
+
+export const runtime = "nodejs"; // ensure Node APIs available
+
+export async function POST(req: NextRequest) {
+  const broker = await getBrokerFromRequest(req);
+  if (!broker) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  const formData = await req.formData();
+  const file = formData.get("file") as File | null;
+  const loadId = formData.get("loadId")?.toString();
+
+  if (!file) {
+    return NextResponse.json({ error: "File is required" }, { status: 400 });
+  }
+
+  // TEMP local storage for dev only
+  const bytes = await file.arrayBuffer();
+  const buffer = Buffer.from(bytes);
+  const tmpDir = path.join(os.tmpdir(), "pingpoint-uploads");
+  await fs.mkdir(tmpDir, { recursive: true });
+  const filename = `${randomUUID()}-${file.name}`;
+  const filepath = path.join(tmpDir, filename);
+  await fs.writeFile(filepath, buffer);
+
+  // TODO: replace with S3/Cloud storage and use public URL instead of local path
+  const fileUrl = filepath;
+
+  const created = await prisma.rateConfirmationFile.create({
+    data: {
+      loadId: loadId ?? undefined,
+      fileUrl,
+      originalName: file.name,
+    },
+  });
+
+  return NextResponse.json(created, { status: 201 });
+}
+
+============================================================
+PART 9 — FRONTEND INTEGRATION (MINIMAL)
+============================================================
+
+Do NOT massively refactor the frontend. Only:
+
+1. On `/app/loads/new` New Load form:
+   - Ensure the submit handler:
+     - Calls `POST /api/brokers/ensure` with `brokerEmail` and `brokerName` when the broker presses “Create”.
+     - (Optional) Calls `POST /api/brokers/send-verification` for newly created brokers.
+     - Calls `POST /api/loads` with:
+       - `driverPhone`, `shipperName`, `carrierName`, `equipmentType`, `customerRef`, `rateAmount`, `stops[]`.
+     - On success, redirects to `/app/loads`.
+
+2. On `/app/loads` broker console:
+   - On mount:
+     - Call `GET /api/brokers/me` to get broker name/email and show “Welcome, {BrokerName}”.
+     - Call `GET /api/loads` to show list of loads.
+   - Keep arcade styling and existing layout (buttons “Create Load” and “Upload Rate Confirmation” etc.).
+
+3. On `/driver/[driverToken]`:
+   - Use `GET /api/driver/[driverToken]` to show the route plan.
+   - Buttons “Arrived / Departed” send `POST /api/driver/[driverToken]/status`.
+
+4. On `/track/[trackingToken]`:
+   - Use `GET /api/track/[trackingToken]` to render the public tracking timeline + map.
+
+============================================================
+FINAL CHECK
+============================================================
+
+- `DATABASE_URL` is set and points to Replit Development Database.
+- `npx prisma migrate dev` has been executed successfully.
+- Tables exist in the Replit Database panel.
+- API routes compile and run.
+- New Load form creates loads and redirects to `/app/loads`.
+- `/app/loads` shows broker name and list of loads.
+- Driver link `/driver/<driverToken>` works with status buttons.
+- Public tracking `/track/<trackingToken>` returns JSON for the public tracking page.
+
+Make all these changes now in the PingPoint Replit project, keeping them as small and consistent as possible with the existing codebase.
