@@ -1,0 +1,364 @@
+You are a senior full-stack engineer working inside the **PingPoint** frontend project on Replit.
+
+ASSUME:
+- Stack: Next.js 13/14 with App Router (app/), TypeScript, Tailwind CSS.
+- There is ALREADY an existing **driver mini-app** under routes like `/driver` and `/driver/loads/[id]`.
+- Your job is to ADD a new **“control zone” for broker and dispatcher** under `/app/*` WITHOUT breaking anything in `/driver`.
+
+VERY IMPORTANT RULES:
+- Do NOT touch or refactor existing `/driver` pages/components except to REUSE shared UI if it’s already abstracted.
+- Keep changes as small and localized as possible.
+- If something is unclear (auth, real backend, etc.), use simple placeholders / mock data and add clear `// TODO` comments.
+- Do not break the current build – run type checks and fix any errors you introduce.
+
+============================================================
+HIGH-LEVEL GOAL
+============================================================
+
+Create a **Broker & Dispatcher control zone** in PingPoint:
+
+New pages (App Router):
+- `/app/loads`       → loads list (index)
+- `/app/loads/new`   → create new load (form)
+- `/app/loads/[id]`  → load details view
+
+The UI is desktop-oriented (for laptop/monitor), but responsive for tablet.
+
+The control zone should:
+- Show a list of loads (shipments) with key fields.
+- Allow creating a new load with a form.
+- Show a detailed view of a single load, including:
+  - general info (broker, shipper, carrier, references, rate),
+  - route & stops (pickup / delivery),
+  - driver assignment block,
+  - tracking links block (for driver & customer).
+
+For now, you can use a simple **in-memory mock API** (or a simple local `mockLoads` array), with `// TODO` comments to later wire to real backend (AgentOS or PingPoint backend).
+
+============================================================
+DATA MODEL (FRONTEND SHAPES)
+============================================================
+
+Create or reuse TypeScript types in a shared file, e.g. `app/(app)/types/pingpoint.ts` or similar:
+
+type StopType = "PICKUP" | "DELIVERY";
+
+export type Stop = {
+  id: string;
+  sequence: number;           // 1 for first stop, 2 for second, etc.
+  type: StopType;             // "PICKUP" | "DELIVERY"
+  name: string;               // Facility name (e.g. "Costco DC 123")
+  addressLine1: string;
+  city: string;
+  state: string;
+  zip: string;
+  windowFrom: string;         // ISO date string
+  windowTo: string;           // ISO date string
+  status: "PLANNED" | "ARRIVED" | "DEPARTED" | "COMPLETED";
+};
+
+export type Driver = {
+  id?: string;
+  name: string;
+  phone?: string;
+  truckNumber?: string;
+  trailerNumber?: string;
+};
+
+export type LoadStatus = "PLANNED" | "IN_TRANSIT" | "DELIVERED" | "CANCELLED";
+
+export type Load = {
+  id: string;
+  loadNumber: string;         // e.g. "LD-2025-001"
+  status: LoadStatus;
+  brokerName: string;
+  shipperName: string;
+  carrierName: string;
+  customerReference?: string;
+  internalReference?: string;
+  equipmentType?: string;     // "VAN" | "REEFER" | etc.
+  rateAmount?: number;
+  rateCurrency?: string;      // "USD"
+  stops: Stop[];
+  driver?: Driver;
+  driverTrackingLink?: string | null;
+  customerTrackingLink?: string | null;
+  lastPingAt?: string | null; // ISO date string
+};
+
+Create a temporary **mock store** for loads, e.g. `app/(app)/data/mockLoads.ts`:
+
+- Export an array `mockLoads: Load[]` with 1–3 example loads.
+- Export helper functions like `getLoads()`, `getLoadById(id: string)`, `createLoad(loadInput)`, etc., that work in memory only.
+- Add `// TODO: replace mockLoads with real API / DB integration` at the top.
+
+============================================================
+LAYOUT FOR /app ZONE
+============================================================
+
+Create a dedicated layout for the control zone, e.g.:
+
+- `app/app/layout.tsx`
+
+It should:
+- Wrap content in a simple shell (sidebar or top nav).
+- Match the dark / “arcade” visual theme used by `/driver` (reuse Tailwind colors and fonts from existing code).
+- Include navigation links:
+  - “Loads” → `/app/loads`
+  - (Placeholders for future sections can be commented out.)
+
+Example skeleton (adapt to existing design system):
+
+export default function AppLayout({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="min-h-screen bg-slate-950 text-slate-50">
+      <div className="flex">
+        <aside className="hidden w-64 border-r border-slate-800 bg-slate-950/80 p-4 md:block">
+          <div className="mb-6 text-xs font-semibold tracking-[0.2em] uppercase text-slate-400">
+            PingPoint Control
+          </div>
+          <nav className="space-y-2 text-sm">
+            {/* Active state handling via usePathname or NavLink */}
+            <a href="/app/loads" className="block rounded-lg px-3 py-2 hover:bg-slate-900">
+              Loads
+            </a>
+          </nav>
+        </aside>
+        <main className="flex-1 p-4 md:p-6">{children}</main>
+      </div>
+    </div>
+  );
+}
+
+Make sure you place pages in a parallel segment or folder structure that does not conflict with `/driver`.
+
+============================================================
+PAGE 1: /app/loads – LOADS LIST
+============================================================
+
+File: `app/app/loads/page.tsx`
+
+Goal: show a list of loads for broker/dispatcher.
+
+UI requirements:
+- Page title: “Loads”.
+- Top toolbar:
+  - Button “New load” → navigates to `/app/loads/new`.
+  - Optional filters (status, search by load number or city) – can be simple placeholders for now.
+- Use either a table or card list (table is fine on desktop).
+
+Columns to show:
+- Load #
+- Broker
+- Shipper
+- Carrier
+- Origin (city, state from first pickup stop)
+- Destination (city, state from last delivery stop)
+- Status
+- Rate (if present)
+- Driver (driver.name if assigned)
+- Customer tracking (icon/button to copy link)
+- Last update / lastPingAt (if present)
+
+Data source:
+- For now, call `getLoads()` from the mock module on the server side:
+  - Use an async server component or a simple `const loads = await getLoads();`.
+  - DO NOT call external APIs yet.
+
+Click behaviour:
+- Clicking a row navigates to `/app/loads/[id]` for that load.
+
+Implement copy behavior for tracking links:
+- If `load.customerTrackingLink` exists, show a small icon/button “Copy”.
+- On click, use `navigator.clipboard.writeText(...)` in a client component.
+- If no link, show “—”.
+
+Note: split server/client correctly:
+- Use a server component for the page that passes data into a client component for the table if you need clipboard / interactions.
+
+Add `// TODO: replace getLoads() with fetch from backend API` at the data access point.
+
+============================================================
+PAGE 2: /app/loads/new – CREATE LOAD FORM
+============================================================
+
+File: `app/app/loads/new/page.tsx`
+
+Goal: allow broker/dispatcher to create a simple load with:
+- General info
+- Route (pickup and delivery stops)
+- Optional driver info
+
+Form sections:
+
+1) General
+   - Broker name (text)
+   - Shipper name (text)
+   - Carrier name (text)
+   - Customer reference (text, optional)
+   - Internal reference (text, optional)
+   - Equipment type (select: e.g. "VAN", "REEFER", "FLATBED")
+   - Rate amount (number, optional)
+   - Rate currency (text, default "USD")
+
+2) Route
+   - Pickup (Stop 1)
+     - Facility name
+     - Address line 1
+     - City
+     - State
+     - ZIP
+     - Time window from (datetime-local)
+     - Time window to (datetime-local)
+   - Delivery (Stop 2)
+     - Same set of fields.
+
+3) Driver (optional)
+   - Driver name
+   - Phone
+   - Truck #
+   - Trailer #
+
+Implementation hints:
+- This page SHOULD BE a **client component** (form with local state).
+- Use React Hook Form or basic useState – whichever is already used in project; if nothing is used, basic controlled inputs are fine.
+- On submit:
+  - Construct a `Load`-compatible object (without id/loadNumber; those will be generated).
+  - Call a simple API route OR the mock `createLoad()` helper.
+
+Option A (recommended for clarity now):
+- Create an API route: `app/api/loads/route.ts`.
+- Implement:
+  - `POST` handler that:
+    - reads request JSON,
+    - calls `createLoad(input)` in the mock module,
+    - returns created `Load` as JSON.
+- In the form, submit via `fetch("/api/loads", { method: "POST", body: JSON.stringify(...) })`.
+- On success, `router.push("/app/loads/" + createdLoad.id)`.
+
+Option B:
+- For maximum simplicity, import `createLoad()` directly into the page as a server action.
+- If you do this, respect the current project pattern (if server actions are already used).
+
+Add `// TODO: validate fields more strictly & connect to real backend` near form handlers.
+
+============================================================
+PAGE 3: /app/loads/[id] – LOAD DETAILS
+============================================================
+
+File: `app/app/loads/[id]/page.tsx`
+
+Goal: show all details for one load and provide two perspectives:
+
+- “Commercial info & tracking” (broker view)
+- “Driver assignment” (dispatcher view)
+
+We do NOT implement real role-based access yet. Just show both blocks for now.
+
+Data:
+- Use `getLoadById(params.id)` from the mock data on the server side.
+
+Layout:
+
+Top section (header):
+- `Load #LD-2025-001`
+- Status badge (PLANNED / IN_TRANSIT / DELIVERED / CANCELLED) with color coding.
+- Broker, Shipper, Carrier in a small “chip” row.
+
+Route overview:
+- A small card displaying:
+
+  Stop 1 – Pickup
+    - Facility name
+    - City, State
+    - addressLine1
+    - windowFrom – windowTo
+
+  Stop 2 – Delivery
+    - Same fields
+
+(You can reuse styling patterns from `/driver` Route overview, but simplified for desktop.)
+
+Commercial info (broker view):
+- Card titled “Commercial info”
+  - Rate: `rateAmount rateCurrency` or “—” if empty
+  - Customer reference
+  - Internal reference
+
+Tracking links:
+- Card titled “Tracking links”
+  - Customer tracking:
+    - If `customerTrackingLink` exists: show full or truncated URL + “Copy” button.
+    - Else: show button “Generate customer link” that for now just calls a stub TODO function.
+  - Driver tracking:
+    - If `driverTrackingLink` exists: show “Driver link” + Copy.
+    - Else: show button “Generate driver link” with stub TODO.
+
+Add `// TODO: wire generate link buttons to backend API that creates secure tokens` in handlers.
+
+Driver assignment (dispatcher view):
+- Card titled “Driver”
+  - If `driver` exists:
+    - Name, phone
+    - Truck #, Trailer #
+  - A button “Edit driver”.
+  - On click:
+    - For now, open a simple inline form (or modal) with fields:
+      - Name, phone, truckNumber, trailerNumber.
+    - On submit, call a mock `updateLoadDriver(loadId, driverUpdate)` helper that updates `mockLoads` in memory (or call a `PATCH /api/loads/:id` route if you implement one).
+
+You do NOT need to show the map yet or Arrived/Departed buttons (that will live in the driver zone). This detail page is purely **control-panel style**.
+
+============================================================
+API ROUTES (MINIMAL MOCK)
+============================================================
+
+Implement an API route namespace for loads, consistent with current project conventions. If nothing exists yet, do:
+
+File: `app/api/loads/route.ts`:
+- `GET` → returns `mockLoads`.
+- `POST` → creates a new load, generates:
+  - `id` (e.g. `ld_${Date.now()}`),
+  - `loadNumber` (e.g. `LD-${new Date().getFullYear()}-${sequence}`),
+  - `status = "PLANNED"`,
+  - `customerTrackingLink = null`,
+  - `driverTrackingLink = null`.
+
+File: `app/api/loads/[id]/route.ts`:
+- `GET` → returns a single load by id.
+- `PATCH` → accepts partial updates, e.g. driver info, status etc. (use only what is needed now, especially driver updates).
+
+All of these should operate over the same `mockLoads` store. For now, in-memory is acceptable with clear comments:
+
+// NOTE: This is a temporary in-memory store for PingPoint loads.
+// TODO: replace with real persistence (DB or AgentOS backend).
+
+============================================================
+VISUAL STYLE & REUSE
+============================================================
+
+- Use the same color palette and typography as the existing `/driver` mini-app (dark background, neon/arcade vibes if present).
+- Reuse any existing “card”, “badge”, and “button” components found in the repo:
+  - Search for common UI components like `Card`, `Badge`, `Button`, etc.
+  - Prefer composition over creating totally new styles.
+- Only create new components if there is no shared one that fits.
+
+============================================================
+FINAL CHECKLIST
+============================================================
+
+Before finishing:
+
+1. Ensure `/driver/*` routes still work exactly as before – NO runtime errors or style breakage.
+2. Confirm new routes exist and render:
+   - `/app/loads` – list with at least one mock load.
+   - `/app/loads/new` – form that creates a load and redirects to details.
+   - `/app/loads/[id]` – details page showing:
+     - general info,
+     - route (pickup + delivery),
+     - commercial info & tracking links,
+     - driver block.
+3. All TypeScript errors in new code are fixed.
+4. All mock API handlers have clear `// TODO` notes about replacing mock data with real backend.
+
+Apply these changes now to the existing PingPoint project on Replit, keeping edits minimal, consistent, and non-breaking.
