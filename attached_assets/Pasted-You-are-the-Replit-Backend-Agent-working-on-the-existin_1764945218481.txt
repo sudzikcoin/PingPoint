@@ -1,0 +1,119 @@
+You are the Replit Backend Agent working on the existing `agentos-tracking-core` project.
+
+GOAL: Adjust the header on the **driver dashboard page** (`/driver`, file `src/app/driver/page.tsx`) to a minimal dark bar with the new brand text **“PingPoint by SuVerse labs”**, instead of the current wide silver “metal” header.
+
+We want:
+- NO silver/metal gradient at the top.
+- Header uses the same dark background color as the app.
+- Header is visually slimmer (less vertical height) than the previous bar.
+- Centered text:
+  - Main: “PingPoint”
+  - Secondary: “by SuVerse labs” (smaller, on the same line or just after “PingPoint”).
+- “PingPoint” must be visually larger/stronger than “by SuVerse labs”.
+
+Do not change any backend logic or routing; this is a pure UI/layout change.
+
+────────────────────────
+1. REMOVE THE SILVER METAL HEADER
+────────────────────────
+
+In `src/app/driver/page.tsx`:
+
+1) Find the header block you previously created using classes like:
+   - `metal-header`
+   - `metal-engraved-main`
+   - `metal-engraved-sub`
+   with text “TRACKING CORE / BY SUVVERSE LABS” (or similar).
+
+2) Remove this header implementation entirely, and replace it with a simpler dark header described in the next section.
+
+If there is still any old “My Loads / DRIVER: JOHN DOE” header, remove that too. We only want the new PingPoint header at the top.
+
+────────────────────────
+2. ADD A NEW DARK HEADER BAR WITH “PINGPOINT BY SUVVERSE LABS”
+────────────────────────
+
+Still in `src/app/driver/page.tsx`, at the top of the page content (just before the Today/Upcoming/History tabs), create a new header like this (adapt classNames to the file’s structure):
+
+<header className="w-full mb-4">
+  <div
+    className="
+      flex items-center justify-center
+      px-4 py-3
+      rounded-b-2xl
+      bg-brand-bg
+      border-b border-brand-border/70
+    "
+  >
+    <h1 className="text-sm sm:text-base md:text-lg font-semibold tracking-[0.25em] uppercase text-brand-text/80 text-center">
+      <span className="text-brand-text">
+        PingPoint
+      </span>
+      <span className="ml-2 text-[0.65em] font-medium text-brand-muted">
+        by SuVerse labs
+      </span>
+    </h1>
+  </div>
+</header>
+
+Key points:
+- Use the same background color as the app (`bg-brand-bg`). If for some reason `bg-brand-bg` is not available, fall back to the current dark body color (e.g. `bg-[#050608]`).
+- The bar should be visually “slim”: `py-3` is enough, no huge height.
+- Slight bottom border: `border-b border-brand-border/70` to separate it from the tabs.
+- Rounded bottom corners only: `rounded-b-2xl` for a subtle capsule feel.
+- Centered text (both horizontally and vertically).
+
+Typography:
+- “PingPoint” is the main word:
+  - Keep it at base font size (text-sm/text-base/text-lg, depending on breakpoint).
+  - Slightly brighter: `text-brand-text`.
+- “by SuVerse labs” is smaller:
+  - Rendered as a `<span>` with `text-[0.65em]` so it is visibly smaller.
+  - Color: `text-brand-muted`.
+- Whole `<h1>` uses `tracking-[0.25em]` and `uppercase` to give a “branded” feel, but this can be tweaked according to the current design.
+
+────────────────────────
+3. CLEAN UP OLD METAL STYLES (OPTIONAL BUT PREFERRED)
+────────────────────────
+
+Open `src/app/globals.css`:
+
+- If there are custom classes like `.metal-header`, `.metal-engraved-main`, `.metal-engraved-sub` created for the silver bar and they are no longer used anywhere in the app, you can safely delete those class definitions to avoid confusion.
+
+Do NOT remove any other global styles; only delete these unused metal-specific classes.
+
+────────────────────────
+4. ENSURE TABS COME RIGHT AFTER THE NEW HEADER
+────────────────────────
+
+Make sure the existing tab component (Today / Upcoming / History) is rendered immediately after the new `<header>`.
+
+Example high-level structure of the page:
+
+<div className="...">
+  <header> ... PingPoint by SuVerse labs ... </header>
+
+  <section className="mt-3">
+    {/* existing tab switcher & loads list */}
+  </section>
+</div>
+
+Do not touch the tab logic or data fetching, only spacing if needed (`mt-3` / `mb-4` etc.).
+
+────────────────────────
+5. FINAL CHECK
+────────────────────────
+
+After changes:
+
+1) Open `/driver` in Preview:
+   - There is no silver/metal gradient header.
+   - The top of the screen shows a slim dark bar with centered text:
+     **PingPoint** (larger) and **by SuVerse labs** (smaller) on the same line.
+   - The header background blends with the app background; it looks like a subtle dark top bar with a bottom border.
+
+2) The tabs (Today / Upcoming / History) appear directly below this header, and the rest of the driver UI works as before.
+
+3) No backend behavior has changed; this is a purely visual update.
+
+END OF INSTRUCTIONS

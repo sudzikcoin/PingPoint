@@ -17,24 +17,24 @@ export default function DriverDashboard() {
   return (
     <div className="min-h-screen bg-brand-bg text-brand-text pb-20 font-sans">
       {/* Header */}
-      <header className="w-full mb-3">
+      <header className="w-full mb-4">
         <div
           className="
-            metal-header
-            mx-[-1rem]
-            px-4
-            py-5
-            rounded-b-3xl
-            flex flex-col items-center justify-center
-            shadow-pill-dark/50
+            flex items-center justify-center
+            px-4 py-3
+            rounded-b-2xl
+            bg-brand-bg
+            border-b border-brand-border/70
           "
         >
-          <h1 className="metal-engraved-main text-xl sm:text-2xl md:text-3xl text-center">
-            TRACKING CORE
+          <h1 className="text-sm sm:text-base md:text-lg font-semibold tracking-[0.25em] uppercase text-brand-text/80 text-center">
+            <span className="text-brand-text">
+              PingPoint
+            </span>
+            <span className="ml-2 text-[0.65em] font-medium text-brand-muted">
+              by SuVerse labs
+            </span>
           </h1>
-          <p className="metal-engraved-sub mt-1 text-[10px] sm:text-xs text-center">
-            BY SUVERSE LABS
-          </p>
         </div>
       </header>
 
