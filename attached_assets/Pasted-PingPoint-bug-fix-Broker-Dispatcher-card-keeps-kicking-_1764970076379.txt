@@ -1,0 +1,123 @@
+PingPoint bug fix – Broker/Dispatcher card keeps kicking back to intro animation
+
+Context:
+- After converting the project to a Full-Stack App, the landing page at `/` shows:
+  1) Intro Pac-Man style animation (truck + ghosts, “LOADING ASSETS…”).
+  2) Then the console selector with two cards: “Broker / Dispatcher” and “Driver”.
+- When I tap **Broker / Dispatcher**:
+  - The Broker console briefly opens.
+  - After ~3 seconds I am bounced back to the intro animation + console selector.
+- This looks like the intro animation logic (timer or redirect) is still active even after navigation to the Broker console.
+
+Goal:
+- Fix navigation so that:
+  - Tapping **Broker / Dispatcher** takes me to the Broker console page and keeps me there.
+  - The Pac-Man intro plays only on the very first visit to `/` (or can be skipped entirely after the first run).
+  - No automatic redirect back to `/` or re-showing the animation after I’ve chosen a console.
+
+Please implement the following changes with minimal edits, preserving all existing Arcade 90s visuals and components.
+
+============================================================
+1. FIND WHERE INTRO ANIMATION AND REDIRECT LOGIC LIVE
+============================================================
+
+1.1. Locate the intro/landing components:
+- Look for components and files with names similar to:
+  - `IntroAnimationView`, `LaunchScreen`, `LandingIntro`, `ArcadeIntro`, etc.
+- Identify:
+  - Where the “PINGPOINT BY SUVERSE LABS” intro with the truck + ghosts is rendered.
+  - Where the “SELECT YOUR CONSOLE / Broker / Dispatcher / Driver” screen is rendered.
+
+1.2. Check how the intro switches screens:
+- Find any `setTimeout`, `useEffect`, or timer that:
+  - Changes a local `phase`/`step` state like `"intro" → "selector"`.
+  - Or calls `router.push("/")` after a delay.
+- Also check if the intro is placed in a **layout** (e.g. root layout) so that it wraps all routes, including `/app/loads`.
+
+============================================================
+2. ENSURE INTRO ONLY AFFECTS THE ROOT ("/") PAGE
+============================================================
+
+2.1. If the intro is rendered from a global layout:
+- Move the intro logic so it only renders on the `/` page component.
+  - Example idea:
+    - In `app/page.tsx` (or equivalent), keep:
+      - State: `phase: "intro" | "selector"`.
+      - `useEffect` with timer to switch `phase` from `"intro"` to `"selector"`.
+    - Do **not** include the intro inside `layout.tsx` that wraps `/app/*` routes.
+
+2.2. If you must keep intro in a shared layout:
+- Add a guard to avoid affecting non-root routes:
+  - Use router pathname or segment:
+    - If current path is not `/`, do **not** render intro and do **not** run its timers.
+  - Concretely:
+    - If `router.pathname !== "/"` (or equivalent in App Router), return `children` directly with no intro overlay or redirects.
+
+2.3. Remove any redirect that forces navigation back to `/`:
+- If there is any code like:
+  - `router.push("/")` after a timeout, or
+  - `router.replace("/")` in a timer,
+  - or a global `useEffect` that fires on every render and sends user back to `/`,
+  then:
+    - Restrict it so it runs **only** when the current route is `/` and phase needs to change from intro → selector.
+    - Under no circumstances should it run while user is on `/app/loads` or other console routes.
+
+============================================================
+3. REMEMBER THAT INTRO SHOULD RUN ONLY ON FIRST VISIT
+============================================================
+
+3.1. Add a simple “hasSeenIntro” flag in localStorage:
+- On the root page (`/`) mount:
+  - Read `localStorage.getItem("pingpoint_has_seen_intro")`.
+  - If value is `"true"`:
+    - Skip the intro entirely and go straight to the console selector (no 3-second animation).
+  - If not present:
+    - Show intro once, then after the 3-second timer:
+      - Switch `phase` to `"selector"`.
+      - Set `localStorage.setItem("pingpoint_has_seen_intro", "true")`.
+
+3.2. Do NOT reset this flag when navigating to Broker or Driver console.
+
+Result:
+- First visit: user sees the Pac-Man animation, then the console selector.
+- Subsequent visits / reloads: user sees the selector immediately (no waiting, no flashing).
+
+============================================================
+4. FIX BROKER / DISPATCHER CARD ONCLICK
+============================================================
+
+4.1. Find the card component for **Broker / Dispatcher**:
+- It probably calls `router.push("/app/loads")` (or a similar broker route).
+
+4.2. Ensure there are no side effects here that restart the intro:
+- The click handler should ONLY do route navigation.
+- Remove any code here that:
+  - Changes a global intro state back to `"intro"`,
+  - Sets a timer that manipulates the root page,
+  - Or touches `hasSeenIntro` (we want it to stay `"true"`).
+
+4.3. Confirm that when you click the card:
+- The route becomes `/app/loads` (or the broker console path).
+- No intro timers or overlays are still running on this route.
+
+============================================================
+5. VERIFY THE FIX
+============================================================
+
+After the code changes:
+
+1. From a fresh reload (clear localStorage to test once):
+   - Go to `/`.
+   - See the intro animation for ~3 seconds.
+   - It transitions to the console selector.
+   - Click **Broker / Dispatcher**:
+     - Broker console opens and STAYS open.
+     - You are NOT sent back to the intro after 3 seconds.
+
+2. Reload the app (with localStorage preserved):
+   - You should see the console selector (no intro delay).
+   - Clicking Broker / Dispatcher again takes you directly to the console and no longer bounces back.
+
+3. Make sure the Driver card behaves similarly, without any jump back to intro.
+
+Please implement these changes now, keeping the existing visual design and animation, but ensuring the intro logic is scoped only to the root `/` page and never overrides navigation to the Broker/Dispatcher or Driver consoles.
