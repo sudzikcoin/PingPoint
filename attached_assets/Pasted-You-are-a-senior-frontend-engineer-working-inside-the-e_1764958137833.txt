@@ -1,0 +1,115 @@
+You are a senior frontend engineer working inside the existing PingPoint frontend project on Replit.
+
+TASK SUMMARY:
+1) On the landing page (`/`), rename the “Dispatcher” card to **“Broker / Dispatcher”**.
+2) On the loads list page (`/app/loads`), add a new **neon blue button “Upload Rate Confirmation”** next to the existing yellow **“New Load”** button.
+
+Keep all other behavior and styles intact (including navigation, themes, and animations). Only adjust the specified UI elements.
+
+============================================================
+1. UPDATE ROLE CARD TITLE ON LANDING PAGE ("/")
+============================================================
+
+Locate the component for the landing “Select your console” screen. It should be rendered from `app/page.tsx` (or a component imported into it) and currently has two cards: one for Dispatcher and one for Driver.
+
+The Dispatcher card likely has something like:
+
+- Title text: `Dispatcher`
+- Description: “Manage loads, assign drivers, and track fleet operations from the command center.”
+- Click handler / Link: navigates to `/app/loads` (or `/app/loads?role=dispatcher`).
+
+Make the following changes:
+
+1) Change the card title from `"Dispatcher"` to `"Broker / Dispatcher"` (or `"Broker-Dispatcher"` if title style prefers no spaces around the slash, but use `"Broker / Dispatcher"` in the JSX text).
+
+2) Optionally, update the subtitle to reflect the combined role, e.g.:
+
+   - Old: “Manage loads, assign drivers, and track fleet operations from the command center.”
+   - New: “Create loads, manage rates, assign drivers, and track operations from the command console.”
+
+3) Do NOT change navigation logic:
+   - Card should still navigate to the same route as before (`/app/loads` or `/app/loads?role=dispatcher`). If query `role` is used, you can change the value to `"broker-dispatcher"` or leave as-is and add a `// TODO` note:
+
+   ```tsx
+   // TODO: refine role handling; current card represents combined Broker / Dispatcher console.
+
+Ensure visual styling (icons, arcade theme, hover effects) remains the same; only the text content changes.
+
+============================================================
+2. ADD “UPLOAD RATE CONFIRMATION” BUTTON ON /app/loads
+
+Open the loads index page: app/app/loads/page.tsx (or the equivalent route). At the top of the page, there should be a header area with:
+	•	Title: “Loads”
+	•	Subtitle: “Manage shipments and tracking”
+	•	Actions row with:
+	•	A “Filter” button.
+	•	A yellow “New Load” button (currently the main CTA).
+
+Modify this actions row as follows:
+	1.	Keep the existing yellow “New Load” button unchanged in text and behavior.
+	2.	Directly next to “New Load”, add a new secondary neon-blue button with text:
+	•	"Upload Rate Confirmation"
+This button should:
+	•	Share the same general sizing and typography as “New Load”.
+	•	Use a blue neon style consistent with the Arcade theme:
+	•	Example Tailwind style (adapt to existing design tokens/components):
+	•	bg-cyan-500 / bg-sky-500
+	•	hover:bg-cyan-400
+	•	shadow-[0_0_20px_rgba(34,211,238,0.6)] (or reuse existing glow class).
+	•	Visibly read as a secondary action:
+	•	Place it to the RIGHT of “New Load” on desktop.
+	•	On mobile (small screens), it can wrap to the next line below; use flex with gap-3 or similar.
+	3.	Behavior for now:
+	•	Implement a placeholder onClick handler:
+	•	For example, open a simple modal or trigger console.log("TODO: Upload Rate Confirmation").
+	•	Or navigate to a future route /app/rate-confirmation/upload if you want to stub it out.
+	•	Add a clear // TODO comment where future upload logic will go:
+
+// TODO: Implement Rate Confirmation upload flow (file picker, validation, backend upload).
+
+
+
+Implementation hints for the button:
+	•	If there is a shared Button or PillButton component:
+	•	Use it and pass variant="secondary" or override the className to blue neon styles.
+	•	Example JSX inside the actions row (pseudo):
+
+<div className="flex flex-wrap items-center gap-3">
+  <Button /* Filter */>Filter</Button>
+
+  <Button /* New Load (existing styles) */>
+    + New Load
+  </Button>
+
+  <Button
+    type="button"
+    onClick={handleUploadRateConfirmation}
+    className="bg-cyan-500 text-slate-950 font-semibold px-4 py-2 rounded-xl shadow-[0_0_20px_rgba(34,211,238,0.6)] hover:bg-cyan-400 active:scale-95 transition"
+  >
+    Upload Rate Confirmation
+  </Button>
+</div>
+
+
+
+Ensure that:
+	•	The layout does not break on mobile (use flex + wrap).
+	•	The new button works in both Arcade 90s and Premium Dark themes (colors may appear slightly different, but still readable).
+
+============================================================
+3. CHECKS
+
+After implementing:
+	1.	Go to /:
+	•	The role card that previously said “Dispatcher” must now show “Broker / Dispatcher” with updated subtitle.
+	•	Clicking it should still open the same console page.
+	2.	Go to /app/loads:
+	•	At the top, you should see:
+	•	“Filter” button.
+	•	Yellow “New Load” button.
+	•	Neon-blue “Upload Rate Confirmation” button.
+	•	Clicking “New Load” should behave exactly as before.
+	•	Clicking “Upload Rate Confirmation” should trigger the placeholder logic (console log or modal) with TODO comment in code.
+
+Keep all other behavior unchanged and ensure there are no TypeScript or runtime errors.
+

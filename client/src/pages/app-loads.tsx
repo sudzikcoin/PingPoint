@@ -35,7 +35,7 @@ export default function AppLoads() {
               Manage shipments and tracking
             </p>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-3">
             <Button 
               variant="outline" 
               className={cn(theme === "arcade90s" ? "border-arc-border text-arc-muted bg-arc-bg rounded-none hover:text-arc-text" : "border-brand-border bg-brand-card text-brand-muted hover:text-white")}
@@ -49,6 +49,24 @@ export default function AppLoads() {
             >
               <Plus className="w-4 h-4 mr-2" />
               New Load
+            </Button>
+            
+            {/* TODO: Implement Rate Confirmation upload flow (file picker, validation, backend upload). */}
+            <Button
+              type="button"
+              onClick={() => {
+                // Placeholder logic
+                console.log("TODO: Upload Rate Confirmation");
+                toast.info("Upload Rate Confirmation feature coming soon!");
+              }}
+              className={cn(
+                "font-bold px-4 py-2 transition-all active:scale-95",
+                theme === "arcade90s"
+                  ? "bg-cyan-500 text-black rounded-none border border-cyan-400 shadow-[0_0_20px_rgba(34,211,238,0.6)] hover:bg-cyan-400 arcade-pixel-font text-xs"
+                  : "bg-cyan-600 text-white hover:bg-cyan-500 shadow-md"
+              )}
+            >
+              Upload Rate Confirmation
             </Button>
           </div>
         </div>

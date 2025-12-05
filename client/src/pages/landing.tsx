@@ -121,9 +121,9 @@ function RoleSelectorView() {
               <div className="w-12 h-12 rounded-full bg-[#facc15]/10 flex items-center justify-center text-[#facc15] mb-4 group-hover:scale-110 transition-transform duration-300">
                 <Radio className="w-6 h-6" />
               </div>
-              <h3 className="text-2xl font-bold text-white mb-2 group-hover:text-[#facc15] transition-colors">Dispatcher</h3>
+              <h3 className="text-2xl font-bold text-white mb-2 group-hover:text-[#facc15] transition-colors">Broker / Dispatcher</h3>
               <p className="text-[#9ca3af] text-sm leading-relaxed">
-                Manage loads, assign drivers, and track fleet operations from the command center.
+                Create loads, manage rates, assign drivers, and track operations from the command console.
               </p>
               <div className="mt-6 flex items-center text-[#facc15] text-xs font-bold tracking-wider uppercase opacity-0 group-hover:opacity-100 transition-all transform translate-y-2 group-hover:translate-y-0">
                 Enter Console <span className="ml-2">→</span>
