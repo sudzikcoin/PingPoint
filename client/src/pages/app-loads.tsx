@@ -121,31 +121,56 @@ export default function AppLoads() {
                   ? "bg-arc-panel border-arc-secondary text-arc-text rounded-none shadow-[0_0_20px_rgba(34,211,238,0.3)]" 
                   : "bg-brand-card border-brand-border text-brand-text"
               )}>
-                {theme === "arcade90s" && <DropdownMenuLabel className="text-arc-muted arcade-pixel-font text-[10px] tracking-widest uppercase">System Menu</DropdownMenuLabel>}
-                {!theme && <DropdownMenuLabel>My Account</DropdownMenuLabel>}
+                <DropdownMenuLabel className={cn(theme === "arcade90s" ? "text-arc-muted arcade-pixel-font text-[10px] tracking-widest uppercase" : "text-brand-muted")}>System Menu</DropdownMenuLabel>
                 <DropdownMenuSeparator className={cn(theme === "arcade90s" ? "bg-arc-border" : "bg-brand-border")} />
                 
-                <DropdownMenuItem className={cn(theme === "arcade90s" ? "focus:bg-arc-secondary/20 focus:text-arc-secondary arcade-pixel-font text-xs cursor-pointer" : "cursor-pointer")}>
+                <DropdownMenuItem 
+                  onClick={() => setLocation("/app/loads")}
+                  className={cn(theme === "arcade90s" ? "focus:bg-arc-secondary/20 focus:text-arc-secondary arcade-pixel-font text-xs cursor-pointer" : "cursor-pointer")}
+                >
                   <Truck className="mr-2 h-4 w-4" />
-                  <span>Loads</span>
+                  <span>Your Loads</span>
                 </DropdownMenuItem>
                 
-                {/* TODO: Implement real settings page */}
                 <DropdownMenuItem 
-                  onClick={() => toast.info("Broker settings will live here (profile, notifications, billing).")}
+                  onClick={() => setLocation("/app/billing")}
+                  className={cn(theme === "arcade90s" ? "focus:bg-arc-secondary/20 focus:text-arc-secondary arcade-pixel-font text-xs cursor-pointer" : "cursor-pointer")}
+                >
+                  <Settings className="mr-2 h-4 w-4" />
+                  <span>Billing</span>
+                </DropdownMenuItem>
+                
+                <DropdownMenuItem 
+                  onClick={() => setLocation("/app/settings")}
                   className={cn(theme === "arcade90s" ? "focus:bg-arc-secondary/20 focus:text-arc-secondary arcade-pixel-font text-xs cursor-pointer" : "cursor-pointer")}
                 >
                   <Settings className="mr-2 h-4 w-4" />
                   <span>Settings</span>
                 </DropdownMenuItem>
                 
-                {/* TODO: Implement integrations page */}
                 <DropdownMenuItem 
-                  onClick={() => toast.info("Future integrations with TMS, telematics and AgentOS will live here.")}
+                  onClick={() => setLocation("/app/integrations")}
                   className={cn(theme === "arcade90s" ? "focus:bg-arc-secondary/20 focus:text-arc-secondary arcade-pixel-font text-xs cursor-pointer" : "cursor-pointer")}
                 >
                   <CloudLightning className="mr-2 h-4 w-4" />
                   <span>Integrations</span>
+                </DropdownMenuItem>
+
+                <DropdownMenuSeparator className={cn(theme === "arcade90s" ? "bg-arc-border" : "bg-brand-border")} />
+                
+                <DropdownMenuItem 
+                  onClick={async () => {
+                    try {
+                      await api.brokers.logout();
+                      setLocation("/");
+                    } catch (e) {
+                      toast.error("Failed to logout");
+                    }
+                  }}
+                  className={cn(theme === "arcade90s" ? "focus:bg-arc-secondary/20 focus:text-arc-secondary arcade-pixel-font text-xs cursor-pointer text-red-400" : "cursor-pointer text-red-400")}
+                >
+                  <X className="mr-2 h-4 w-4" />
+                  <span>Switch Workspace / Logout</span>
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>

@@ -50,6 +50,19 @@ export const api = {
       }
       
       return res.json();
+    },
+
+    logout: async (): Promise<{ ok: boolean }> => {
+      const res = await fetch('/api/brokers/logout', {
+        method: 'POST',
+        credentials: 'include',
+      });
+      
+      if (!res.ok) {
+        throw new Error('Failed to logout');
+      }
+      
+      return res.json();
     }
   },
   

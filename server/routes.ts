@@ -128,6 +128,17 @@ export async function registerRoutes(
     }
   });
 
+  // POST /api/brokers/logout
+  app.post("/api/brokers/logout", async (req: Request, res: Response) => {
+    try {
+      clearBrokerSession(res);
+      return res.json({ ok: true });
+    } catch (error) {
+      console.error("Error in /api/brokers/logout:", error);
+      return res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
   // GET /api/brokers/me
   app.get("/api/brokers/me", async (req: Request, res: Response) => {
     try {
