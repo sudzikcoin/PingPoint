@@ -163,10 +163,21 @@ function RoleSelectorView() {
 }
 
 export default function LandingPage() {
-  const [showIntro, setShowIntro] = useState(true);
+  // Check localStorage to skip intro on repeat visits
+  const [showIntro, setShowIntro] = useState(() => {
+    if (typeof window !== 'undefined') {
+      return localStorage.getItem("pingpoint_has_seen_intro") !== "true";
+    }
+    return true;
+  });
+
+  const handleIntroComplete = () => {
+    localStorage.setItem("pingpoint_has_seen_intro", "true");
+    setShowIntro(false);
+  };
 
   return showIntro ? (
-    <IntroAnimationView onComplete={() => setShowIntro(false)} />
+    <IntroAnimationView onComplete={handleIntroComplete} />
   ) : (
     <RoleSelectorView />
   );

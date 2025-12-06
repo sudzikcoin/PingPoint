@@ -29,7 +29,7 @@ export default function AppLoads() {
   useEffect(() => {
     const fetchData = async () => {
       try {
-        // Fetch current broker
+        // Try to fetch current broker session
         const brokerData = await api.brokers.me();
         setBroker(brokerData);
         setShowVerificationBanner(!brokerData.emailVerified);
@@ -38,16 +38,17 @@ export default function AppLoads() {
         const loadsData = await api.loads.list();
         setLoads(loadsData.items || []);
       } catch (error) {
-        console.error("Failed to fetch data:", error);
-        // If unauthorized, redirect to home
-        setLocation("/");
+        // No session - that's okay for demo, just show empty state
+        console.log("No active session - showing demo view");
+        setBroker(null);
+        setLoads([]);
       } finally {
         setLoading(false);
       }
     };
 
     fetchData();
-  }, [setLocation]);
+  }, []);
 
   const copyLink = (e: React.MouseEvent, link: string | null | undefined) => {
     e.stopPropagation();
