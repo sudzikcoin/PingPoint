@@ -1,0 +1,478 @@
+You are the Replit Agent working on the PingPoint (Broker / Dispatcher + Driver) app. Follow these instructions exactly and keep all existing styles, routing, and tracking logic. Only change what is explicitly mentioned.
+
+============================================================
+GOAL OVERVIEW
+============================================================
+1) Make the two COPY buttons in the "Tracking Links" section on the Load Details page actually copy the correct URLs (Public tracking link and Driver app link) on desktop and mobile, including iOS and inside the Replit preview.
+2) Make the "UPLOAD RATE CONFIRMATION" button fully functional:
+   – upload a PDF/image to the server,
+   – store metadata in PostgreSQL via Prisma,
+   – expose a public URL,
+   – include this URL in the load details API,
+   – allow the "Copy Rate Confirmation Link" action to copy that URL.
+
+Do not break the existing Arcade 90s theme, tracking tokens, or load creation flow.
+
+============================================================
+PART 1 – FIX TRACKING LINKS COPY BUTTONS
+============================================================
+
+1. FIND THE LOAD DETAILS COMPONENT
+----------------------------------
+Locate the React component that renders the Broker’s Load Details page (where we see "COMMERCIAL INFO", "TRACKING LINKS", "ACTIONS"). It should be something like:
+
+- `client/src/pages/app/loads/[id].tsx`
+or
+- `client/src/features/loads/LoadDetailsPage.tsx`
+or similar.
+
+This component already receives a `load` object and renders:
+- Public tracking link row (with an input and a square copy button),
+- Driver app link row (same pattern).
+
+We will only add logic here, keeping existing UI structure and styles.
+
+2. ADD IMPORTS AND STATE / REFS
+-------------------------------
+At the top of the file, ensure you import React hooks:
+
+```ts
+import React, { useRef, useState } from "react";
+
+Inside the component function (before return), add:
+
+const publicInputRef = useRef<HTMLInputElement | null>(null);
+const driverInputRef = useRef<HTMLInputElement | null>(null);
+
+const origin =
+  typeof window !== "undefined"
+    ? window.location.origin
+    : import.meta.env.VITE_APP_BASE_URL ||
+      process.env.APP_BASE_URL ||
+      "";
+
+const publicTrackingUrl = load.trackingToken
+  ? `${origin}/track/${load.trackingToken}`
+  : "";
+
+const driverAppUrl = load.driverToken
+  ? `${origin}/driver/${load.driverToken}`
+  : "";
+
+// Generic copy helper
+async function handleCopy(
+  ref: React.RefObject<HTMLInputElement>,
+  fallbackText: string,
+  label: string
+) {
+  const text = ref.current?.value || fallbackText;
+  if (!text) {
+    console.warn("[copy] no text for", label);
+    return;
+  }
+
+  try {
+    console.log("[copy] clicked", label, text);
+
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(text);
+      console.log("[copy] navigator.clipboard success:", label);
+    } else {
+      // Fallback for older browsers / iOS
+      if (ref.current) {
+        ref.current.focus();
+        ref.current.select();
+        document.execCommand("copy");
+        window.getSelection()?.removeAllRanges();
+        console.log("[copy] execCommand success:", label);
+      }
+    }
+
+    // Optional: if there is a toast system already, show a small toast here.
+  } catch (err) {
+    console.error("[copy] failed for", label, err);
+    if (ref.current) {
+      ref.current.focus();
+      ref.current.select();
+    }
+  }
+}
+
+const handleCopyPublic = () =>
+  handleCopy(publicInputRef, publicTrackingUrl, "public");
+
+const handleCopyDriver = () =>
+  handleCopy(driverInputRef, driverAppUrl, "driver");
+
+Important:
+	•	Do NOT re-declare publicTrackingUrl / driverAppUrl elsewhere. Use these values everywhere in this component.
+	•	Keep the origin logic so it works in dev and prod.
+
+	3.	WIRE REFS AND onClick IN JSX
+
+⸻
+
+In the JSX section “TRACKING LINKS”:
+
+For the Public tracking link row, make sure the input and button look like:
+
+<input
+  type="text"
+  readOnly
+  value={publicTrackingUrl}
+  ref={publicInputRef}
+  className="..." // keep existing classes
+/>
+<button
+  type="button"
+  onClick={handleCopyPublic}
+  className="..." // keep existing copy icon styles
+>
+  {/* existing copy icon */}
+</button>
+
+For the Driver app link row:
+
+<input
+  type="text"
+  readOnly
+  value={driverAppUrl}
+  ref={driverInputRef}
+  className="..."
+/>
+<button
+  type="button"
+  onClick={handleCopyDriver}
+  className="..."
+>
+  {/* existing copy icon */}
+</button>
+
+Critical:
+	•	Use type="button" for the copy buttons so they do not submit any forms.
+	•	Ensure these buttons are not wrapped in <a> or <Link> that steals the click. If they are, remove the href/to from the wrapper and let these be plain buttons with onClick only.
+
+============================================================
+PART 2 – MAKE “UPLOAD RATE CONFIRMATION” WORK
+
+We will implement:
+	•	backend endpoint with multer + Prisma,
+	•	static serving of uploaded files,
+	•	inclusion of rateConfirmationUrl in the Load Details API,
+	•	frontend upload flow and “Copy Rate Confirmation Link” logic.
+
+	4.	PRISMA MODEL (BACKEND)
+
+⸻
+
+Open prisma/schema.prisma and ensure there is a model like:
+
+model RateConfirmationFile {
+  id           String   @id @default(uuid())
+  loadId       String
+  brokerId     String
+  url          String
+  originalName String
+  mimeType     String
+  size         Int
+  createdAt    DateTime @default(now())
+
+  load   Load   @relation(fields: [loadId], references: [id])
+  broker Broker @relation(fields: [brokerId], references: [id])
+}
+
+If a similar model already exists (e.g., rate_confirmation_files), reuse it and align fields, rather than creating a duplicate.
+
+After any schema changes, run the Prisma migration command appropriate for this project (e.g. npx prisma migrate dev) and ensure PostgreSQL tables are in sync.
+	5.	STATIC FILE SERVING (BACKEND)
+
+⸻
+
+In the main server entry file (e.g. server/src/index.ts or server/src/server.ts), make sure we serve an /uploads directory statically:
+
+import express from "express";
+import path from "path";
+
+const app = express();
+
+// existing middlewares...
+
+const uploadsDir = path.join(__dirname, "..", "uploads");
+app.use("/uploads", express.static(uploadsDir));
+
+Create the folder server/uploads/rate-confirmations if it does not exist (you can create it programmatically or assume it will be created by multer).
+	6.	API ROUTE: UPLOAD RATE CONFIRMATION
+
+⸻
+
+Create or update a route file, for example server/src/routes/rateConfirmations.ts:
+
+import { Router } from "express";
+import multer from "multer";
+import path from "path";
+import { prisma } from "../prisma"; // adjust path to your prisma client
+
+const router = Router();
+
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    cb(null, path.join(__dirname, "..", "uploads", "rate-confirmations"));
+  },
+  filename: (req, file, cb) => {
+    const unique = Date.now() + "-" + Math.round(Math.random() * 1e9);
+    const ext = path.extname(file.originalname) || "";
+    cb(null, unique + ext);
+  },
+});
+
+const upload = multer({
+  storage,
+  limits: {
+    fileSize: 10 * 1024 * 1024, // 10 MB
+  },
+});
+
+router.post(
+  "/loads/:loadId/rate-confirmation",
+  upload.single("file"),
+  async (req, res) => {
+    try {
+      const { loadId } = req.params;
+      const brokerId = req.body.brokerId as string | undefined;
+      const file = req.file;
+
+      if (!file) {
+        return res.status(400).json({ error: "File is required" });
+      }
+
+      if (!brokerId) {
+        return res.status(400).json({ error: "brokerId is required" });
+      }
+
+      const relativePath = `/uploads/rate-confirmations/${file.filename}`;
+
+      const rc = await prisma.rateConfirmationFile.create({
+        data: {
+          loadId,
+          brokerId,
+          url: relativePath,
+          originalName: file.originalname,
+          mimeType: file.mimetype,
+          size: file.size,
+        },
+      });
+
+      const origin =
+        process.env.APP_BASE_URL ||
+        process.env.VITE_APP_BASE_URL ||
+        `${req.protocol}://${req.get("host")}`;
+
+      const publicUrl = `${origin}${relativePath}`;
+
+      res.json({
+        id: rc.id,
+        url: publicUrl,
+        originalName: rc.originalName,
+      });
+    } catch (err) {
+      console.error("RC upload error", err);
+      res.status(500).json({ error: "Failed to upload rate confirmation" });
+    }
+  }
+);
+
+export default router;
+
+Then, in the main server file, register this router:
+
+import rateConfirmationsRouter from "./routes/rateConfirmations";
+
+app.use("/api", rateConfirmationsRouter);
+
+	7.	INCLUDE RC URL IN LOAD DETAILS API
+
+⸻
+
+Locate the backend handler that returns a single load for the Broker console (e.g. GET /api/loads/:id). In that query, include the related RateConfirmationFile:
+
+const load = await prisma.load.findUnique({
+  where: { id },
+  include: {
+    // existing relations...
+    rateConfirmationFiles: {
+      orderBy: { createdAt: "desc" },
+      take: 1,
+    },
+  },
+});
+
+Then compute a rateConfirmationUrl:
+
+let rateConfirmationUrl: string | null = null;
+
+if (load && load.rateConfirmationFiles && load.rateConfirmationFiles.length > 0) {
+  const rc = load.rateConfirmationFiles[0];
+  const origin =
+    process.env.APP_BASE_URL ||
+    process.env.VITE_APP_BASE_URL ||
+    `${req.protocol}://${req.get("host")}`;
+  rateConfirmationUrl = `${origin}${rc.url}`;
+}
+
+res.json({
+  ...load,
+  rateConfirmationUrl,
+});
+
+Ensure the frontend Load Details type understands this new rateConfirmationUrl field (update TypeScript types if needed).
+	8.	FRONTEND API HELPER FOR RC UPLOAD
+
+⸻
+
+Create or update client/src/api/rateConfirmations.ts:
+
+export async function uploadRateConfirmation(
+  loadId: string,
+  brokerId: string,
+  file: File
+) {
+  const formData = new FormData();
+  formData.append("file", file);
+  formData.append("brokerId", brokerId);
+
+  const res = await fetch(`/api/loads/${loadId}/rate-confirmation`, {
+    method: "POST",
+    body: formData,
+  });
+
+  if (!res.ok) {
+    throw new Error("Failed to upload rate confirmation");
+  }
+
+  return (await res.json()) as {
+    id: string;
+    url: string;
+    originalName: string;
+  };
+}
+
+	9.	FRONTEND: ACTIVATE “UPLOAD RATE CONFIRMATION” BUTTON
+
+⸻
+
+Back in the Load Details component:
+
+Add the following state and ref near the previous additions:
+
+const fileInputRef = useRef<HTMLInputElement | null>(null);
+const [isUploadingRc, setIsUploadingRc] = useState(false);
+const [rateConfirmationUrl, setRateConfirmationUrl] = useState<string | null>(
+  load.rateConfirmationUrl ?? null
+);
+
+Add handlers:
+
+const handleUploadRcClick = () => {
+  if (fileInputRef.current) {
+    fileInputRef.current.click();
+  }
+};
+
+const handleRcFileChange: React.ChangeEventHandler<HTMLInputElement> = async (
+  e
+) => {
+  const file = e.target.files?.[0];
+  if (!file) return;
+
+  try {
+    setIsUploadingRc(true);
+    const brokerId = load.brokerId; // use the brokerId associated with this load
+    const result = await uploadRateConfirmation(load.id, brokerId, file);
+    setRateConfirmationUrl(result.url);
+    console.log("RC uploaded:", result);
+  } catch (err) {
+    console.error("RC upload failed", err);
+    // If you have a toast system, show an error toast
+  } finally {
+    setIsUploadingRc(false);
+    if (e.target) {
+      e.target.value = "";
+    }
+  }
+};
+
+In the JSX where the UPLOAD RATE CONFIRMATION button is rendered (under “Your Loads” / “Actions” area in the Broker console):
+	•	Ensure there is a hidden <input>:
+
+<input
+  ref={fileInputRef}
+  type="file"
+  accept="application/pdf,image/*"
+  className="hidden"
+  onChange={handleRcFileChange}
+/>
+
+	•	Make the button call handleUploadRcClick:
+
+<button
+  type="button"
+  onClick={handleUploadRcClick}
+  disabled={isUploadingRc}
+  className="..." // keep current neon blue styles
+>
+  {isUploadingRc ? "Uploading..." : "UPLOAD RATE CONFIRMATION"}
+</button>
+
+	10.	FRONTEND: “COPY RATE CONFIRMATION LINK” ACTION
+
+⸻
+
+Use the same copy helper pattern as in Part 1 (either reuse handleCopy with a ref, or use navigator.clipboard.writeText directly).
+
+For example:
+
+const handleCopyRcLink = async () => {
+  if (!rateConfirmationUrl) return;
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(rateConfirmationUrl);
+      console.log("[copy] RC link copied");
+    }
+  } catch (err) {
+    console.error("[copy] RC link failed", err);
+  }
+};
+
+In the “ACTIONS” section, update the Copy Rate Confirmation Link row:
+
+<button
+  type="button"
+  onClick={handleCopyRcLink}
+  className="..." // existing styles for this action row
+  disabled={!rateConfirmationUrl}
+>
+  Copy Rate Confirmation Link
+</button>
+
+When rateConfirmationUrl is null (no file uploaded), the button should be disabled or clearly indicate that there is no RC yet.
+
+============================================================
+PART 3 – QUICK MANUAL TEST PLAN
+	1.	Create a new load via the broker flow (starting from the landing console selection → Broker / Dispatcher → New Load).
+	2.	Open the new load’s details page in the Broker console.
+	3.	In “Tracking Links”:
+– Click the Public copy button, then paste into a text field → URL should match the current load’s public tracking link.
+– Click the Driver copy button, then paste → URL should match the driver mini-app link for this load.
+	4.	In “Actions”:
+– Click “UPLOAD RATE CONFIRMATION”, choose a small PDF.
+– Confirm:
+	•	The POST /api/loads/:id/rate-confirmation returns 200 and JSON with url.
+	•	The DB table for rate confirmation files has a new row for this load.
+	•	Re-opening the load fetches rateConfirmationUrl and it’s populated.
+– Click “Copy Rate Confirmation Link”, paste into a new tab → file should open/download.
+	5.	Repeat basic copy tests on a mobile browser (iOS/Android) to ensure the copy buttons work there as well.
+
+Implement everything above so that:
+	•	Both Tracking Links copy buttons work reliably.
+	•	The Upload Rate Confirmation flow is fully functional end-to-end.
+

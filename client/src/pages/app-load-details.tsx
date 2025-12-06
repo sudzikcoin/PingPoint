@@ -5,10 +5,10 @@ import { api } from "@/lib/api";
 import { useRoute, useLocation } from "wouter";
 import { useTheme } from "@/context/theme-context";
 import { cn } from "@/lib/utils";
-import { ArrowLeft, Copy, Truck, User, Phone, MapPin, Calendar, Link2 } from "lucide-react";
+import { ArrowLeft, Copy, Truck, User, Phone, MapPin, Calendar, Link2, Upload, FileText, ExternalLink } from "lucide-react";
 import { format } from "date-fns";
 import { toast } from "sonner";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { copyToClipboard } from "@/utils/copyToClipboard";
 
 interface Stop {
@@ -25,6 +25,12 @@ interface Stop {
   departedAt: string | null;
 }
 
+interface RateConfirmationFile {
+  id: string;
+  url: string;
+  originalName: string;
+}
+
 interface LoadDetails {
   id: string;
   loadNumber: string;
@@ -36,6 +42,7 @@ interface LoadDetails {
   trackingToken: string;
   driverToken: string;
   stops: Stop[];
+  rateConfirmationFile: RateConfirmationFile | null;
 }
 
 export default function AppLoadDetails() {
@@ -45,6 +52,8 @@ export default function AppLoadDetails() {
   const [load, setLoad] = useState<LoadDetails | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     const fetchLoad = async () => {
@@ -71,6 +80,51 @@ export default function AppLoadDetails() {
       toast.success(`${label} copied to clipboard`);
     } else {
       toast.error(`Failed to copy ${label.toLowerCase()}`);
+    }
+  };
+
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !load) return;
+
+    if (file.size > 10 * 1024 * 1024) {
+      toast.error("File size must be under 10MB");
+      return;
+    }
+
+    setUploading(true);
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+
+      const response = await fetch(`/api/loads/${load.id}/rate-confirmation`, {
+        method: "POST",
+        body: formData,
+        credentials: "include",
+      });
+
+      if (!response.ok) {
+        throw new Error("Upload failed");
+      }
+
+      const result = await response.json();
+      setLoad({
+        ...load,
+        rateConfirmationFile: {
+          id: result.id,
+          url: result.url,
+          originalName: result.originalName,
+        },
+      });
+      toast.success("Rate confirmation uploaded successfully");
+    } catch (err) {
+      console.error("Upload error:", err);
+      toast.error("Failed to upload rate confirmation");
+    } finally {
+      setUploading(false);
+      if (fileInputRef.current) {
+        fileInputRef.current.value = "";
+      }
     }
   };
 
@@ -111,6 +165,16 @@ export default function AppLoadDetails() {
 
   const trackingUrl = `${window.location.origin}/track/${load.trackingToken}`;
   const driverUrl = `${window.location.origin}/driver/${load.driverToken}`;
+  
+  const getRateConfirmationUrl = () => {
+    if (!load.rateConfirmationFile?.url) return null;
+    const url = load.rateConfirmationFile.url;
+    if (url.startsWith('http://') || url.startsWith('https://')) {
+      return url;
+    }
+    return `${window.location.origin}${url}`;
+  };
+  const rateConfirmationUrl = getRateConfirmationUrl();
 
   return (
     <AppLayout>
@@ -287,6 +351,76 @@ export default function AppLoadDetails() {
               </CardContent>
             </Card>
 
+            {/* Rate Confirmation */}
+            <Card className={cn(theme === "arcade90s" ? "arcade-panel border-arc-border rounded-none" : "bg-brand-card border-brand-border")}>
+              <CardHeader>
+                <CardTitle className={cn("text-sm uppercase tracking-widest", theme === "arcade90s" ? "text-arc-primary arcade-pixel-font" : "text-brand-text")}>Rate Confirmation</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept=".pdf,.png,.jpg,.jpeg"
+                  onChange={handleFileUpload}
+                  className="hidden"
+                  data-testid="input-rate-confirmation-file"
+                />
+                
+                {load.rateConfirmationFile && rateConfirmationUrl ? (
+                  <div className="space-y-2">
+                    <div className={cn("flex items-center gap-2 p-2 rounded border", 
+                      theme === "arcade90s" ? "bg-arc-bg border-arc-border" : "bg-brand-dark-pill border-brand-border"
+                    )}>
+                      <FileText className={cn("w-4 h-4 flex-shrink-0", theme === "arcade90s" ? "text-arc-secondary" : "text-brand-gold")} />
+                      <span className={cn("text-xs truncate flex-1", theme === "arcade90s" ? "text-arc-text font-mono" : "text-white")}>
+                        {load.rateConfirmationFile.originalName}
+                      </span>
+                      <Button
+                        type="button"
+                        size="icon"
+                        variant="ghost"
+                        onClick={() => window.open(rateConfirmationUrl, '_blank')}
+                        className={cn("h-6 w-6", theme === "arcade90s" ? "text-arc-secondary hover:bg-arc-secondary/10" : "text-brand-gold hover:bg-brand-gold/10")}
+                        data-testid="button-view-rate-confirmation"
+                      >
+                        <ExternalLink className="w-3 h-3" />
+                      </Button>
+                    </div>
+                    <Button 
+                      variant="outline" 
+                      className={cn("w-full justify-start", theme === "arcade90s" ? "rounded-none border-arc-border text-arc-text" : "")}
+                      onClick={() => handleCopy(rateConfirmationUrl, "Rate confirmation link")}
+                      data-testid="button-copy-rate-confirmation-link"
+                    >
+                      <Copy className="w-4 h-4 mr-2" /> Copy Rate Confirmation Link
+                    </Button>
+                    <Button 
+                      variant="outline" 
+                      className={cn("w-full justify-start", theme === "arcade90s" ? "rounded-none border-arc-border text-arc-text" : "")}
+                      onClick={() => fileInputRef.current?.click()}
+                      disabled={uploading}
+                      data-testid="button-replace-rate-confirmation"
+                    >
+                      <Upload className="w-4 h-4 mr-2" /> {uploading ? "Uploading..." : "Replace File"}
+                    </Button>
+                  </div>
+                ) : (
+                  <Button 
+                    variant="outline" 
+                    className={cn("w-full justify-start", theme === "arcade90s" ? "rounded-none border-arc-border text-arc-text" : "")}
+                    onClick={() => fileInputRef.current?.click()}
+                    disabled={uploading}
+                    data-testid="button-upload-rate-confirmation"
+                  >
+                    <Upload className="w-4 h-4 mr-2" /> {uploading ? "Uploading..." : "Upload Rate Confirmation"}
+                  </Button>
+                )}
+                <p className={cn("text-[10px]", theme === "arcade90s" ? "text-arc-muted" : "text-brand-muted")}>
+                  PDF, PNG, JPG files up to 10MB
+                </p>
+              </CardContent>
+            </Card>
+
             {/* Quick Actions */}
             <Card className={cn(theme === "arcade90s" ? "arcade-panel border-arc-border rounded-none" : "bg-brand-card border-brand-border")}>
               <CardHeader>
@@ -296,14 +430,8 @@ export default function AppLoadDetails() {
                 <Button 
                   variant="outline" 
                   className={cn("w-full justify-start", theme === "arcade90s" ? "rounded-none border-arc-border text-arc-text" : "")}
-                  onClick={() => toast.info("Rate confirmation feature coming soon")}
-                >
-                  <Copy className="w-4 h-4 mr-2" /> Copy Rate Confirmation Link
-                </Button>
-                <Button 
-                  variant="outline" 
-                  className={cn("w-full justify-start", theme === "arcade90s" ? "rounded-none border-arc-border text-arc-text" : "")}
                   onClick={() => window.open(trackingUrl, '_blank')}
+                  data-testid="button-open-public-tracking"
                 >
                   <MapPin className="w-4 h-4 mr-2" /> Open Public Tracking
                 </Button>

@@ -5,6 +5,31 @@ import { createBrokerSession, getBrokerFromRequest, clearBrokerSession } from ".
 import { randomBytes } from "crypto";
 import { insertLoadSchema, insertStopSchema } from "@shared/schema";
 import { z } from "zod";
+import multer from "multer";
+import path from "path";
+import fs from "fs";
+import express from "express";
+
+const uploadsDir = path.join(process.cwd(), "uploads", "rate-confirmations");
+if (!fs.existsSync(uploadsDir)) {
+  fs.mkdirSync(uploadsDir, { recursive: true });
+}
+
+const multerStorage = multer.diskStorage({
+  destination: (_req, _file, cb) => {
+    cb(null, uploadsDir);
+  },
+  filename: (_req, file, cb) => {
+    const unique = Date.now() + "-" + Math.round(Math.random() * 1e9);
+    const ext = path.extname(file.originalname) || "";
+    cb(null, unique + ext);
+  },
+});
+
+const upload = multer({
+  storage: multerStorage,
+  limits: { fileSize: 10 * 1024 * 1024 }, // 10 MB
+});
 
 function generateLoadNumber(): string {
   const year = new Date().getFullYear();
@@ -359,11 +384,17 @@ export async function registerRoutes(
 
       const loadStops = await storage.getStopsByLoad(load.id);
       const trackingPingsList = await storage.getTrackingPingsByLoad(load.id);
+      const rateConfirmationFile = await storage.getLatestRateConfirmationFile(load.id);
 
       return res.json({
         ...load,
         stops: loadStops,
         trackingPings: trackingPingsList,
+        rateConfirmationFile: rateConfirmationFile ? {
+          id: rateConfirmationFile.id,
+          url: rateConfirmationFile.fileUrl,
+          originalName: rateConfirmationFile.originalName,
+        } : null,
       });
     } catch (error) {
       console.error("Error in /api/loads/:id:", error);
@@ -476,6 +507,54 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Error in /api/driver/:token/stop/:stopId:", error);
       return res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  // Rate confirmation file upload
+  // Serve uploads directory
+  app.use("/uploads", express.static(path.join(process.cwd(), "uploads")));
+
+  // POST /api/loads/:loadId/rate-confirmation - Upload rate confirmation file
+  app.post("/api/loads/:loadId/rate-confirmation", upload.single("file"), async (req: Request, res: Response) => {
+    try {
+      const broker = await getBrokerFromRequest(req);
+      if (!broker) {
+        return res.status(401).json({ error: "Unauthorized" });
+      }
+
+      const { loadId } = req.params;
+      const file = req.file;
+
+      if (!file) {
+        return res.status(400).json({ error: "File is required" });
+      }
+
+      const load = await storage.getLoad(loadId);
+      if (!load || load.brokerId !== broker.id) {
+        return res.status(404).json({ error: "Load not found" });
+      }
+
+      const relativePath = `/uploads/rate-confirmations/${file.filename}`;
+
+      const rcFile = await storage.createRateConfirmationFile({
+        loadId,
+        fileUrl: relativePath,
+        originalName: file.originalname,
+      });
+
+      const origin = process.env.REPL_SLUG 
+        ? `https://${process.env.REPL_SLUG}.${process.env.REPL_OWNER}.repl.co`
+        : `http://localhost:5000`;
+      const publicUrl = `${origin}${relativePath}`;
+
+      return res.json({
+        id: rcFile.id,
+        url: publicUrl,
+        originalName: rcFile.originalName,
+      });
+    } catch (error) {
+      console.error("Error uploading rate confirmation:", error);
+      return res.status(500).json({ error: "Failed to upload rate confirmation" });
     }
   });
 

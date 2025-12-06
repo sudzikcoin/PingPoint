@@ -26,3 +26,45 @@ export async function copyToClipboard(text: string): Promise<boolean> {
     return false;
   }
 }
+
+export async function copyFromRef(
+  ref: React.RefObject<HTMLInputElement>,
+  fallbackText: string,
+  label: string
+): Promise<boolean> {
+  const text = ref.current?.value || fallbackText;
+  if (!text) {
+    console.warn("[copyFromRef] no text for", label);
+    return false;
+  }
+
+  try {
+    console.log("[copyFromRef] clicked", label, text);
+
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(text);
+      console.log("[copyFromRef] navigator.clipboard success:", label);
+      return true;
+    }
+
+    // Fallback for older browsers / iOS
+    if (ref.current) {
+      ref.current.focus();
+      ref.current.select();
+      const success = document.execCommand("copy");
+      window.getSelection()?.removeAllRanges();
+      console.log("[copyFromRef] execCommand success:", label, success);
+      return success;
+    }
+
+    return false;
+  } catch (err) {
+    console.error("[copyFromRef] failed for", label, err);
+    // As a last resort, focus and select so user can manually copy
+    if (ref.current) {
+      ref.current.focus();
+      ref.current.select();
+    }
+    return false;
+  }
+}

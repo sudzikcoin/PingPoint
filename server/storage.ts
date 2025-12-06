@@ -5,6 +5,7 @@ import {
   stops,
   verificationTokens,
   trackingPings,
+  rateConfirmationFiles,
   type Broker,
   type InsertBroker,
   type Driver,
@@ -16,6 +17,7 @@ import {
   type VerificationToken,
   type TrackingPing,
   type InsertTrackingPing,
+  type RateConfirmationFile,
 } from "@shared/schema";
 import { db } from "./db";
 import { eq, and, desc } from "drizzle-orm";
@@ -52,6 +54,10 @@ export interface IStorage {
   // Tracking ping operations
   createTrackingPing(ping: InsertTrackingPing): Promise<TrackingPing>;
   getTrackingPingsByLoad(loadId: string): Promise<TrackingPing[]>;
+
+  // Rate confirmation file operations
+  createRateConfirmationFile(data: { loadId: string; fileUrl: string; originalName: string }): Promise<RateConfirmationFile>;
+  getLatestRateConfirmationFile(loadId: string): Promise<RateConfirmationFile | undefined>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -204,6 +210,25 @@ export class DatabaseStorage implements IStorage {
       .from(trackingPings)
       .where(eq(trackingPings.loadId, loadId))
       .orderBy(desc(trackingPings.createdAt));
+  }
+
+  // Rate confirmation file operations
+  async createRateConfirmationFile(data: { loadId: string; fileUrl: string; originalName: string }): Promise<RateConfirmationFile> {
+    const [file] = await db
+      .insert(rateConfirmationFiles)
+      .values(data)
+      .returning();
+    return file;
+  }
+
+  async getLatestRateConfirmationFile(loadId: string): Promise<RateConfirmationFile | undefined> {
+    const [file] = await db
+      .select()
+      .from(rateConfirmationFiles)
+      .where(eq(rateConfirmationFiles.loadId, loadId))
+      .orderBy(desc(rateConfirmationFiles.uploadedAt))
+      .limit(1);
+    return file || undefined;
   }
 }
 
