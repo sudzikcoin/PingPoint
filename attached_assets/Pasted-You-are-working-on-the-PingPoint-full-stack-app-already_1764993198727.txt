@@ -1,0 +1,196 @@
+You are working on the PingPoint full-stack app (already converted from Mockup Mode). Prisma + PostgreSQL are set up and tables are visible in the Replit Development Database (brokers, drivers, loads, stops, tracking_pings, verification_tokens, rate_confirmation_files).
+
+BUG TO FIX
+--------------------------------
+On `/app/loads/new` (New Load page), when I press the **CREATE LOAD** button:
+
+- Nothing visible happens (no redirect, no success/error message).
+- The app does NOT navigate to the broker console `/app/loads`.
+- In the database, no new row appears in the `loads` (or `stops`, `drivers`) tables.
+
+We want the full flow to work:
+
+1. Broker fills the New Load form (including broker email and driver phone).
+2. Presses **CREATE LOAD**.
+3. Backend:
+   - ensures broker exists,
+   - creates (or reuses) a broker session,
+   - creates driver (if needed),
+   - creates load and its stops.
+4. UI:
+   - shows loading state while request is in progress,
+   - handles errors (with a visible message),
+   - on success redirects to `/app/loads` where the new load appears in the list.
+
+Your job is to make this work end-to-end with minimal changes, keeping the current Arcade 90s UI.
+
+============================================================
+1. INSPECT THE NEW LOAD PAGE AND CURRENT HANDLER
+============================================================
+
+1.1. Locate the New Load page component:
+- Path is something like `app/app/loads/new/page.tsx` or `client/src/pages/app/loads/new.tsx` depending on the framework.
+- Find the `CREATE LOAD` button component and the surrounding `<form>`.
+
+1.2. Identify the current submit logic:
+- Check if there is:
+  - a `handleSubmit` function,
+  - or a `onSubmit={...}` on the `<form>`,
+  - or `onClick={...}` on the button.
+- See whether it calls a function from `lib/api.ts` like `createLoad(...)` or still uses the old mock/localStorage API.
+
+1.3. Also open `client/src/lib/api.ts` (or similar) and inspect:
+- `ensureBroker` / `createBroker` / `createLoad` functions.
+- Confirm whether they currently call:
+  - real backend endpoints (`/api/brokers/ensure`, `/api/loads`), OR
+  - the old mock DB (`client/src/lib/db.ts`).
+
+============================================================
+2. ENSURE BACKEND ROUTES ARE WORKING
+============================================================
+
+2.1. Check server routes for load creation:
+- There should be a POST handler for `/api/loads`.
+- It should:
+  - read current broker from a session (e.g., `getBrokerFromRequest`),
+  - validate payload,
+  - create/find `Driver` by phone,
+  - create `Load` and `Stop` records via Prisma.
+
+2.2. Check authentication requirement:
+- If `/api/loads` currently returns 401 “Unauthorized” because there is no broker session, implement one of these (pick the simplest, minimal change):
+
+Option A (dev friendly): in `POST /api/loads`, accept `brokerEmail` from the request body:
+- If there is no authenticated broker in the session BUT request includes `brokerEmail`:
+  - `findOrCreate` the broker by this email.
+  - Use that broker's id for `brokerId`.
+  - (Optionally) set a session cookie so that future requests are authenticated.
+- Only return 401 if neither session nor `brokerEmail` is present.
+
+Option B (session based): ensure that before calling `/api/loads` the frontend calls `/api/brokers/ensure` (and a login/verification endpoint) that sets a broker session cookie:
+- In that case, verify that the cookie is set and that `getBrokerFromRequest` works.
+
+Given the current UX, Option A (using brokerEmail passed from the form) is OK for now and keeps the flow simple.
+
+2.3. Add detailed logging for debugging:
+- In the `/api/loads` POST handler, log:
+  - the incoming body shape,
+  - whether a broker/session was found,
+  - any thrown errors.
+- Make sure errors are converted to JSON with useful messages (status 400/401/500) so the frontend can show them.
+
+============================================================
+3. WIRE UP THE FRONTEND SUBMIT FLOW
+============================================================
+
+3.1. Implement (or fix) `createLoad` function in `lib/api.ts`:
+
+- It should:
+  - Accept a single typed object with all required fields:
+    - brokerName, brokerEmail,
+    - driverPhone,
+    - shipperName, carrierName, equipmentType, customerRef, rateAmount,
+    - pickup/delivery stops (facility names, addresses, city/state/zip, etc.).
+  - `fetch("/api/loads", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) })`
+  - Payload MUST include `brokerEmail` (and optionally `brokerName`) so Option A in the backend can use it to find/create broker.
+  - If response is not OK, throw an error with the message returned by the server.
+
+3.2. In the New Load page component:
+
+- Collect form values into a structured object matching `createLoad`’s expected payload.
+- In the submit handler:
+  - `event.preventDefault()` if using a form submit.
+  - Set a `isSubmitting` state to true so that:
+    - The button shows a spinner or “Creating…” and is disabled while the request is pending.
+  - Call `await createLoad(payload)` inside `try`/`catch`.
+
+Example (pseudo-code, adapt to actual TS/React structure):
+
+async function handleSubmit(e: FormEvent) {
+  e.preventDefault();
+  setError(null);
+  setIsSubmitting(true);
+  try {
+    await api.createLoad({
+      brokerName,
+      brokerEmail,
+      driverPhone,
+      shipperName,
+      carrierName,
+      equipmentType,
+      customerRef,
+      rateAmount,
+      pickup: {
+        facilityName: pickupFacility,
+        address: pickupAddress,
+        city: pickupCity,
+        state: pickupState,
+        zip: pickupZip,
+      },
+      delivery: {
+        facilityName: deliveryFacility,
+        address: deliveryAddress,
+        city: deliveryCity,
+        state: deliveryState,
+        zip: deliveryZip,
+      },
+    });
+    router.push("/app/loads");
+  } catch (err) {
+    console.error("Failed to create load", err);
+    setError(getFriendlyMessage(err));
+  } finally {
+    setIsSubmitting(false);
+  }
+}
+
+- Attach this `handleSubmit` to the form or button.
+
+3.3. Show errors to the user:
+
+- Add a small error banner under the form or under the Create Load button:
+  - If `error` state is not null, display its message (e.g., “Failed to create load: <reason>”).
+- Do not silently swallow errors.
+
+============================================================
+4. VERIFY DATABASE WRITES AND REDIRECT
+============================================================
+
+After implementing the above:
+
+4.1. Through the UI:
+- Open `/app/loads/new`.
+- Fill in all required fields, including:
+  - valid broker email,
+  - driver phone,
+  - pickup and delivery addresses.
+- Press **CREATE LOAD**.
+
+4.2. Expected behavior:
+
+- Button shows loading state while request is processed.
+- No unhandled errors in the browser console.
+- On success:
+  - The app redirects to `/app/loads`.
+  - In the broker console, the new load appears in the table (load number, shipper, origin/destination, etc.).
+
+4.3. Check the Replit Database:
+
+- In the Development Database (My Data tab), check:
+  - `brokers` table has a row for the entered broker email.
+  - `drivers` table has the new driver phone.
+  - `loads` table has a new row.
+  - `stops` table has at least two rows (pickup and delivery) tied to that load.
+
+If any of these steps fail, adjust either the payload shape or Prisma create code so that fields match and constraints are respected.
+
+============================================================
+5. KEEP ARCADE UI AND EXISTING FILE STRUCTURE
+============================================================
+
+- Preserve the existing design (Arcade 90s theme, neon “CREATE LOAD” button, etc.).
+- Do NOT refactor components heavily; only:
+  - fix the submit logic,
+  - wire up the real API,
+  - improve error handling,
+  - and ensure the redirect to `/app/loads` after success.

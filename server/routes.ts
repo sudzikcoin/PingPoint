@@ -154,12 +154,31 @@ export async function registerRoutes(
   // POST /api/loads - Create new load
   app.post("/api/loads", async (req: Request, res: Response) => {
     try {
-      const broker = await getBrokerFromRequest(req);
+      // Try to get broker from session first
+      let broker = await getBrokerFromRequest(req);
+      
+      // If no session, allow creation with brokerEmail from body (for demo flow)
       if (!broker) {
-        return res.status(401).json({ error: "Unauthorized" });
+        const { brokerEmail, brokerName } = req.body;
+        if (!brokerEmail) {
+          return res.status(401).json({ error: "Unauthorized - no session or brokerEmail provided" });
+        }
+        
+        const emailNormalized = brokerEmail.trim().toLowerCase();
+        broker = await storage.getBrokerByEmail(emailNormalized) || null;
+        
+        if (!broker) {
+          broker = await storage.createBroker({
+            email: emailNormalized,
+            name: brokerName || "Broker",
+          });
+        }
+        
+        // Set session cookie for future requests
+        createBrokerSession(broker.id, res);
       }
 
-      const { driverPhone, stops: stopsData, ...loadData } = req.body;
+      const { driverPhone, stops: stopsData, brokerEmail: _be, brokerName: _bn, ...loadData } = req.body;
 
       // Validate and find/create driver
       let driver = null;
