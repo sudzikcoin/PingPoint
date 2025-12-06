@@ -1,0 +1,272 @@
+You are the Replit Agent working on the PingPoint app. Please carefully update ONLY the billing page and related logic as described below, without breaking any existing flows, routing, or styling.
+
+============================================================
+GOAL
+============================================================
+On the `/app/billing` page:
+1. Keep only a single **Card / Wallet Payment** section.
+2. Remove (from UI) the **Invoice / Bank** and **Crypto** sections.
+3. Inside the remaining section, add a **“Connect Wallet”** button that:
+   - Connects either MetaMask or Coinbase Wallet (whichever is available / user chooses),
+   - Shows the connected address and network,
+   - Enforces that we only accept **USDC** on **Base**, **Ethereum**, or **Solana** networks (at least validate & message for Base + Ethereum via EVM).
+4. This is a UI + basic wallet-connect feature only. Do NOT implement full on-chain payment / USDC transfer logic yet; just connect, detect network, and show clear status and restrictions.
+
+Keep all existing Arcade 90s styling, typography, and layout consistent with the rest of the app.
+
+============================================================
+STEP 1 – FIND AND CLEAN UP THE BILLING PAGE
+============================================================
+
+1. Locate the React component that renders the `/app/billing` route.
+   - It currently shows three sections:
+     - **CARD PAYMENT** (“Pay securely with credit or debit card via Stripe. Coming Soon”),
+     - **INVOICE / BANK** with “Company Name”, “Billing Email”, “Request Invoice”,
+     - **CRYPTO** with BTC / ETH addresses.
+
+   The file might be something like:
+   - `client/src/pages/app/BillingPage.tsx`
+   - or `client/src/pages/AppBilling.tsx`
+   - or similar.
+
+2. In that component, REMOVE the JSX for:
+   - The **INVOICE / BANK** card.
+   - The **CRYPTO** card.
+
+3. Rename or slightly adjust the remaining header so it still fits:
+   - Keep the existing `CARD PAYMENT` label or change to `PAYMENT METHODS` (but keep the yellow icon / styles).
+   - Keep the small description text, but you may update it to something like:
+     > “Pay securely with card (coming soon) or connect a crypto wallet to pay in USDC.”
+
+4. Ensure the layout still looks like a single, centered card block in the same style as the previous cards.
+
+============================================================
+STEP 2 – ADD A WALLET HOOK (METAMASK + COINBASE)
+============================================================
+
+Create a small wallet helper hook so the billing component doesn’t get too complex.
+
+1. Add a new file, for example:
+   - `client/src/hooks/useWallet.ts`
+
+2. In `useWallet.ts`, implement:
+
+```ts
+import { useState, useCallback } from "react";
+import CoinbaseWalletSDK from "@coinbase/wallet-sdk";
+
+type WalletType = "metamask" | "coinbase" | null;
+
+export interface WalletState {
+  walletType: WalletType;
+  address: string | null;
+  chainId: number | null;
+  networkName: string | null;
+  isConnecting: boolean;
+  error: string | null;
+  connectMetaMask: () => Promise<void>;
+  connectCoinbase: () => Promise<void>;
+}
+
+const SUPPORTED_CHAINS: Record<number, string> = {
+  1: "Ethereum",
+  8453: "Base",
+  // Solana is non-EVM; we will just mention it in UI for now.
+};
+
+export function useWallet(): WalletState {
+  const [walletType, setWalletType] = useState<WalletType>(null);
+  const [address, setAddress] = useState<string | null>(null);
+  const [chainId, setChainId] = useState<number | null>(null);
+  const [networkName, setNetworkName] = useState<string | null>(null);
+  const [isConnecting, setIsConnecting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const handleConnected = (wType: WalletType, account: string, chainIdHex: string) => {
+    const parsedChainId = parseInt(chainIdHex, 16);
+    setWalletType(wType);
+    setAddress(account);
+    setChainId(parsedChainId);
+    setNetworkName(SUPPORTED_CHAINS[parsedChainId] ?? `Chain ${parsedChainId}`);
+    setError(null);
+  };
+
+  const connectMetaMask = useCallback(async () => {
+    setIsConnecting(true);
+    setError(null);
+    try {
+      const anyWindow = window as any;
+      const provider = anyWindow.ethereum;
+      if (!provider) {
+        setError("MetaMask not found. Please install MetaMask.");
+        return;
+      }
+
+      const accounts: string[] = await provider.request({
+        method: "eth_requestAccounts",
+      });
+
+      const chainIdHex: string = await provider.request({
+        method: "eth_chainId",
+      });
+
+      if (!accounts || accounts.length === 0) {
+        setError("No accounts returned from MetaMask.");
+        return;
+      }
+
+      handleConnected("metamask", accounts[0], chainIdHex);
+    } catch (err: any) {
+      console.error("MetaMask connect error", err);
+      setError(err?.message || "Failed to connect MetaMask.");
+    } finally {
+      setIsConnecting(false);
+    }
+  }, []);
+
+  const connectCoinbase = useCallback(async () => {
+    setIsConnecting(true);
+    setError(null);
+    try {
+      const appName = "PingPoint";
+      const coinbase = new CoinbaseWalletSDK({
+        appName,
+      });
+
+      const anyWindow = window as any;
+      const ethereum = coinbase.makeWeb3Provider(anyWindow.ethereum, 1);
+
+      const accounts: string[] = await ethereum.request({
+        method: "eth_requestAccounts",
+      });
+
+      const chainIdHex: string = await ethereum.request({
+        method: "eth_chainId",
+      });
+
+      if (!accounts || accounts.length === 0) {
+        setError("No accounts returned from Coinbase Wallet.");
+        return;
+      }
+
+      handleConnected("coinbase", accounts[0], chainIdHex);
+    } catch (err: any) {
+      console.error("Coinbase connect error", err);
+      setError(err?.message || "Failed to connect Coinbase Wallet.");
+    } finally {
+      setIsConnecting(false);
+    }
+  }, []);
+
+  return {
+    walletType,
+    address,
+    chainId,
+    networkName,
+    isConnecting,
+    error,
+    connectMetaMask,
+    connectCoinbase,
+  };
+}
+
+	3.	Ensure the project has @coinbase/wallet-sdk installed. If not, add it via package.json and install.
+
+============================================================
+STEP 3 – UPDATE BILLING PAGE UI TO USE THE WALLET HOOK
+
+Back in the /app/billing page component:
+	1.	Import and use the hook:
+
+import { useWallet } from "@/hooks/useWallet"; // adjust path as needed
+
+Inside the component function:
+
+const {
+  walletType,
+  address,
+  chainId,
+  networkName,
+  isConnecting,
+  error,
+  connectMetaMask,
+  connectCoinbase,
+} = useWallet();
+
+const isSupportedChain =
+  chainId != null && (chainId === 1 || chainId === 8453); // Ethereum or Base
+
+const walletStatusMessage = (() => {
+  if (!address) return "No wallet connected.";
+  if (!isSupportedChain) {
+    return "Connected wallet must be on Base or Ethereum to pay in USDC. Please switch networks in your wallet.";
+  }
+  return `Connected: ${address.slice(0, 6)}…${address.slice(-4)} on ${networkName}`;
+})();
+
+	2.	In the JSX of the single remaining card, replace the previous “Coming Soon” block with something like:
+
+<div className="space-y-4">
+  <p className="text-sm text-slate-300">
+    Pay securely with card (Stripe – coming soon) or connect a crypto wallet to pay in USDC.
+  </p>
+
+  <div className="flex flex-col gap-3 sm:flex-row">
+    <button
+      type="button"
+      onClick={connectMetaMask}
+      disabled={isConnecting}
+      className="px-4 py-2 rounded-full bg-cyan-400 text-slate-900 font-semibold uppercase tracking-wide hover:bg-cyan-300 transition"
+    >
+      {isConnecting ? "Connecting…" : "Connect MetaMask"}
+    </button>
+
+    <button
+      type="button"
+      onClick={connectCoinbase}
+      disabled={isConnecting}
+      className="px-4 py-2 rounded-full bg-yellow-300 text-slate-900 font-semibold uppercase tracking-wide hover:bg-yellow-200 transition"
+    >
+      {isConnecting ? "Connecting…" : "Connect Coinbase Wallet"}
+    </button>
+  </div>
+
+  <div className="text-xs text-slate-400">
+    <p>{walletStatusMessage}</p>
+    <p className="mt-1">
+      We accept <span className="font-semibold text-cyan-300">USDC only</span> on
+      {" "}
+      <span className="font-semibold">Base</span>, <span className="font-semibold">Ethereum</span>, and <span className="font-semibold">Solana</span>.
+      Please ensure you choose the correct network in your wallet.
+    </p>
+  </div>
+
+  {error && (
+    <div className="mt-2 text-xs text-red-400">
+      {error}
+    </div>
+  )}
+</div>
+
+	3.	Keep all surrounding card structure and classes (borders, background, arcade dots, etc.) the same as before so the page remains visually consistent.
+	4.	Confirm:
+	•	The Invoice / Bank and Crypto sections no longer render.
+	•	The page still routes correctly via /app/billing.
+	•	Clicking Connect MetaMask or Connect Coinbase Wallet opens the wallet, requests accounts, and then shows the connected address + network.
+	•	If the network is not Base or Ethereum, we show the “must be on Base or Ethereum” message.
+	•	There is a visible note that we accept USDC only on Base, Solana, and Ethereum (no transfer logic yet).
+
+============================================================
+STEP 4 – QUICK MANUAL TEST
+	1.	Open /app/billing in the app.
+	2.	Verify only one card is shown (Card / Wallet Payment).
+	3.	Click Connect MetaMask:
+	•	MetaMask pops up,
+	•	After approval, the address + network summary appears,
+	•	If on any non-Base / non-Ethereum chain, you see the warning message.
+	4.	Click Connect Coinbase Wallet (in a browser with Coinbase extension / supported environment):
+	•	Coinbase Wallet connects and shows address + network.
+	5.	No errors appear in the console when simply loading /app/billing.
+
+Implement all of the above while preserving the existing design system and avoiding changes to unrelated routes or components.
+
