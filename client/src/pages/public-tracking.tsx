@@ -1,34 +1,108 @@
 import { useRoute } from "wouter";
-import { getLoadById } from "@/lib/mock-data";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Map, Package, Truck, Clock, MapPin, Share2 } from "lucide-react";
+import { Map, Package, Truck, Clock, MapPin, Share2, Loader2 } from "lucide-react";
 import { format } from "date-fns";
 import { PillButton } from "@/components/ui/pill-button";
 import { cn } from "@/lib/utils";
 import { useTheme } from "@/context/theme-context";
+import { useState, useEffect } from "react";
 
-// Mock function to decode token (in real app this would be an API call)
-const getLoadFromToken = (token: string) => {
-  return getLoadById("ld_cuid123456"); 
-};
+interface Stop {
+  id: string;
+  type: string;
+  name: string;
+  city: string;
+  state: string;
+  fullAddress: string;
+  sequence: number;
+  windowFrom: string | null;
+  windowTo: string | null;
+  arrivedAt: string | null;
+  departedAt: string | null;
+}
+
+interface TrackingData {
+  loadNumber: string;
+  status: string;
+  shipperName: string;
+  stops: Stop[];
+  lastLocation: {
+    lat: string;
+    lng: string;
+    timestamp: string;
+  } | null;
+}
 
 export default function PublicTracking() {
-  const [, params] = useRoute("/public/track/:token");
+  const [matchRoute1, params1] = useRoute("/public/track/:token");
+  const [matchRoute2, params2] = useRoute("/track/:token");
   const { theme } = useTheme();
-  const load = getLoadFromToken(params?.token || "");
+  const [data, setData] = useState<TrackingData | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
-  if (!load) {
+  const token = params1?.token || params2?.token;
+
+  useEffect(() => {
+    const fetchTracking = async () => {
+      if (!token) {
+        setError("Invalid tracking link");
+        setLoading(false);
+        return;
+      }
+
+      try {
+        const res = await fetch(`/api/track/${token}`);
+        if (!res.ok) {
+          throw new Error("Load not found");
+        }
+        const trackingData = await res.json();
+        setData(trackingData);
+      } catch (err) {
+        console.error("Failed to fetch tracking data:", err);
+        setError("Tracking link invalid or expired");
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchTracking();
+  }, [token]);
+
+  if (loading) {
     return (
       <div className={cn("min-h-screen flex items-center justify-center transition-colors", 
         theme === "arcade90s" ? "arcade-bg text-arc-text" : "bg-brand-bg text-brand-text"
       )}>
-        <p className={cn(theme === "arcade90s" ? "text-arc-muted arcade-pixel-font" : "")}>Tracking link invalid or expired.</p>
+        <div className="flex flex-col items-center gap-4">
+          <Loader2 className={cn("h-8 w-8 animate-spin", theme === "arcade90s" ? "text-arc-secondary" : "text-brand-gold")} />
+          <p className={cn(theme === "arcade90s" ? "text-arc-muted arcade-pixel-font" : "text-brand-muted")}>Loading tracking info...</p>
+        </div>
       </div>
     );
   }
 
-  const currentStop = load.stops.find(s => s.status === "PLANNED" || s.status === "EN_ROUTE") || load.stops[load.stops.length - 1];
+  if (error || !data) {
+    return (
+      <div className={cn("min-h-screen flex items-center justify-center transition-colors", 
+        theme === "arcade90s" ? "arcade-bg text-arc-text" : "bg-brand-bg text-brand-text"
+      )}>
+        <p className={cn(theme === "arcade90s" ? "text-arc-muted arcade-pixel-font" : "text-brand-muted")}>{error || "Tracking link invalid or expired."}</p>
+      </div>
+    );
+  }
+
+  const stops = data.stops || [];
+  const currentStop = stops.find(s => !s.arrivedAt) || stops[stops.length - 1];
+  const firstStop = stops[0];
+  const lastStop = stops[stops.length - 1];
+
+  const getStopStatus = (stop: Stop) => {
+    if (stop.departedAt) return "DEPARTED";
+    if (stop.arrivedAt) return "ARRIVED";
+    return "PENDING";
+  };
 
   return (
     <div className={cn("min-h-screen font-sans transition-colors duration-300", 
@@ -51,10 +125,10 @@ export default function PublicTracking() {
           <div>
             <span className={cn("font-bold text-lg tracking-tight block leading-none transition-colors",
               theme === "arcade90s" ? "text-arc-primary arcade-pixel-font tracking-widest" : "text-white"
-            )}>AgentOS</span>
+            )}>PingPoint</span>
             <span className={cn("text-[10px] uppercase tracking-widest font-bold",
               theme === "arcade90s" ? "text-arc-muted arcade-pixel-font" : "text-brand-muted"
-            )}>Tracking Core</span>
+            )}>Live Tracking</span>
           </div>
         </div>
         <div className="flex items-center gap-3">
@@ -63,13 +137,16 @@ export default function PublicTracking() {
               ? "bg-arc-bg border-arc-secondary text-arc-secondary shadow-arc-glow-cyan rounded-none arcade-pixel-font text-[10px]" 
               : "border-brand-border bg-brand-dark-pill text-brand-muted"
           )}>
-            REF: {load.externalLoadId}
+            REF: {data.loadNumber}
           </div>
           <PillButton 
             variant={theme === "arcade90s" ? "gold" : "dark"} 
             size="md" 
             icon={<Share2 className="w-3 h-3" />} 
             className={cn("hidden sm:flex", theme === "arcade90s" && "rounded-none bg-arc-secondary text-black border-none shadow-arc-glow-cyan hover:bg-arc-secondary/80 arcade-pixel-font text-[10px]")}
+            onClick={() => {
+              navigator.clipboard.writeText(window.location.href);
+            }}
           >
             Share
           </PillButton>
@@ -104,13 +181,13 @@ export default function PublicTracking() {
                 <h3 className={cn("text-xl font-bold transition-colors", theme === "arcade90s" ? "text-arc-primary arcade-pixel-font tracking-wide" : "text-white")}>Live Tracking Active</h3>
                 <p className={cn("text-sm mt-2 leading-relaxed", theme === "arcade90s" ? "text-arc-muted font-mono text-xs" : "text-brand-muted")}>Vehicle location is updated every 15 minutes via secure GPS link.</p>
               </div>
-              {load.lastLocationCity && (
+              {data.lastLocation && (
                  <div className={cn("mt-2 px-4 py-1.5 text-xs font-bold tracking-wide uppercase transition-all",
                    theme === "arcade90s"
                      ? "bg-arc-secondary/10 border border-arc-secondary text-arc-secondary arcade-pixel-font text-[10px] shadow-arc-glow-cyan"
                      : "rounded-full bg-brand-gold/10 border border-brand-gold/20 text-brand-gold"
                  )}>
-                   Near {load.lastLocationCity}, {load.lastLocationState}
+                   Last ping: {format(new Date(data.lastLocation.timestamp), "MMM d, HH:mm")}
                  </div>
               )}
             </div>
@@ -127,39 +204,43 @@ export default function PublicTracking() {
               <div>
                 <p className={cn("text-xs uppercase tracking-widest font-bold mb-2 transition-colors", theme === "arcade90s" ? "text-arc-muted arcade-pixel-font" : "text-brand-muted")}>Current Status</p>
                 <div className="flex items-center gap-4">
-                  <h1 className={cn("text-3xl font-bold tracking-tight transition-colors", theme === "arcade90s" ? "text-arc-text arcade-pixel-font" : "text-white")}>{load.status.replace("_", " ")}</h1>
+                  <h1 className={cn("text-3xl font-bold tracking-tight transition-colors", theme === "arcade90s" ? "text-arc-text arcade-pixel-font" : "text-white")}>{data.status.replace("_", " ")}</h1>
                   <div className={cn("h-3 w-3 rounded-full animate-pulse shadow-[0_0_15px_rgba(16,185,129,0.6)]",
                     theme === "arcade90s" ? "bg-arc-primary shadow-arc-glow-yellow rounded-none" : "bg-emerald-500"
                   )} />
                 </div>
-                <p className={cn("mt-3 text-sm leading-relaxed transition-colors", theme === "arcade90s" ? "text-arc-text/80 font-mono text-xs" : "text-brand-text/80")}>
-                  Your shipment is on schedule. Estimated arrival at destination: <span className={cn("font-mono", theme === "arcade90s" ? "text-arc-secondary" : "text-brand-gold")}>{format(new Date(load.stops[load.stops.length-1].windowStart), "MMM d, h:mm a")}</span>
-                </p>
+                {lastStop?.windowFrom && (
+                  <p className={cn("mt-3 text-sm leading-relaxed transition-colors", theme === "arcade90s" ? "text-arc-text/80 font-mono text-xs" : "text-brand-text/80")}>
+                    Your shipment is on schedule. Estimated arrival at destination: <span className={cn("font-mono", theme === "arcade90s" ? "text-arc-secondary" : "text-brand-gold")}>{format(new Date(lastStop.windowFrom), "MMM d, h:mm a")}</span>
+                  </p>
+                )}
               </div>
             </div>
 
             {/* Progress Visual */}
-            <div className={cn("space-y-4 p-4 border transition-all",
-              theme === "arcade90s" 
-                ? "bg-arc-bg/50 rounded-none border-arc-secondary/30 shadow-arc-glow-cyan" 
-                : "bg-brand-dark-pill/50 rounded-2xl border-brand-border/50"
-            )}>
-               <div className={cn("flex items-center justify-between text-[10px] font-bold uppercase tracking-widest transition-colors", theme === "arcade90s" ? "text-arc-muted arcade-pixel-font" : "text-brand-muted")}>
-                 <span>Origin</span>
-                 <span>Destination</span>
-               </div>
-               <div className={cn("h-2 rounded-full overflow-hidden relative transition-all", theme === "arcade90s" ? "bg-arc-border rounded-none" : "bg-brand-border")}>
-                 <div className={cn("absolute inset-y-0 left-0 w-[65%] transition-all",
-                   theme === "arcade90s" 
-                     ? "bg-arc-primary shadow-arc-glow-yellow" 
-                     : "bg-gradient-to-r from-brand-gold-light to-brand-gold-dark rounded-full shadow-pill-gold"
-                 )} />
-               </div>
-               <div className={cn("flex items-center justify-between text-sm font-bold transition-colors", theme === "arcade90s" ? "text-arc-text arcade-pixel-font text-[10px]" : "text-white")}>
-                 <span>{load.stops[0].city}</span>
-                 <span>{load.stops[load.stops.length-1].city}</span>
-               </div>
-            </div>
+            {stops.length >= 2 && (
+              <div className={cn("space-y-4 p-4 border transition-all",
+                theme === "arcade90s" 
+                  ? "bg-arc-bg/50 rounded-none border-arc-secondary/30 shadow-arc-glow-cyan" 
+                  : "bg-brand-dark-pill/50 rounded-2xl border-brand-border/50"
+              )}>
+                 <div className={cn("flex items-center justify-between text-[10px] font-bold uppercase tracking-widest transition-colors", theme === "arcade90s" ? "text-arc-muted arcade-pixel-font" : "text-brand-muted")}>
+                   <span>Origin</span>
+                   <span>Destination</span>
+                 </div>
+                 <div className={cn("h-2 rounded-full overflow-hidden relative transition-all", theme === "arcade90s" ? "bg-arc-border rounded-none" : "bg-brand-border")}>
+                   <div className={cn("absolute inset-y-0 left-0 transition-all",
+                     theme === "arcade90s" 
+                       ? "bg-arc-primary shadow-arc-glow-yellow" 
+                       : "bg-gradient-to-r from-brand-gold-light to-brand-gold-dark rounded-full shadow-pill-gold"
+                   )} style={{ width: `${Math.min(100, Math.max(10, (stops.filter(s => s.departedAt).length / stops.length) * 100 + 10))}%` }} />
+                 </div>
+                 <div className={cn("flex items-center justify-between text-sm font-bold transition-colors", theme === "arcade90s" ? "text-arc-text arcade-pixel-font text-[10px]" : "text-white")}>
+                   <span>{firstStop?.city || "Origin"}</span>
+                   <span>{lastStop?.city || "Destination"}</span>
+                 </div>
+              </div>
+            )}
 
             {/* Stop List */}
             <div>
@@ -167,8 +248,9 @@ export default function PublicTracking() {
               <div className="space-y-0 relative pl-2">
                 <div className={cn("absolute top-2 bottom-4 left-[19px] w-0.5 transition-colors", theme === "arcade90s" ? "bg-arc-border" : "bg-brand-border")} />
                 
-                {load.stops.map((stop, idx) => {
-                   const isCompleted = stop.status === "DEPARTED" || stop.status === "ARRIVED";
+                {stops.map((stop, idx) => {
+                   const status = getStopStatus(stop);
+                   const isCompleted = status === "DEPARTED" || status === "ARRIVED";
                    const isCurrent = stop.id === currentStop?.id;
 
                    return (
@@ -191,15 +273,17 @@ export default function PublicTracking() {
                       
                       <div className={`transition-all duration-500 ${isCurrent ? "opacity-100 translate-x-0" : isCompleted ? "opacity-60" : "opacity-40"}`}>
                         <h4 className={cn("text-base font-bold transition-colors", theme === "arcade90s" ? "text-arc-text group-hover:text-arc-primary arcade-pixel-font tracking-wide" : "text-white group-hover:text-brand-gold")}>{stop.city}, {stop.state}</h4>
-                        <p className={cn("text-sm mt-0.5 transition-colors", theme === "arcade90s" ? "text-arc-muted font-mono text-xs" : "text-brand-muted")}>{stop.addressLine1}</p>
-                        <div className={cn("flex items-center gap-2 mt-2 text-xs font-mono w-fit px-2 py-1 border transition-colors",
-                          theme === "arcade90s" 
-                            ? "text-arc-secondary bg-arc-bg border-arc-secondary/30 rounded-none" 
-                            : "text-brand-muted/80 bg-brand-dark-pill/50 border-brand-border/50 rounded"
-                        )}>
-                          <Clock className="h-3 w-3" />
-                          {format(new Date(stop.windowStart), "MMM d, HH:mm")}
-                        </div>
+                        <p className={cn("text-sm mt-0.5 transition-colors", theme === "arcade90s" ? "text-arc-muted font-mono text-xs" : "text-brand-muted")}>{stop.fullAddress || stop.name}</p>
+                        {stop.windowFrom && (
+                          <div className={cn("flex items-center gap-2 mt-2 text-xs font-mono w-fit px-2 py-1 border transition-colors",
+                            theme === "arcade90s" 
+                              ? "text-arc-secondary bg-arc-bg border-arc-secondary/30 rounded-none" 
+                              : "text-brand-muted/80 bg-brand-dark-pill/50 border-brand-border/50 rounded"
+                          )}>
+                            <Clock className="h-3 w-3" />
+                            {format(new Date(stop.windowFrom), "MMM d, HH:mm")}
+                          </div>
+                        )}
                       </div>
                     </div>
                    );
@@ -217,9 +301,9 @@ export default function PublicTracking() {
                  <Truck className={cn("h-5 w-5", theme === "arcade90s" ? "text-arc-muted" : "text-brand-muted")} />
               </div>
               <div>
-                <p className={cn("text-sm font-bold transition-colors", theme === "arcade90s" ? "text-arc-text arcade-pixel-font" : "text-white")}>Carrier Information</p>
-                <p className={cn("text-xs mt-1 transition-colors", theme === "arcade90s" ? "text-arc-muted font-mono" : "text-brand-muted")}>Transport provided by <span className={cn("font-medium", theme === "arcade90s" ? "text-arc-text" : "text-white")}>Soar Transportation Group</span></p>
-                <p className={cn("text-[10px] font-mono mt-2 uppercase tracking-wide transition-colors", theme === "arcade90s" ? "text-arc-muted/60" : "text-brand-muted")}>MC: 123456 • DOT: 9876543</p>
+                <p className={cn("text-sm font-bold transition-colors", theme === "arcade90s" ? "text-arc-text arcade-pixel-font" : "text-white")}>Shipment Information</p>
+                <p className={cn("text-xs mt-1 transition-colors", theme === "arcade90s" ? "text-arc-muted font-mono" : "text-brand-muted")}>Shipper: <span className={cn("font-medium", theme === "arcade90s" ? "text-arc-text" : "text-white")}>{data.shipperName}</span></p>
+                <p className={cn("text-[10px] font-mono mt-2 uppercase tracking-wide transition-colors", theme === "arcade90s" ? "text-arc-muted/60" : "text-brand-muted")}>Load #{data.loadNumber}</p>
               </div>
             </div>
           </div>

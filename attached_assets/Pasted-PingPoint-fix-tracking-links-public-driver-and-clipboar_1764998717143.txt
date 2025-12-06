@@ -1,0 +1,255 @@
+PingPoint – fix tracking links (public & driver) and clipboard buttons
+
+Current issues (from manual testing):
+1) On the Load Details page (Broker console), in the "TRACKING LINKS" section:
+   - The "Copy" buttons do nothing.
+   - Both PUBLIC TRACKING LINK and DRIVER APP LINK show the same URL.
+2) When I open the public tracking URL in a new tab, it sometimes shows a different load than the one I created (mismatch between load and tracking link).
+
+Goal:
+- Each load must have its own unique tracking tokens:
+  - `trackingToken` → used for public tracking page `/track/:trackingToken`
+  - `driverToken` → used for driver mini-app `/driver/:driverToken`
+- The Load Details page for a given load must:
+  - Display correct URLs based on that load's tokens.
+  - Allow copying these URLs to the clipboard with working buttons.
+  - Allow opening the public tracking page with a button.
+- Public tracking and driver pages must always show the correct load for their token.
+
+Please implement the following steps with minimal changes to the current structure and keeping the existing Arcade 90s UI.
+
+============================================================
+1) ENSURE TOKENS EXIST ON THE LOAD MODEL AND ARE UNIQUE
+============================================================
+
+1.1. Check Prisma `Load` model (e.g. in `prisma/schema.prisma`):
+- It should have fields similar to:
+
+  model Load {
+    id             String @id @default(uuid())
+    loadNumber     String @unique
+    brokerId       String
+    // ...
+    trackingToken  String @unique
+    driverToken    String @unique
+    // ...
+  }
+
+- If `trackingToken` / `driverToken` are missing:
+  - Add them as `String` with `@unique`.
+  - Run `prisma migrate dev` to create the columns.
+
+============================================================
+2) GENERATE TOKENS WHEN CREATING A LOAD
+============================================================
+
+2.1. Find the backend handler used when broker creates a new load from `/app/loads/new`.
+- This might be something like:
+  - `server/routes/loads.ts`,
+  - `src/server/api/loads.ts`,
+  - or `app/api/loads/route.ts`.
+
+2.2. In the create logic (after you know which broker & driver are used):
+
+- If `trackingToken` and `driverToken` are not already set, generate them:
+
+  import crypto from "crypto";
+
+  function generateToken() {
+    return crypto.randomUUID(); // or crypto.randomBytes(16).toString("hex")
+  }
+
+  const load = await prisma.load.create({
+    data: {
+      // existing fields...
+      trackingToken: generateToken(),
+      driverToken: generateToken(),
+    },
+    include: {
+      stops: { orderBy: { sequence: "asc" } },
+      broker: true,
+      driver: true,
+    },
+  });
+
+- Make sure the response that the frontend uses for the confirmation/redirect includes both `trackingToken` and `driverToken`.
+
+============================================================
+3) FIX API FOR PUBLIC TRACKING & DRIVER APP
+============================================================
+
+3.1. Public tracking API:
+- Locate the endpoint that powers the public tracking page (the one opened by the public link), e.g.:
+  - `GET /api/public/track/:token`,
+  - or `GET /api/track/:token`.
+
+- Make sure it fetches the load by `trackingToken`, NOT by `id` or `loadNumber`:
+
+  const token = params.token; // from route
+  const load = await prisma.load.findUnique({
+    where: { trackingToken: token },
+    include: {
+      stops: { orderBy: { sequence: "asc" } },
+      broker: true,
+    },
+  });
+
+  if (!load) {
+    return 404;
+  }
+
+3.2. Driver mini-app API:
+- Locate the endpoint used by `/driver/:token` page.
+- Ensure it fetches by `driverToken`:
+
+  const token = params.token;
+  const load = await prisma.load.findUnique({
+    where: { driverToken: token },
+    include: {
+      stops: { orderBy: { sequence: "asc" } },
+      broker: true,
+      driver: true,
+    },
+  });
+
+- This guarantees each token always maps to the correct load.
+
+============================================================
+4) CONSTRUCT CORRECT URLs IN LOAD DETAILS PAGE
+============================================================
+
+4.1. Find the Load Details view in the Broker console.
+- This is the page you see after clicking on a load from "Your Loads".
+- It contains sections "ROUTE PLAN", "COMMERCIAL INFO", and "TRACKING LINKS".
+- File will look like:
+  - `client/src/pages/app/loads/[id].tsx`, or
+  - `client/src/features/loads/LoadDetailsPage.tsx`.
+
+4.2. When this page loads, it should receive a `load` object that includes `trackingToken` and `driverToken`.
+
+4.3. Build URLs on the client:
+
+- At the top of the component (inside React component function), compute:
+
+  const origin =
+    typeof window !== "undefined"
+      ? window.location.origin
+      : import.meta.env.VITE_APP_BASE_URL || process.env.APP_BASE_URL || "";
+
+  const publicTrackingUrl = load.trackingToken
+    ? `${origin}/track/${load.trackingToken}`
+    : "";
+
+  const driverAppUrl = load.driverToken
+    ? `${origin}/driver/${load.driverToken}`
+    : "";
+
+- Use these exact URLs as the `value` for the two readonly input fields in the TRACKING LINKS section:
+
+  <input
+    type="text"
+    readOnly
+    value={publicTrackingUrl}
+    // ...
+  />
+
+  <input
+    type="text"
+    readOnly
+    value={driverAppUrl}
+    // ...
+  />
+
+4.4. The "Open Public Tracking" button in the ACTIONS section should:
+
+  - If `publicTrackingUrl` is present, open it:
+
+    const handleOpenPublicTracking = () => {
+      if (!publicTrackingUrl) return;
+      window.open(publicTrackingUrl, "_blank", "noopener,noreferrer");
+    };
+
+  - Wire this function to the button's `onClick`.
+
+============================================================
+5) IMPLEMENT WORKING CLIPBOARD HELPERS FOR COPY BUTTONS
+============================================================
+
+5.1. Create a small helper (if not already) in `client/src/utils/copyToClipboard.ts`:
+
+  export async function copyToClipboard(text: string) {
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(text);
+      } else {
+        const textarea = document.createElement("textarea");
+        textarea.value = text;
+        textarea.style.position = "fixed";
+        textarea.style.opacity = "0";
+        document.body.appendChild(textarea);
+        textarea.focus();
+        textarea.select();
+        document.execCommand("copy");
+        document.body.removeChild(textarea);
+      }
+      // Optional: show toast / notification if the app has a toast system
+      console.log("Copied to clipboard:", text);
+    } catch (err) {
+      console.error("Failed to copy to clipboard", err);
+    }
+  }
+
+5.2. In the Load Details tracking section component:
+
+- Import the helper:
+
+  import { copyToClipboard } from "@/utils/copyToClipboard";
+
+- For the PUBLIC TRACKING LINK copy button:
+
+  const handleCopyPublic = () => {
+    if (!publicTrackingUrl) return;
+    copyToClipboard(publicTrackingUrl);
+  };
+
+  <button onClick={handleCopyPublic} ...>
+    {/* existing icon/text */}
+  </button>
+
+- For the DRIVER APP LINK copy button:
+
+  const handleCopyDriver = () => {
+    if (!driverAppUrl) return;
+    copyToClipboard(driverAppUrl);
+  };
+
+  <button onClick={handleCopyDriver} ...>
+    {/* existing icon/text */}
+  </button>
+
+- If you have a global toast/snackbar component, call it to show a small “Link copied” message.
+
+============================================================
+6) QUICK MANUAL TEST PLAN
+============================================================
+
+After implementing the above:
+
+1. Create a **new load** from `/` → Broker / Dispatcher → Create Load, with a new broker email.
+2. In the Broker console, click on the new load to open its details.
+3. Scroll to "TRACKING LINKS":
+   - Verify the PUBLIC and DRIVER URLs are different and include `/track/` and `/driver/` with *different* tokens.
+4. Click the copy icons:
+   - Paste each into a new tab / text field to ensure the correct URL was copied.
+5. Click “Open Public Tracking”:
+   - It should open the same URL as PUBLIC TRACKING LINK.
+   - The page should show this exact load (origin, destination, amount, etc.), not some other order.
+6. Open the DRIVER APP LINK in an incognito tab:
+   - Ensure it shows the driver mini-app for this same load.
+7. Optionally create a second load and repeat:
+   - Confirm that each load has its own unique tracking/driver URLs and they never cross over.
+
+Please make these changes now so that:
+- copy buttons work correctly,
+- tracking pages always show the right load,
+- and the URLs in "TRACKING LINKS" are deterministic and tied to that specific load.

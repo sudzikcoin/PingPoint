@@ -1,22 +1,254 @@
-import { useState } from "react";
-import { useLocation } from "wouter";
-import { getLoadsByView } from "@/lib/mock-data";
+import { useState, useEffect } from "react";
+import { useLocation, useRoute } from "wouter";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
-import { Truck, ChevronRight, Navigation, Calendar, MapPin } from "lucide-react";
+import { Truck, ChevronRight, Navigation, Calendar, MapPin, Loader2, CheckCircle2, Circle } from "lucide-react";
 import { format } from "date-fns";
 import { PillButton } from "@/components/ui/pill-button";
 import { ThemeToggle } from "@/components/ui/theme-toggle";
 import { useTheme } from "@/context/theme-context";
 import { cn } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
+import { toast } from "sonner";
+
+interface Stop {
+  id: string;
+  type: string;
+  name: string;
+  city: string;
+  state: string;
+  fullAddress: string;
+  sequence: number;
+  windowFrom: string | null;
+  windowTo: string | null;
+  arrivedAt: string | null;
+  departedAt: string | null;
+}
+
+interface LoadData {
+  id: string;
+  loadNumber: string;
+  status: string;
+  stops: Stop[];
+}
 
 export default function DriverDashboard() {
   const [, setLocation] = useLocation();
-  const [activeTab, setActiveTab] = useState<"today" | "upcoming" | "history">("today");
+  const [matchTokenRoute, tokenParams] = useRoute("/driver/:token");
   const { theme } = useTheme();
+  const [load, setLoad] = useState<LoadData | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [sendingPing, setSendingPing] = useState(false);
 
-  const loads = getLoadsByView(activeTab);
+  const driverToken = tokenParams?.token;
+
+  useEffect(() => {
+    const fetchLoad = async () => {
+      if (!driverToken) {
+        // No token - show welcome screen
+        setLoading(false);
+        return;
+      }
+
+      try {
+        const res = await fetch(`/api/driver/${driverToken}`);
+        if (!res.ok) {
+          throw new Error("Load not found");
+        }
+        const data = await res.json();
+        setLoad(data);
+      } catch (err) {
+        console.error("Failed to fetch driver load:", err);
+        setError("Invalid or expired driver link");
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchLoad();
+  }, [driverToken]);
+
+  const sendLocationPing = async () => {
+    if (!driverToken) return;
+
+    setSendingPing(true);
+    try {
+      if ("geolocation" in navigator) {
+        navigator.geolocation.getCurrentPosition(
+          async (position) => {
+            const { latitude, longitude, accuracy } = position.coords;
+            
+            const res = await fetch(`/api/driver/${driverToken}/ping`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ lat: latitude, lng: longitude, accuracy }),
+            });
+
+            if (res.ok) {
+              toast.success("Location sent successfully!");
+            } else {
+              toast.error("Failed to send location");
+            }
+            setSendingPing(false);
+          },
+          (err) => {
+            console.error("Geolocation error:", err);
+            toast.error("Could not get your location. Please enable GPS.");
+            setSendingPing(false);
+          },
+          { enableHighAccuracy: true, timeout: 10000 }
+        );
+      } else {
+        toast.error("Geolocation not supported on this device");
+        setSendingPing(false);
+      }
+    } catch (err) {
+      console.error("Error sending ping:", err);
+      toast.error("Failed to send location");
+      setSendingPing(false);
+    }
+  };
+
+  const markArrived = async (stopId: string) => {
+    if (!driverToken) return;
+
+    try {
+      const res = await fetch(`/api/driver/${driverToken}/stop/${stopId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ arrivedAt: new Date().toISOString() }),
+      });
+
+      if (res.ok) {
+        toast.success("Marked as arrived!");
+        // Refresh load data
+        const loadRes = await fetch(`/api/driver/${driverToken}`);
+        if (loadRes.ok) {
+          const data = await loadRes.json();
+          setLoad(data);
+        }
+      } else {
+        toast.error("Failed to update stop");
+      }
+    } catch (err) {
+      console.error("Error marking arrived:", err);
+      toast.error("Failed to update stop");
+    }
+  };
+
+  const markDeparted = async (stopId: string) => {
+    if (!driverToken) return;
+
+    try {
+      const res = await fetch(`/api/driver/${driverToken}/stop/${stopId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ departedAt: new Date().toISOString() }),
+      });
+
+      if (res.ok) {
+        toast.success("Marked as departed!");
+        // Refresh load data
+        const loadRes = await fetch(`/api/driver/${driverToken}`);
+        if (loadRes.ok) {
+          const data = await loadRes.json();
+          setLoad(data);
+        }
+      } else {
+        toast.error("Failed to update stop");
+      }
+    } catch (err) {
+      console.error("Error marking departed:", err);
+      toast.error("Failed to update stop");
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className={cn("min-h-screen flex items-center justify-center transition-colors", 
+        theme === "arcade90s" ? "arcade-bg text-arc-text" : "bg-brand-bg text-brand-text"
+      )}>
+        <div className="flex flex-col items-center gap-4">
+          <Loader2 className={cn("h-8 w-8 animate-spin", theme === "arcade90s" ? "text-arc-secondary" : "text-brand-gold")} />
+          <p className={cn(theme === "arcade90s" ? "text-arc-muted arcade-pixel-font" : "text-brand-muted")}>Loading your load...</p>
+        </div>
+      </div>
+    );
+  }
+
+  // No token provided - show welcome/instructions screen
+  if (!driverToken && !loading) {
+    return (
+      <div className={cn("min-h-screen flex flex-col items-center justify-center gap-6 p-6 transition-colors", 
+        theme === "arcade90s" ? "arcade-bg text-arc-text" : "bg-brand-bg text-brand-text"
+      )}>
+        <div className={cn(
+          "p-8 rounded-2xl border text-center max-w-md",
+          theme === "arcade90s" 
+            ? "arcade-panel border-arc-secondary/50 shadow-arc-glow-cyan rounded-none" 
+            : "bg-brand-card border-brand-border"
+        )}>
+          <div className={cn(
+            "w-20 h-20 rounded-full mx-auto mb-6 flex items-center justify-center",
+            theme === "arcade90s" 
+              ? "bg-arc-bg border-2 border-arc-secondary rounded-none" 
+              : "bg-brand-dark-pill border border-brand-border"
+          )}>
+            <Truck className={cn("h-10 w-10", theme === "arcade90s" ? "text-arc-secondary" : "text-brand-gold")} />
+          </div>
+          <h1 className={cn("text-2xl font-bold mb-4", theme === "arcade90s" ? "arcade-pixel-font text-arc-primary" : "text-white")}>
+            Driver Portal
+          </h1>
+          <p className={cn("mb-6", theme === "arcade90s" ? "text-arc-muted font-mono text-sm" : "text-brand-muted")}>
+            To access your assigned load, please use the link that was sent to your phone via SMS.
+          </p>
+          <div className={cn(
+            "p-4 rounded border text-left",
+            theme === "arcade90s" ? "bg-arc-bg border-arc-border" : "bg-brand-dark-pill border-brand-border"
+          )}>
+            <p className={cn("text-xs uppercase tracking-wider mb-2 font-bold", theme === "arcade90s" ? "text-arc-muted arcade-pixel-font" : "text-brand-muted")}>
+              How it works:
+            </p>
+            <ol className={cn("text-sm space-y-2 list-decimal list-inside", theme === "arcade90s" ? "text-arc-text" : "text-white")}>
+              <li>Your dispatcher creates a load</li>
+              <li>You receive an SMS with a unique link</li>
+              <li>Click the link to view your route and send location updates</li>
+            </ol>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className={cn("min-h-screen flex flex-col items-center justify-center gap-4 p-6 transition-colors", 
+        theme === "arcade90s" ? "arcade-bg text-arc-text" : "bg-brand-bg text-brand-text"
+      )}>
+        <Truck className={cn("h-16 w-16", theme === "arcade90s" ? "text-arc-muted" : "text-brand-muted")} />
+        <p className={cn("text-center", theme === "arcade90s" ? "text-arc-muted arcade-pixel-font" : "text-brand-muted")}>
+          {error}
+        </p>
+      </div>
+    );
+  }
+
+  if (!load) {
+    return (
+      <div className={cn("min-h-screen flex items-center justify-center transition-colors", 
+        theme === "arcade90s" ? "arcade-bg text-arc-text" : "bg-brand-bg text-brand-text"
+      )}>
+        <Loader2 className={cn("h-8 w-8 animate-spin", theme === "arcade90s" ? "text-arc-secondary" : "text-brand-gold")} />
+      </div>
+    );
+  }
+
+  const stops = load.stops || [];
+  const currentStop = stops.find(s => !s.arrivedAt) || stops[stops.length - 1];
+  const firstStop = stops[0];
+  const lastStop = stops[stops.length - 1];
 
   return (
     <div className={cn("min-h-screen pb-20 font-sans transition-colors duration-300", 
@@ -33,19 +265,19 @@ export default function DriverDashboard() {
           )}
         >
           <h1 className={cn(
-            "text-center flex-1 ml-8", // ml-8 to balance the toggle on right
+            "text-center flex-1 ml-8",
             theme === "arcade90s"
               ? "arcade-pixel-font arcade-title text-lg tracking-widest"
               : "text-sm sm:text-base md:text-lg font-semibold tracking-[0.25em] uppercase text-brand-text/80"
           )}>
             {theme === "arcade90s" ? (
               <>
-                PINGPOINT <span className="arcade-subtitle text-[0.6em] block sm:inline sm:ml-2">PRESS START</span>
+                PINGPOINT <span className="arcade-subtitle text-[0.6em] block sm:inline sm:ml-2">DRIVER</span>
               </>
             ) : (
               <>
                 <span className="text-brand-text">PingPoint</span>
-                <span className="ml-2 text-[0.65em] font-medium text-brand-muted">by SuVerse labs</span>
+                <span className="ml-2 text-[0.65em] font-medium text-brand-muted">Driver</span>
               </>
             )}
           </h1>
@@ -54,164 +286,190 @@ export default function DriverDashboard() {
       </header>
 
       <main className="container mx-auto px-4 py-6 space-y-6">
-        {/* Status Tabs */}
-        <Tabs defaultValue="today" onValueChange={(v) => setActiveTab(v as any)} className="w-full mt-4">
-          <TabsList className={cn(
-            "grid w-full grid-cols-3 p-1 rounded-full border transition-all duration-300",
-            theme === "arcade90s" 
-              ? "bg-arc-panel border-arc-border shadow-[inset_0_0_10px_rgba(0,0,0,0.5)]" 
-              : "bg-brand-card border-brand-border"
+        {/* Load Info Card */}
+        <Card className={cn(
+          "overflow-hidden transition-all duration-300",
+          theme === "arcade90s"
+            ? "arcade-panel border-arc-secondary/50 shadow-arc-glow-cyan rounded-none"
+            : "bg-brand-card border-brand-border shadow-pill-dark"
+        )}>
+          <CardHeader className={cn(
+            "pb-2",
+            theme === "arcade90s" ? "border-b border-arc-border" : ""
           )}>
-            {["today", "upcoming", "history"].map((tab) => (
-              <TabsTrigger 
-                key={tab}
-                value={tab} 
+            <div className="flex items-center justify-between">
+              <CardTitle className={cn(
+                "text-lg",
+                theme === "arcade90s" ? "arcade-pixel-font text-arc-primary" : "text-white"
+              )}>
+                Load #{load.loadNumber}
+              </CardTitle>
+              <Badge className={cn(
+                theme === "arcade90s"
+                  ? "bg-arc-secondary/20 text-arc-secondary border-arc-secondary rounded-none"
+                  : "bg-brand-gold/20 text-brand-gold border-brand-gold/30"
+              )}>
+                {load.status}
+              </Badge>
+            </div>
+          </CardHeader>
+          <CardContent className="pt-4">
+            {/* Route Summary */}
+            {stops.length >= 2 && (
+              <div className="flex items-center justify-between mb-4">
+                <div className="text-center">
+                  <p className={cn("text-xs uppercase tracking-wider", theme === "arcade90s" ? "text-arc-muted arcade-pixel-font" : "text-brand-muted")}>From</p>
+                  <p className={cn("font-bold", theme === "arcade90s" ? "text-arc-text" : "text-white")}>{firstStop?.city}</p>
+                </div>
+                <div className={cn("flex-1 h-0.5 mx-4", theme === "arcade90s" ? "bg-arc-border" : "bg-brand-border")} />
+                <div className="text-center">
+                  <p className={cn("text-xs uppercase tracking-wider", theme === "arcade90s" ? "text-arc-muted arcade-pixel-font" : "text-brand-muted")}>To</p>
+                  <p className={cn("font-bold", theme === "arcade90s" ? "text-arc-text" : "text-white")}>{lastStop?.city}</p>
+                </div>
+              </div>
+            )}
+
+            {/* Send Location Button */}
+            <Button
+              onClick={sendLocationPing}
+              disabled={sendingPing}
+              className={cn(
+                "w-full mb-4",
+                theme === "arcade90s"
+                  ? "bg-arc-primary text-black rounded-none shadow-arc-glow-yellow hover:bg-arc-primary/80"
+                  : "bg-brand-gold text-black hover:bg-brand-gold/80"
+              )}
+            >
+              <Navigation className="w-4 h-4 mr-2" />
+              {sendingPing ? "Sending..." : "Send My Location"}
+            </Button>
+          </CardContent>
+        </Card>
+
+        {/* Stops List */}
+        <div className="space-y-4">
+          <h2 className={cn(
+            "text-sm uppercase tracking-widest font-bold px-2",
+            theme === "arcade90s" ? "text-arc-muted arcade-pixel-font" : "text-brand-muted"
+          )}>
+            Stops
+          </h2>
+
+          {stops.map((stop, idx) => {
+            const isCompleted = stop.departedAt;
+            const isArrived = stop.arrivedAt && !stop.departedAt;
+            const isPending = !stop.arrivedAt;
+
+            return (
+              <Card 
+                key={stop.id}
                 className={cn(
-                  "rounded-full text-xs font-medium capitalize transition-all duration-300",
+                  "overflow-hidden transition-all duration-300",
                   theme === "arcade90s"
-                    ? "data-[state=active]:bg-arc-secondary data-[state=active]:text-black data-[state=active]:shadow-arc-glow-cyan data-[state=active]:font-bold arcade-pixel-font text-[10px] tracking-widest text-arc-muted"
-                    : "data-[state=active]:bg-brand-gold data-[state=active]:text-[#6b3b05] data-[state=active]:shadow-md"
+                    ? isCompleted
+                      ? "arcade-panel border-arc-primary/50 opacity-60 rounded-none"
+                      : isArrived
+                        ? "arcade-panel border-arc-secondary shadow-arc-glow-cyan rounded-none"
+                        : "arcade-panel border-arc-border rounded-none"
+                    : isCompleted
+                      ? "bg-brand-card/50 border-brand-border/50"
+                      : isArrived
+                        ? "bg-brand-card border-brand-gold shadow-lg"
+                        : "bg-brand-card border-brand-border"
                 )}
               >
-                {tab}
-              </TabsTrigger>
-            ))}
-          </TabsList>
-
-          <div className="mt-6 space-y-4">
-            {loads.length === 0 ? (
-              <div className="text-center py-12">
-                <div className={cn(
-                  "mx-auto h-16 w-16 rounded-full flex items-center justify-center mb-4 transition-all duration-300",
-                  theme === "arcade90s"
-                    ? "bg-arc-panel border border-arc-secondary/30 shadow-arc-glow-cyan"
-                    : "bg-brand-card border border-brand-border shadow-pill-dark"
-                )}>
-                  <Truck className={cn("h-8 w-8 transition-colors", 
-                    theme === "arcade90s" ? "text-arc-secondary animate-pulse" : "text-brand-muted"
-                  )} />
-                </div>
-                <h3 className={cn("text-lg font-medium", theme === "arcade90s" ? "arcade-title tracking-wider" : "text-brand-text")}>
-                  {theme === "arcade90s" ? "NO MISSIONS DETECTED" : "No loads found"}
-                </h3>
-                <p className={cn("text-sm mt-1", theme === "arcade90s" ? "text-arc-muted arcade-pixel-font text-[10px]" : "text-brand-muted")}>
-                  You have no loads in this category.
-                </p>
-              </div>
-            ) : (
-              loads.map((load) => (
-                <Card 
-                  key={load.id} 
-                  className={cn(
-                    "overflow-hidden transition-all duration-300 cursor-pointer group relative",
-                    theme === "arcade90s"
-                      ? "arcade-panel rounded-none border-2 border-arc-border hover:border-arc-secondary hover:shadow-arc-glow-cyan hover:scale-[1.01] arcade-scanline"
-                      : "border-brand-border bg-brand-card shadow-lg shadow-black/20 rounded-2xl hover:border-brand-gold/30"
-                  )}
-                  onClick={() => setLocation(`/driver/loads/${load.id}`)}
-                >
-                  {theme === "arcade90s" && <div className="absolute inset-0 bg-arc-secondary/5 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-0" />}
-                  
-                  <CardHeader className="p-5 pb-2 flex flex-col items-start space-y-1 relative z-10">
-                    <div className="w-full flex items-center justify-between mb-2">
-                      <div className="flex items-center gap-3">
-                        <div className={cn(
-                          "px-3 py-1 rounded-full text-[10px] font-bold tracking-wider uppercase shadow-sm transition-all",
-                          theme === "arcade90s"
-                            ? "arcade-badge bg-transparent border-arc-secondary text-arc-secondary shadow-[0_0_5px_rgba(34,211,238,0.5)] group-hover:arcade-pulse-glow"
-                            : load.status === "IN_TRANSIT" 
-                              ? "bg-gradient-to-r from-brand-gold-light via-brand-gold to-brand-gold-dark text-[#6b3b05]" 
-                              : "bg-brand-dark-pill border border-brand-border text-brand-muted"
-                        )}>
-                          {load.status.replace("_", " ")}
-                        </div>
-                        <span className={cn(
-                          "text-[11px] uppercase tracking-[0.18em] font-mono",
-                          theme === "arcade90s" ? "text-arc-muted arcade-flicker" : "text-brand-muted"
-                        )}>{load.externalLoadId}</span>
-                      </div>
-                      
-                      <div className={cn(
-                        "h-8 w-8 flex items-center justify-center transition-all duration-300",
-                        theme === "arcade90s"
-                          ? "text-arc-secondary group-hover:animate-bounce"
-                          : "rounded-full bg-brand-dark-pill border border-brand-border group-hover:bg-brand-gold group-hover:text-[#6b3b05]"
-                      )}>
-                         <ChevronRight className="h-4 w-4" />
-                      </div>
-                    </div>
-
+                <CardContent className="p-4">
+                  <div className="flex items-start gap-4">
+                    {/* Status Icon */}
                     <div className={cn(
-                      "text-[11px] uppercase tracking-[0.18em] font-bold transition-colors",
-                      theme === "arcade90s" ? "text-arc-muted group-hover:text-arc-primary group-hover:arcade-hover-glitch" : "text-brand-muted/70"
+                      "w-10 h-10 rounded-full flex items-center justify-center shrink-0",
+                      theme === "arcade90s"
+                        ? isCompleted
+                          ? "bg-arc-primary text-black rounded-none"
+                          : isArrived
+                            ? "bg-arc-secondary text-black rounded-none"
+                            : "bg-arc-bg border border-arc-border text-arc-muted rounded-none"
+                        : isCompleted
+                          ? "bg-emerald-500 text-white"
+                          : isArrived
+                            ? "bg-brand-gold text-black"
+                            : "bg-brand-dark-pill border border-brand-border text-brand-muted"
                     )}>
-                      {load.brokerName}
-                    </div>
-                  </CardHeader>
-                  
-                  <CardContent className="p-5 pt-2 space-y-6 relative z-10">
-                    {/* Big Address Groups */}
-                    <div className="space-y-5">
-                      {/* Pickup Group */}
-                      <div>
-                         <p className={cn(
-                           "text-[10px] font-bold uppercase tracking-[0.2em] mb-1",
-                           theme === "arcade90s" ? "text-arc-primary" : "text-brand-muted"
-                         )}>Pickup</p>
-                         <div className={cn(
-                           "text-xl sm:text-2xl font-bold leading-tight transition-colors",
-                           theme === "arcade90s" ? "text-arc-text arcade-pixel-font tracking-wide" : "text-slate-50"
-                         )}>
-                           {load.stops[0].city}, {load.stops[0].state}
-                         </div>
-                         <div className={cn(
-                           "flex items-center gap-2 text-xs mt-1",
-                           theme === "arcade90s" ? "text-arc-muted font-mono" : "text-brand-muted"
-                         )}>
-                            <Calendar className="h-3 w-3" />
-                            <span>{format(new Date(load.stops[0].windowStart), "MMM d, h:mm a")}</span>
-                         </div>
-                      </div>
-
-                      {/* Delivery Group */}
-                      <div>
-                         <p className={cn(
-                           "text-[10px] font-bold uppercase tracking-[0.2em] mb-1",
-                           theme === "arcade90s" ? "text-arc-secondary" : "text-brand-muted"
-                         )}>Delivery</p>
-                         <div className={cn(
-                           "text-xl sm:text-2xl font-bold leading-tight transition-colors",
-                           theme === "arcade90s" ? "text-arc-text arcade-pixel-font tracking-wide" : "text-slate-50"
-                         )}>
-                           {load.stops[load.stops.length - 1].city}, {load.stops[load.stops.length - 1].state}
-                         </div>
-                         <div className={cn(
-                           "flex items-center gap-2 text-xs mt-1",
-                           theme === "arcade90s" ? "text-arc-muted font-mono" : "text-brand-muted"
-                         )}>
-                            <Calendar className="h-3 w-3" />
-                            <span>{format(new Date(load.stops[load.stops.length - 1].windowStart), "MMM d, h:mm a")}</span>
-                         </div>
-                      </div>
+                      {isCompleted ? (
+                        <CheckCircle2 className="w-5 h-5" />
+                      ) : (
+                        <span className={cn("text-sm font-bold", theme === "arcade90s" ? "arcade-pixel-font" : "")}>{idx + 1}</span>
+                      )}
                     </div>
 
-                    {load.lastLocationCity && (
-                      <div className={cn(
-                        "flex items-center gap-3 text-xs p-3 transition-all mt-2",
-                        theme === "arcade90s"
-                          ? "text-arc-primary border border-arc-primary/30 bg-arc-primary/5 arcade-pixel-font text-[10px] tracking-wider"
-                          : "text-brand-gold bg-brand-gold/5 rounded-xl border border-brand-gold/10"
-                      )}>
-                        <Navigation className="h-3.5 w-3.5" />
-                        <span className="font-medium tracking-wide">Last ping: {load.lastLocationCity}, {load.lastLocationState}</span>
+                    {/* Stop Info */}
+                    <div className="flex-1">
+                      <div className="flex items-center gap-2 mb-1">
+                        <Badge variant="outline" className={cn(
+                          "text-[10px]",
+                          theme === "arcade90s"
+                            ? "border-arc-border text-arc-muted rounded-none"
+                            : "border-brand-border text-brand-muted"
+                        )}>
+                          {stop.type}
+                        </Badge>
+                        {stop.name && (
+                          <span className={cn("text-sm", theme === "arcade90s" ? "text-arc-muted" : "text-brand-muted")}>
+                            {stop.name}
+                          </span>
+                        )}
                       </div>
-                    )}
-                  </CardContent>
-                </Card>
-              ))
-            )}
-          </div>
-        </Tabs>
+                      <p className={cn("font-bold text-lg", theme === "arcade90s" ? "text-arc-text" : "text-white")}>
+                        {stop.city}, {stop.state}
+                      </p>
+                      <p className={cn("text-sm", theme === "arcade90s" ? "text-arc-muted" : "text-brand-muted")}>
+                        {stop.fullAddress}
+                      </p>
+                      {stop.windowFrom && (
+                        <div className={cn("flex items-center gap-2 mt-2 text-xs", theme === "arcade90s" ? "text-arc-secondary font-mono" : "text-brand-muted")}>
+                          <Calendar className="w-3 h-3" />
+                          {format(new Date(stop.windowFrom), "MMM d, HH:mm")}
+                        </div>
+                      )}
+
+                      {/* Action Buttons */}
+                      {!isCompleted && (
+                        <div className="flex gap-2 mt-3">
+                          {isPending && (
+                            <Button
+                              size="sm"
+                              onClick={() => markArrived(stop.id)}
+                              className={cn(
+                                theme === "arcade90s"
+                                  ? "bg-arc-secondary text-black rounded-none"
+                                  : "bg-brand-gold text-black"
+                              )}
+                            >
+                              Arrive
+                            </Button>
+                          )}
+                          {isArrived && (
+                            <Button
+                              size="sm"
+                              onClick={() => markDeparted(stop.id)}
+                              className={cn(
+                                theme === "arcade90s"
+                                  ? "bg-arc-primary text-black rounded-none"
+                                  : "bg-emerald-500 text-white"
+                              )}
+                            >
+                              Depart
+                            </Button>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            );
+          })}
+        </div>
       </main>
     </div>
   );
