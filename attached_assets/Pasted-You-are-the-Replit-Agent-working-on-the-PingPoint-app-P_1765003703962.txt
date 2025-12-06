@@ -1,0 +1,135 @@
+You are the Replit Agent working on the PingPoint app. Please update the **/app/billing** page exactly as described below. Do NOT change routing, pricing logic, or plan counters – only the Billing UI and basic button behaviors.
+
+====================================================
+1. KEEP “CURRENT PLAN” CARD UNCHANGED
+====================================================
+- Leave the top “CURRENT PLAN” card exactly as it is now:
+  - Title, “Free Trial”, “Loads this month 0 / 10”, “Extra load price $0.99”.
+- Do not touch its layout, data, or styling.
+
+====================================================
+2. RESTRUCTURE PAYMENT METHODS SECTION
+====================================================
+We want two clear groups:
+
+  1) Card Payment  
+  2) Crypto Wallet (one button that then shows wallet choices)
+
+Remove the current two separate wallet buttons (“CONNECT METAMASK”, “CONNECT COINBASE WALLET”) and replace them with the structure below.
+
+----------------------------------------------------
+2.1 CARD PAYMENT BLOCK
+----------------------------------------------------
+- Add (or restore) a block with heading:
+
+  - Icon + label: `CARD PAYMENT`
+  - Subtitle text:  
+    `Pay securely with credit or debit card via Stripe.`
+
+- Inside this block, add ONE primary button, styled like the existing yellow CTA buttons in the app:
+
+  - Label: `Pay with Card`
+  - Button style:
+    - Full width on mobile, same height / radius / neon style as other primary CTAs (e.g. “CREATE LOAD”).
+    - Yellow background with subtle glow on hover, matching the arcade theme.
+
+- Behavior for now (no real Stripe integration required):
+  - When the user clicks `Pay with Card`, just open a small toast/light notification or inline message:
+    - Example text: `Card payments via Stripe are coming soon.`
+  - Implement this in a way that’s easy to later replace with real Stripe checkout (e.g. the onClick handler calls a `handleCardPayment()` function with a `// TODO: integrate Stripe` comment).
+
+Do NOT remove any existing text that mentions Stripe; you can reuse the “coming soon” wording if it already exists.
+
+----------------------------------------------------
+2.2 CRYPTO PAYMENT BLOCK
+----------------------------------------------------
+Below the card block, add a second block dedicated to crypto, replacing the old per-wallet buttons.
+
+- Heading:
+
+  - Icon + label: `CRYPTO PAYMENT`
+
+- Subtitle text (reuse the existing acceptance note, but keep it concise):
+
+  Example:
+  `Connect a crypto wallet to pay in USDC. We accept USDC only on Base, Ethereum, and Solana networks.`
+
+- Inside this block there must be **ONE** main button:
+
+  - Label: `Connect Crypto Wallet`
+  - Style:
+    - Full width.
+    - Cyan / neon blue background (similar to your existing cyan CTA style).
+    - Same size / radius as the Yellow CTAs, following the Arcade 90s look.
+
+====================================================
+3. IMPLEMENT WALLET SELECTION MODAL / SHEET
+====================================================
+When the user clicks the `Connect Crypto Wallet` button:
+
+- Open a modal (centered) or bottom sheet (mobile-friendly) with:
+
+  - Title: `Connect Crypto Wallet`
+  - Short description:
+    `Choose a wallet provider to connect. (Demo mode – no real on-chain transactions yet.)`
+
+  - Wallet options as a vertical list of buttons:
+    - `MetaMask`
+    - `Coinbase Wallet`
+    - (Optional: you may add `Phantom` for Solana if it fits the existing design, but MetaMask + Coinbase are required.)
+
+  - Each wallet option button:
+    - Fills the width of the modal minus padding.
+    - Has a subtle border and hover glow in Arcade 90s style.
+    - On click, for now, just:
+      - `console.log("Connect <WalletName> clicked")`
+      - Show a small temporary toast or inline notice at the bottom of the modal, e.g.:  
+        `Wallet connection for <WalletName> is coming soon.`
+
+  - Add a simple “Close” or “Cancel” button / X icon to dismiss the modal.
+
+Implementation details:
+
+- Create a small reusable component, for example:
+  - `client/src/components/billing/CryptoWalletModal.tsx`
+- Use local React state in the Billing page to control it:
+
+  - `const [isWalletModalOpen, setWalletModalOpen] = useState(false);`
+  - `Connect Crypto Wallet` button sets `setWalletModalOpen(true)`.
+  - Modal close button calls `setWalletModalOpen(false)`.
+
+- Make sure the modal works well on mobile (no clipped content, scrollable if necessary, dark/backdrop overlay matching the rest of the app).
+
+====================================================
+4. CLEANUP AND STYLING
+====================================================
+- Remove the old separate buttons:
+  - `CONNECT METAMASK`
+  - `CONNECT COINBASE WALLET`
+- Keep any existing informational text at the bottom that explains:
+  - No wallet connected / wallet connected state.
+  - Supported networks and USDC requirement.
+  Adjust wording if necessary so it still makes sense with the new single “Connect Crypto Wallet” entrypoint.
+
+- Preserve the overall Arcade 90s / neon visual style:
+  - Same fonts, letter spacing, and glowing headings.
+  - Use existing Tailwind classes / utility patterns already used on this page.
+
+====================================================
+5. TESTING
+====================================================
+After changes, manually verify:
+
+1. The **Billing** page shows:
+   - “CURRENT PLAN” card (unchanged).
+   - A **Card Payment** block with a “Pay with Card” button that shows the “coming soon” message when clicked.
+   - A **Crypto Payment** block with a single “Connect Crypto Wallet” button.
+
+2. Clicking `Connect Crypto Wallet`:
+   - Opens the modal with wallet choices (MetaMask, Coinbase Wallet).
+   - Clicking each wallet shows a temporary “coming soon” notice and logs to console.
+   - Modal closes correctly when pressing Close / Cancel or clicking outside (if you implement backdrop close).
+
+3. There are no console errors, and all styling is consistent with the rest of the PingPoint Arcade theme.
+
+Make these UI changes only; do not implement real Stripe or on-chain payments yet.

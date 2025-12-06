@@ -5,11 +5,11 @@ import { api } from "@/lib/api";
 import { useRoute, useLocation } from "wouter";
 import { useTheme } from "@/context/theme-context";
 import { cn } from "@/lib/utils";
-import { ArrowLeft, Copy, Truck, User, Phone, MapPin, Calendar, Link2, Upload, FileText, ExternalLink } from "lucide-react";
+import { ArrowLeft, Copy, Truck, User, Phone, MapPin, Calendar, Link2, Upload, FileText, ExternalLink, Check } from "lucide-react";
 import { format } from "date-fns";
 import { toast } from "sonner";
 import { useState, useEffect, useRef } from "react";
-import { copyToClipboard } from "@/utils/copyToClipboard";
+import { useCopyFeedback } from "@/hooks/useCopyFeedback";
 
 interface Stop {
   id: string;
@@ -54,6 +54,25 @@ export default function AppLoadDetails() {
   const [error, setError] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  
+  const { isCopied: isTrackingCopied, copyWithFeedback: copyTrackingFn } = useCopyFeedback();
+  const { isCopied: isDriverCopied, copyWithFeedback: copyDriverFn } = useCopyFeedback();
+  const { isCopied: isRcCopied, copyWithFeedback: copyRcFn } = useCopyFeedback();
+
+  const copyTracking = async (text: string) => {
+    const ok = await copyTrackingFn(text);
+    if (!ok) toast.error("Failed to copy tracking link");
+  };
+
+  const copyDriver = async (text: string) => {
+    const ok = await copyDriverFn(text);
+    if (!ok) toast.error("Failed to copy driver link");
+  };
+
+  const copyRc = async (text: string) => {
+    const ok = await copyRcFn(text);
+    if (!ok) toast.error("Failed to copy rate confirmation link");
+  };
 
   useEffect(() => {
     const fetchLoad = async () => {
@@ -73,15 +92,6 @@ export default function AppLoadDetails() {
     fetchLoad();
   }, [params?.id]);
 
-  const handleCopy = async (text: string, label: string) => {
-    if (!text) return;
-    const ok = await copyToClipboard(text);
-    if (ok) {
-      toast.success(`${label} copied to clipboard`);
-    } else {
-      toast.error(`Failed to copy ${label.toLowerCase()}`);
-    }
-  };
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -303,21 +313,41 @@ export default function AppLoadDetails() {
                   <label className={cn("text-xs font-bold uppercase tracking-wide flex items-center gap-2", theme === "arcade90s" ? "text-arc-muted" : "text-brand-muted")}>
                     <Link2 className="w-3 h-3" /> Public Tracking Link
                   </label>
-                  <div className="flex gap-2">
+                  <div className="flex gap-2 items-center">
                     <div className={cn("flex-1 p-2 text-xs truncate rounded border", 
                       theme === "arcade90s" ? "bg-arc-bg border-arc-border text-arc-text font-mono" : "bg-brand-dark-pill border-brand-border text-brand-muted"
                     )}>
                       {trackingUrl}
                     </div>
-                    <Button 
-                      type="button"
-                      size="icon" 
-                      variant="outline" 
-                      onClick={() => handleCopy(trackingUrl, "Tracking link")} 
-                      className={theme === "arcade90s" ? "rounded-none border-arc-border" : ""}
-                    >
-                      <Copy className="w-4 h-4" />
-                    </Button>
+                    <div className="relative">
+                      <Button 
+                        type="button"
+                        size="icon" 
+                        variant="outline" 
+                        onClick={() => copyTracking(trackingUrl)} 
+                        className={cn(
+                          theme === "arcade90s" ? "rounded-none border-arc-border" : "",
+                          isTrackingCopied && "border-emerald-400"
+                        )}
+                        data-testid="button-copy-tracking-link"
+                      >
+                        {isTrackingCopied ? (
+                          <Check className="w-4 h-4 text-emerald-400" />
+                        ) : (
+                          <Copy className="w-4 h-4" />
+                        )}
+                      </Button>
+                      {isTrackingCopied && (
+                        <span className={cn(
+                          "absolute -top-6 left-1/2 -translate-x-1/2 text-[10px] font-semibold tracking-wide px-2 py-0.5 rounded-full shadow-md whitespace-nowrap",
+                          theme === "arcade90s" 
+                            ? "bg-arc-primary text-black" 
+                            : "bg-emerald-400 text-slate-900"
+                        )}>
+                          Copied!
+                        </span>
+                      )}
+                    </div>
                   </div>
                   <p className={cn("text-[10px]", theme === "arcade90s" ? "text-arc-muted" : "text-brand-muted")}>
                     Share this with shippers/receivers to track the load
@@ -328,21 +358,41 @@ export default function AppLoadDetails() {
                   <label className={cn("text-xs font-bold uppercase tracking-wide flex items-center gap-2", theme === "arcade90s" ? "text-arc-muted" : "text-brand-muted")}>
                     <Truck className="w-3 h-3" /> Driver App Link
                   </label>
-                  <div className="flex gap-2">
+                  <div className="flex gap-2 items-center">
                     <div className={cn("flex-1 p-2 text-xs truncate rounded border", 
                       theme === "arcade90s" ? "bg-arc-bg border-arc-border text-arc-text font-mono" : "bg-brand-dark-pill border-brand-border text-brand-muted"
                     )}>
                       {driverUrl}
                     </div>
-                    <Button 
-                      type="button"
-                      size="icon" 
-                      variant="outline" 
-                      onClick={() => handleCopy(driverUrl, "Driver link")} 
-                      className={theme === "arcade90s" ? "rounded-none border-arc-border" : ""}
-                    >
-                      <Copy className="w-4 h-4" />
-                    </Button>
+                    <div className="relative">
+                      <Button 
+                        type="button"
+                        size="icon" 
+                        variant="outline" 
+                        onClick={() => copyDriver(driverUrl)} 
+                        className={cn(
+                          theme === "arcade90s" ? "rounded-none border-arc-border" : "",
+                          isDriverCopied && "border-emerald-400"
+                        )}
+                        data-testid="button-copy-driver-link"
+                      >
+                        {isDriverCopied ? (
+                          <Check className="w-4 h-4 text-emerald-400" />
+                        ) : (
+                          <Copy className="w-4 h-4" />
+                        )}
+                      </Button>
+                      {isDriverCopied && (
+                        <span className={cn(
+                          "absolute -top-6 left-1/2 -translate-x-1/2 text-[10px] font-semibold tracking-wide px-2 py-0.5 rounded-full shadow-md whitespace-nowrap",
+                          theme === "arcade90s" 
+                            ? "bg-arc-primary text-black" 
+                            : "bg-emerald-400 text-slate-900"
+                        )}>
+                          Copied!
+                        </span>
+                      )}
+                    </div>
                   </div>
                   <p className={cn("text-[10px]", theme === "arcade90s" ? "text-arc-muted" : "text-brand-muted")}>
                     Share this with the driver to open their mini-app
@@ -388,11 +438,32 @@ export default function AppLoadDetails() {
                     </div>
                     <Button 
                       variant="outline" 
-                      className={cn("w-full justify-start", theme === "arcade90s" ? "rounded-none border-arc-border text-arc-text" : "")}
-                      onClick={() => handleCopy(rateConfirmationUrl, "Rate confirmation link")}
+                      className={cn(
+                        "w-full justify-between", 
+                        theme === "arcade90s" ? "rounded-none border-arc-border text-arc-text" : "",
+                        isRcCopied && "border-emerald-400"
+                      )}
+                      onClick={() => copyRc(rateConfirmationUrl)}
                       data-testid="button-copy-rate-confirmation-link"
                     >
-                      <Copy className="w-4 h-4 mr-2" /> Copy Rate Confirmation Link
+                      <span className="flex items-center">
+                        {isRcCopied ? (
+                          <Check className="w-4 h-4 mr-2 text-emerald-400" />
+                        ) : (
+                          <Copy className="w-4 h-4 mr-2" />
+                        )}
+                        Copy Rate Confirmation Link
+                      </span>
+                      {isRcCopied && (
+                        <span className={cn(
+                          "text-[10px] font-semibold tracking-wide px-2 py-0.5 rounded-full",
+                          theme === "arcade90s" 
+                            ? "bg-arc-primary text-black" 
+                            : "bg-emerald-400 text-slate-900"
+                        )}>
+                          Copied!
+                        </span>
+                      )}
                     </Button>
                     <Button 
                       variant="outline" 

@@ -1,0 +1,192 @@
+Понял, сейчас копирует, но нет подтверждения. Вот большой промпт для Replit на английском, в одном блоке:
+
+You are the Replit Agent working on the PingPoint app (Broker/Dispatcher console + tracking pages). Clipboard copy already works for tracking links and rate confirmation URLs, but there is **no visible feedback** that the copy succeeded. Your task: keep the existing logic and styling, and add a small, clear visual confirmation for all copy buttons.
+
+========================================
+CONTEXT
+========================================
+Places where copy happens (do NOT remove any of them, only enhance):
+
+1. Load Details / Tracking Links section (Broker console)
+   - “PUBLIC TRACKING LINK” row with an input-like field and a copy icon button.
+   - “DRIVER APP LINK” row with the same pattern.
+
+2. Actions section on the same page:
+   - “Copy Rate Confirmation Link” row with a copy icon/button.
+
+3. Any other shared copy button component used in the app (if a generic CopyButton exists, prefer upgrading it instead of per-page hacks).
+
+All of these currently use `navigator.clipboard.writeText` directly or via a helper like `copyToClipboard()`.
+
+========================================
+GOAL
+========================================
+Add a **visible success indicator** when the user taps a copy button:
+
+- Mobile-friendly.
+- Works for every copy action mentioned above.
+- Does NOT change existing routes, data flow or link values.
+- Uses Arcade 90s / neon style subtly (glow, tiny badge, or icon change), but stays minimal.
+
+The UX we want:
+
+- When the user taps the copy icon or “Copy Rate Confirmation Link”, we:
+  - Copy the text (current behavior).
+  - Show a visible “Copied!” state for ~1.5–2 seconds:
+    - Either a small neon “Copied!” pill appears next to the button,
+    - OR the icon changes to a checkmark with a short label “Copied”.
+- After the timeout, it returns to the normal state.
+
+========================================
+STEP 1 – CREATE A REUSABLE COPY HOOK
+========================================
+Create a small hook so we can reuse the same pattern in multiple places.
+
+1. Add a new file (adjust path if there is a hooks folder):
+
+   `client/src/hooks/useCopyFeedback.ts`
+
+2. Implement:
+
+```ts
+import { useState, useCallback } from "react";
+
+export function useCopyFeedback(timeoutMs: number = 2000) {
+  const [isCopied, setIsCopied] = useState(false);
+
+  const copyWithFeedback = useCallback(async (text: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setIsCopied(true);
+      window.setTimeout(() => {
+        setIsCopied(false);
+      }, timeoutMs);
+    } catch (err) {
+      console.error("Failed to copy", err);
+      // Optional: in the future we can add error feedback.
+    }
+  }, [timeoutMs]);
+
+  return { isCopied, copyWithFeedback };
+}
+
+	•	Do not remove existing helpers yet; we will integrate them with this hook.
+
+========================================
+STEP 2 – UPDATE ANY SHARED COPY BUTTON COMPONENT
+
+If the project already has a reusable copy button (for example CopyButton, CopyIconButton, or similar) used in the tracking page and actions list:
+	1.	Locate that component (for example under client/src/components/ui/).
+	2.	Import and use the hook:
+
+import { useCopyFeedback } from "@/hooks/useCopyFeedback"; // adjust alias/path
+
+	3.	Inside the component:
+
+const { isCopied, copyWithFeedback } = useCopyFeedback();
+
+const handleClick = async () => {
+  if (!valueToCopy) return;
+  await copyWithFeedback(valueToCopy);
+};
+
+	4.	Wire it to the button:
+
+<button
+  type="button"
+  onClick={handleClick}
+  className="relative flex items-center justify-center rounded-full bg-slate-900/70 hover:bg-slate-800 transition px-3 py-2"
+>
+  {/* Default icon */}
+  {!isCopied && (
+    <span className="material-icons text-slate-200 text-base">
+      content_copy
+    </span>
+  )}
+
+  {/* Copied state icon */}
+  {isCopied && (
+    <span className="material-icons text-emerald-400 text-base">
+      check
+    </span>
+  )}
+
+  {/* Small 'Copied!' pill */}
+  {isCopied && (
+    <span className="absolute -top-6 right-0 text-[10px] font-semibold tracking-wide px-2 py-0.5 rounded-full bg-emerald-400/90 text-slate-900 shadow-md">
+      Copied!
+    </span>
+  )}
+</button>
+
+	•	Keep existing class names for size / layout if they exist; just extend with the copied state.
+	•	If you don’t have Material Icons, use the existing icon system (Heroicons, Lucide, or SVGs already used in the app) with a check mark icon instead of material-icons.
+
+========================================
+STEP 3 – WIRE UP SPECIFIC PLACES (IF THERE IS NO SHARED COMPONENT)
+
+If there is no single shared CopyButton and each place manually renders its own copy icon:
+	1.	In the Tracking Links section component (load details page):
+	•	Import useCopyFeedback.
+	•	For each link line (public tracking link, driver app link):
+
+const { isCopied: isPublicCopied, copyWithFeedback: copyPublic } = useCopyFeedback();
+const { isCopied: isDriverCopied, copyWithFeedback: copyDriver } = useCopyFeedback();
+
+	•	On click handlers:
+
+<button onClick={() => copyPublic(publicTrackingUrl)} ...>...</button>
+<button onClick={() => copyDriver(driverAppUrl)} ...>...</button>
+
+	•	Next to each button, show the small “Copied!” pill or fade-in text:
+
+{isPublicCopied && (
+  <span className="ml-2 text-[10px] uppercase tracking-wide text-emerald-400">
+    Copied!
+  </span>
+)}
+
+	2.	In the Actions section for “Copy Rate Confirmation Link”:
+
+const { isCopied: isRcCopied, copyWithFeedback: copyRc } = useCopyFeedback();
+
+<button
+  type="button"
+  onClick={() => copyRc(rateConfirmationUrl)}
+  className="flex items-center justify-between w-full px-4 py-3 rounded-xl bg-slate-900/80 hover:bg-slate-800 transition"
+>
+  <span className="text-sm font-medium text-slate-100">
+    Copy Rate Confirmation Link
+  </span>
+  <div className="flex items-center gap-2">
+    {isRcCopied && (
+      <span className="text-[10px] uppercase tracking-wide text-emerald-400">
+        Copied!
+      </span>
+    )}
+    {/* existing copy icon / chevron */}
+    ...
+  </div>
+</button>
+
+	•	Make sure buttons still look like the existing arcade UI (rounded, neon-hover glow, etc.).
+	•	Do not change the URL values or how they are generated.
+
+========================================
+STEP 4 – TEST (IMPORTANT)
+	1.	Open a load details page in the Broker console.
+	2.	In Tracking Links:
+	•	Tap the copy icon for the public link:
+	•	Confirm text really copies to the clipboard.
+	•	Confirm you see a brief “Copied!” indicator (pill and/or check icon) for ~2 seconds.
+	•	Repeat for the Driver App link.
+	3.	In Actions:
+	•	Tap “Copy Rate Confirmation Link”.
+	•	Check clipboard value and that the “Copied!” state appears.
+	4.	Verify on mobile in Replit preview:
+	•	The pill or label does not overflow off-screen.
+	•	Tapping repeatedly continues to work (state resets correctly).
+	5.	Ensure no console errors are thrown from the new hook.
+
+Do NOT modify routing, database logic, or any non-copy-related behavior. Only add visual feedback on successful copy actions as described.
+
