@@ -9,6 +9,7 @@ import { ArrowLeft, Copy, Truck, User, Phone, MapPin, Calendar, Link2 } from "lu
 import { format } from "date-fns";
 import { toast } from "sonner";
 import { useState, useEffect } from "react";
+import { copyToClipboard } from "@/utils/copyToClipboard";
 
 interface Stop {
   id: string;
@@ -63,9 +64,14 @@ export default function AppLoadDetails() {
     fetchLoad();
   }, [params?.id]);
 
-  const copyToClipboard = (text: string, label: string) => {
-    navigator.clipboard.writeText(text);
-    toast.success(`${label} copied to clipboard`);
+  const handleCopy = async (text: string, label: string) => {
+    if (!text) return;
+    const ok = await copyToClipboard(text);
+    if (ok) {
+      toast.success(`${label} copied to clipboard`);
+    } else {
+      toast.error(`Failed to copy ${label.toLowerCase()}`);
+    }
   };
 
   if (loading) {
@@ -240,9 +246,10 @@ export default function AppLoadDetails() {
                       {trackingUrl}
                     </div>
                     <Button 
+                      type="button"
                       size="icon" 
                       variant="outline" 
-                      onClick={() => copyToClipboard(trackingUrl, "Tracking link")} 
+                      onClick={() => handleCopy(trackingUrl, "Tracking link")} 
                       className={theme === "arcade90s" ? "rounded-none border-arc-border" : ""}
                     >
                       <Copy className="w-4 h-4" />
@@ -264,9 +271,10 @@ export default function AppLoadDetails() {
                       {driverUrl}
                     </div>
                     <Button 
+                      type="button"
                       size="icon" 
                       variant="outline" 
-                      onClick={() => copyToClipboard(driverUrl, "Driver link")} 
+                      onClick={() => handleCopy(driverUrl, "Driver link")} 
                       className={theme === "arcade90s" ? "rounded-none border-arc-border" : ""}
                     >
                       <Copy className="w-4 h-4" />

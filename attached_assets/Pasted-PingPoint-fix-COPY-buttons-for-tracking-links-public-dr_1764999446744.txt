@@ -1,0 +1,184 @@
+PingPoint – fix COPY buttons for tracking links (public & driver) on Load Details page
+
+Context:
+- On the Load Details page in the Broker console, in the "TRACKING LINKS" section I see:
+  - PUBLIC TRACKING LINK (readonly input + copy icon button)
+  - DRIVER APP LINK (readonly input + copy icon button)
+- After your last change, tokens and pages work correctly, but:
+  1) When I tap/click the copy icon, **nothing is copied** to the clipboard.
+  2) There is no visual feedback that copying succeeded or failed.
+
+Goal:
+- Make both copy buttons work reliably in modern browsers (desktop + mobile).
+- Do NOT redesign UI, only fix logic.
+- Use a small reusable helper for clipboard operations.
+- Ensure buttons do not accidentally submit forms or reload pages.
+
+============================================================
+1) CREATE / VERIFY CLIPBOARD HELPER
+============================================================
+
+1.1. Create (or update if it already exists) a helper at:
+- `client/src/utils/copyToClipboard.ts`
+
+Implementation:
+
+```ts
+// client/src/utils/copyToClipboard.ts
+export async function copyToClipboard(text: string): Promise<boolean> {
+  if (!text) return false;
+
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(text);
+      console.log("[copyToClipboard] copied via navigator.clipboard:", text);
+      return true;
+    }
+
+    // Fallback for older browsers / some mobile environments
+    const textarea = document.createElement("textarea");
+    textarea.value = text;
+    textarea.style.position = "fixed";
+    textarea.style.left = "-9999px";
+    textarea.style.top = "0";
+    textarea.setAttribute("readonly", "true");
+    document.body.appendChild(textarea);
+    textarea.select();
+    const success = document.execCommand("copy");
+    document.body.removeChild(textarea);
+    console.log("[copyToClipboard] copied via execCommand:", text, success);
+    return success;
+  } catch (err) {
+    console.error("[copyToClipboard] failed to copy", err);
+    return false;
+  }
+}
+
+	•	This helper:
+	•	tries navigator.clipboard.writeText,
+	•	falls back to document.execCommand("copy"),
+	•	returns true/false to indicate success.
+
+============================================================
+2) WIRE COPY BUTTONS IN LOAD DETAILS TRACKING SECTION
+
+2.1. Find the React component that renders the Load Details page for the Broker console:
+	•	The one that shows sections “ROUTE PLAN”, “COMMERCIAL INFO”, and “TRACKING LINKS”.
+	•	File is something like:
+	•	client/src/pages/app/loads/[id].tsx OR
+	•	client/src/features/loads/LoadDetailsPage.tsx OR similar.
+
+In that component you already compute publicTrackingUrl and driverAppUrl. If not, they should be computed like this:
+
+const origin =
+  typeof window !== "undefined"
+    ? window.location.origin
+    : import.meta.env.VITE_APP_BASE_URL ||
+      process.env.APP_BASE_URL ||
+      "";
+
+const publicTrackingUrl = load.trackingToken
+  ? `${origin}/track/${load.trackingToken}`
+  : "";
+
+const driverAppUrl = load.driverToken
+  ? `${origin}/driver/${load.driverToken}`
+  : "";
+
+2.2. Import the helper:
+
+import { copyToClipboard } from "@/utils/copyToClipboard";
+
+2.3. Define handlers inside the component:
+
+const handleCopyPublic = async () => {
+  if (!publicTrackingUrl) return;
+  const ok = await copyToClipboard(publicTrackingUrl);
+  if (!ok) {
+    console.warn("Failed to copy public tracking URL");
+  }
+};
+
+const handleCopyDriver = async () => {
+  if (!driverAppUrl) return;
+  const ok = await copyToClipboard(driverAppUrl);
+  if (!ok) {
+    console.warn("Failed to copy driver app URL");
+  }
+};
+
+2.4. Attach these handlers to the copy icon buttons:
+	•	PUBLIC TRACKING LINK button:
+
+<button
+  type="button"
+  onClick={handleCopyPublic}
+  className="..." // keep existing styling
+>
+  {/* existing icon */}
+</button>
+
+	•	DRIVER APP LINK button:
+
+<button
+  type="button"
+  onClick={handleCopyDriver}
+  className="..." // keep existing styling
+>
+  {/* existing icon */}
+</button>
+
+Important:
+	•	Make sure the button has type="button" (NOT type="submit"), so it doesn’t submit a form or reload the page.
+	•	Do not wrap these buttons in a <form> that intercepts the click; if they are inside a <form>, make sure the form does not have an onSubmit that triggers on these buttons.
+
+2.5. Ensure the readonly inputs use the same values:
+
+<input
+  type="text"
+  readOnly
+  value={publicTrackingUrl}
+  // ...
+/>
+
+<input
+  type="text"
+  readOnly
+  value={driverAppUrl}
+  // ...
+/>
+
+============================================================
+3) OPTIONAL: SIMPLE UI FEEDBACK (NON-BLOCKING)
+
+If you already have a toast/notification system (e.g. useToast or similar):
+	•	On successful copyToClipboard, show a small toast:
+	•	“Public link copied”
+	•	“Driver link copied”
+
+Example (pseudo):
+
+if (ok) {
+  toast.success("Public tracking link copied");
+}
+
+If there is no toast system yet, just keep the console.log as implemented above; do NOT add a new library.
+
+============================================================
+4) MANUAL TEST PLAN (PLEASE RUN THESE AFTER CHANGES)
+	1.	Create a new load from / → Broker / Dispatcher → Create Load.
+	2.	Open the new load details page in the Broker console.
+	3.	In TRACKING LINKS:
+	•	Tap the PUBLIC copy icon once:
+	•	Paste into another app / new tab: it must match the visible URL in the input.
+	•	Tap the DRIVER copy icon once:
+	•	Paste into another place: it must match the visible DRIVER URL.
+	4.	Test from:
+	•	Desktop browser (Chrome/Edge/Firefox),
+	•	Mobile browser (Safari/Chrome on phone, where I test).
+	5.	Confirm:
+	•	Buttons do not reload the page,
+	•	Both links are copied correctly and independently.
+
+Please implement exactly this logic, without refactoring unrelated parts of the app. The main requirement: the two copy buttons in the TRACKING LINKS section on the load details page must reliably copy the correct URLs to the clipboard on both desktop and mobile.
+
