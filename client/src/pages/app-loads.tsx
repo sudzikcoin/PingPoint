@@ -254,22 +254,26 @@ export default function AppLoads() {
                     >
                       <td className="px-6 py-4 font-mono font-medium whitespace-nowrap">
                         <span className={cn(theme === "arcade90s" ? "text-arc-secondary group-hover:arcade-flicker" : "text-white")}>
-                          {load.externalLoadId}
+                          {load.loadNumber || "—"}
                         </span>
                       </td>
                       <td className="px-6 py-4">
-                        <div className={cn("font-medium", theme === "arcade90s" ? "text-arc-text" : "text-white")}>{load.brokerName}</div>
-                        <div className={cn("text-xs mt-0.5", theme === "arcade90s" ? "text-arc-muted" : "text-brand-muted")}>{load.shipperName}</div>
+                        <div className={cn("font-medium", theme === "arcade90s" ? "text-arc-text" : "text-white")}>{load.carrierName || "—"}</div>
+                        <div className={cn("text-xs mt-0.5", theme === "arcade90s" ? "text-arc-muted" : "text-brand-muted")}>{load.shipperName || "—"}</div>
                       </td>
                       <td className="px-6 py-4">
                         <div className="flex flex-col gap-1">
                           <div className="flex items-center gap-2">
                             <div className={cn("w-1.5 h-1.5 rounded-full", theme === "arcade90s" ? "bg-arc-primary" : "bg-emerald-500")} />
-                            <span className={theme === "arcade90s" ? "text-arc-text" : "text-brand-text"}>{load.stops[0].city}, {load.stops[0].state}</span>
+                            <span className={theme === "arcade90s" ? "text-arc-text" : "text-brand-text"}>
+                              {load.originCity && load.originState ? `${load.originCity}, ${load.originState}` : "—"}
+                            </span>
                           </div>
                           <div className="flex items-center gap-2">
                             <div className={cn("w-1.5 h-1.5 rounded-full", theme === "arcade90s" ? "bg-arc-secondary" : "bg-brand-gold")} />
-                            <span className={theme === "arcade90s" ? "text-arc-text" : "text-brand-text"}>{load.stops[load.stops.length-1].city}, {load.stops[load.stops.length-1].state}</span>
+                            <span className={theme === "arcade90s" ? "text-arc-text" : "text-brand-text"}>
+                              {load.destinationCity && load.destinationState ? `${load.destinationCity}, ${load.destinationState}` : "—"}
+                            </span>
                           </div>
                         </div>
                       </td>
@@ -286,27 +290,22 @@ export default function AppLoads() {
                         </span>
                       </td>
                       <td className="px-6 py-4">
-                        {load.driver ? (
-                          <div className="flex items-center gap-2">
-                            <div className={cn("w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold",
-                              theme === "arcade90s" ? "bg-arc-purple text-white rounded-none" : "bg-brand-gold text-black"
-                            )}>
-                              {load.driver.name.charAt(0)}
-                            </div>
-                            <span className={cn("text-sm", theme === "arcade90s" ? "text-arc-text" : "text-brand-text")}>{load.driver.name}</span>
-                          </div>
-                        ) : (
-                          <span className={cn("text-xs italic", theme === "arcade90s" ? "text-arc-muted" : "text-brand-muted")}>Unassigned</span>
-                        )}
+                        <span className={cn("text-xs italic", theme === "arcade90s" ? "text-arc-muted" : "text-brand-muted")}>
+                          {load.status === "IN_TRANSIT" ? "Active" : "Pending"}
+                        </span>
                       </td>
                       <td className="px-6 py-4 text-right">
                         <Button
                           size="icon"
                           variant="ghost"
                           className={cn("h-8 w-8", theme === "arcade90s" ? "text-arc-muted hover:text-arc-secondary hover:bg-arc-secondary/10" : "text-brand-muted hover:text-white hover:bg-brand-border")}
-                          onClick={(e) => copyLink(e, load.customerTrackingLink)}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            const trackUrl = `${window.location.origin}/track/${load.id}`;
+                            navigator.clipboard.writeText(trackUrl);
+                            toast.success("Tracking link copied");
+                          }}
                           title="Copy Tracking Link"
-                          disabled={!load.customerTrackingLink}
                         >
                           <Copy className="w-4 h-4" />
                         </Button>

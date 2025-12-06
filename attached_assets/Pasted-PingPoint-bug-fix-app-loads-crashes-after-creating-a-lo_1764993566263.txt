@@ -1,0 +1,133 @@
+PingPoint bug fix – /app/loads crashes after creating a load
+
+Current behavior:
+- I create a new load on `/app/loads/new` and on submit the app navigates to `/app/loads`.
+- On `/app/loads` I see a red overlay with:
+
+  [plugin:runtime-error-plugin] undefined is not an object (evaluating 'load.stops[0]')
+
+So the Loads table page is trying to read `load.stops[0]` (pickup stop) but `load.stops` is undefined or empty for at least one load.
+
+Goal:
+- `/app/loads` must render without runtime error.
+- Each row should show origin and destination (pickup/delivery) but the UI must be defensive:
+  - it should not crash if `stops` is missing or empty.
+- Preferably, the backend should always return stops for each load.
+
+Please fix this with minimal changes, preserving the existing Arcade 90s UI.
+
+============================================================
+1. FIX BACKEND: MAKE SURE /api/loads RETURNS STOPS
+============================================================
+
+1.1. Open the API handler for listing loads, e.g. `app/api/loads/route.ts` (GET).
+- Ensure the Prisma query includes `stops`:
+
+  const items = await prisma.load.findMany({
+    where: { brokerId: broker.id },
+    orderBy: { createdAt: "desc" },
+    include: {
+      stops: { orderBy: { sequence: "asc" } },
+    },
+    skip,
+    take: pageSize,
+  });
+
+- If `include.stops` is missing, add it as above.
+
+1.2. If the API maps loads into a lighter shape before returning:
+- Either:
+  - keep the full `stops` array in the JSON (so the UI can use it), or
+  - compute and return explicit fields like `originCity`, `originState`, `destinationCity`, `destinationState`.
+- The important part: do NOT return `load.stops` as `undefined`.
+
+Example mapping (safe):
+
+  const mapped = items.map((load) => {
+    const pickups = load.stops?.filter((s) => s.type === "PICKUP") ?? [];
+    const deliveries = load.stops?.filter((s) => s.type === "DELIVERY") ?? [];
+    const origin = pickups[0];
+    const destination = deliveries[deliveries.length - 1];
+
+    return {
+      id: load.id,
+      loadNumber: load.loadNumber,
+      shipperName: load.shipperName,
+      originCity: origin?.city ?? null,
+      originState: origin?.state ?? null,
+      destinationCity: destination?.city ?? null,
+      destinationState: destination?.state ?? null,
+      status: load.status,
+    };
+  });
+
+Return `mapped` from the API.
+
+============================================================
+2. MAKE THE LOADS TABLE DEFENSIVE ON THE FRONTEND
+============================================================
+
+2.1. Open the Broker console page for `/app/loads`:
+- File is something like `app/app/loads/page.tsx` or `client/src/pages/app/loads/index.tsx`.
+
+2.2. Find where each load row is rendered:
+- There will be code that looks similar to:
+
+  const origin = load.stops[0];
+  const destination = load.stops[load.stops.length - 1];
+
+  or directly `load.stops[0].city`, etc.
+
+2.3. Replace this with safe access that does NOT crash when `stops` is undefined or empty:
+
+Option A – if API now returns pre-computed fields (`originCity`, `destinationCity`, etc.):
+- Use those fields only:
+
+  const originLabel =
+    load.originCity && load.originState
+      ? `${load.originCity}, ${load.originState}`
+      : "—";
+
+  const destinationLabel =
+    load.destinationCity && load.destinationState
+      ? `${load.destinationCity}, ${load.destinationState}`
+      : "—";
+
+Option B – if you keep `stops` on the client:
+- Guard against `undefined`:
+
+  const stops = load.stops ?? [];
+  const origin = stops[0];
+  const destination = stops[stops.length - 1];
+
+  const originLabel =
+    origin?.city && origin?.state
+      ? `${origin.city}, ${origin.state}`
+      : "—";
+
+  const destinationLabel =
+    destination?.city && destination?.state
+      ? `${destination.city}, ${destination.state}`
+      : "—";
+
+- Wherever the UI currently accesses `load.stops[0]` or similar, wrap it in this safe pattern.
+- The table should show "—" or some neutral placeholder when data is missing, instead of throwing.
+
+============================================================
+3. QUICK VERIFICATION
+============================================================
+
+After implementing the above:
+
+1. Restart dev server if needed.
+2. Create a new load via `/app/loads/new`.
+3. When redirected to `/app/loads`:
+   - No runtime error overlay should appear.
+   - A new row should appear in the loads table.
+   - Origin/destination columns should show the pickup/delivery cities and states (or "—" if something is missing).
+
+4. Also verify that the page works even if:
+   - Some loads in the database have no stops, or
+   - `stops` comes back as an empty array.
+
+Please apply these changes now so `/app/loads` becomes robust and no longer breaks on `load.stops[0]`.
