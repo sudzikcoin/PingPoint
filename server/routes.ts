@@ -90,7 +90,8 @@ export async function registerRoutes(
       const origin = process.env.REPL_SLUG 
         ? `https://${process.env.REPL_SLUG}.${process.env.REPL_OWNER}.repl.co`
         : `http://localhost:5000`;
-      const verificationUrl = `${origin}/api/brokers/verify?token=${token}`;
+      // Point to the SPA verification page, not the API endpoint
+      const verificationUrl = `${origin}/verify?token=${token}`;
 
       await sendVerificationEmail(broker.email, verificationUrl);
 
@@ -101,19 +102,46 @@ export async function registerRoutes(
     }
   });
 
-  // GET /api/brokers/verify?token=...
-  app.get("/api/brokers/verify", async (req: Request, res: Response) => {
+  // POST /api/brokers/verify - Called by SPA to verify token
+  app.post("/api/brokers/verify", async (req: Request, res: Response) => {
     try {
-      const { token } = req.query;
+      const { token } = req.body;
 
       if (!token || typeof token !== 'string') {
-        return res.redirect('/verify-error');
+        return res.status(400).json({ error: "Invalid token" });
       }
 
       const verificationToken = await storage.getVerificationToken(token);
 
       if (!verificationToken || verificationToken.used || verificationToken.expiresAt < new Date()) {
-        return res.redirect('/verify-error');
+        return res.status(400).json({ error: "Token is invalid or expired" });
+      }
+
+      await storage.markTokenUsed(verificationToken.id);
+      await storage.updateBroker(verificationToken.brokerId, { emailVerified: true });
+
+      createBrokerSession(verificationToken.brokerId, res);
+      
+      return res.json({ ok: true });
+    } catch (error) {
+      console.error("Error in /api/brokers/verify:", error);
+      return res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  // GET /api/brokers/verify?token=... - Fallback for direct browser hits
+  app.get("/api/brokers/verify", async (req: Request, res: Response) => {
+    try {
+      const { token } = req.query;
+
+      if (!token || typeof token !== 'string') {
+        return res.redirect('/verify?error=invalid');
+      }
+
+      const verificationToken = await storage.getVerificationToken(token);
+
+      if (!verificationToken || verificationToken.used || verificationToken.expiresAt < new Date()) {
+        return res.redirect('/verify?error=expired');
       }
 
       await storage.markTokenUsed(verificationToken.id);
@@ -124,7 +152,7 @@ export async function registerRoutes(
       return res.redirect('/app/loads');
     } catch (error) {
       console.error("Error in /api/brokers/verify:", error);
-      return res.redirect('/verify-error');
+      return res.redirect('/verify?error=server');
     }
   });
 
