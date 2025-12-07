@@ -450,6 +450,7 @@ export async function registerRoutes(
       return res.json({
         id: load.id,
         loadNumber: load.loadNumber,
+        customerRef: load.customerRef,
         status: load.status,
         stops: loadStops,
       });

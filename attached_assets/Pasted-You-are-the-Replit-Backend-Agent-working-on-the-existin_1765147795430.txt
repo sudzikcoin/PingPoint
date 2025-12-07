@@ -1,0 +1,142 @@
+You are the Replit Backend Agent working on the existing `agentos-tracking-core` project.
+
+GOAL: On the **driver-facing UI** (PingPoint Driver), hide the internal load ID like `LD-2025-4474` and instead show ONLY the broker’s load number that is entered in the “Customer Ref / Load Number / Optional PO #” field when the load is created.
+
+This change must:
+- affect ONLY the DRIVER views (PingPoint driver dashboard and driver load details),
+- reuse an existing field (e.g. `customerRef`, `customerRefNumber`, or similar) that already stores the broker’s reference,
+- keep the internal ID for internal/admin views (`/app/loads`, dispatcher UI) untouched.
+
+Do NOT change any backend business logic, Prisma IDs, or routes. Only adjust how the load number is displayed on driver-facing components.
+
+────────────────────────
+1. IDENTIFY THE BROKER LOAD NUMBER FIELD
+────────────────────────
+
+1) Locate the load creation / edit form used at `/app/loads/new` and `/app/loads/[id]` (likely in `src/app/app/loads/new/page.tsx` or similar).
+   - Find the input labeled something like:
+     - “Customer Ref”
+     - “Customer Reference”
+     - “Optional PO #”
+     - or similar.
+   - Confirm which **field name** on the load model it is bound to (for example `customerRef` on `TrackingLoad` / `OsLoad`).
+
+2) Once identified, treat this field as **the broker-facing load number** we want to show to drivers.
+   - For the rest of this task, I’ll refer to this field as `load.customerRef`. If the real name is different, replace `customerRef` with the correct property everywhere below.
+
+DO NOT modify the schema or the form bindings; just reuse this existing field.
+
+────────────────────────
+2. DRIVER LOAD DETAIL PAGE – USE BROKER NUMBER
+────────────────────────
+
+Target file: driver load detail view, e.g.
+- `src/app/driver/loads/[id]/page.tsx`
+or the client shell component it uses (for Arcade90s/Premium themes).
+
+1) Find the header where the internal load ID is currently rendered. It likely shows something like:
+
+- `LOAD #LD-2025-4474`
+- or uses a property named `load.displayId`, `load.humanReadableId`, `load.publicId`, or simply `load.id`.
+
+Example (approximate):
+
+  <span className="...">
+    LOAD #{load.displayId}
+  </span>
+
+2) Introduce a **driverDisplayId** variable that prioritizes `customerRef`:
+
+In the component where `load` is available, define:
+
+  const driverDisplayId =
+    load.customerRef && load.customerRef.trim().length > 0
+      ? load.customerRef.trim()
+      : (load.displayId ?? load.humanReadableId ?? load.id);
+
+3) Use `driverDisplayId` in the driver header:
+
+- Replace any direct usage of the internal ID with `driverDisplayId`.
+
+Example:
+
+  <span className="text-xs uppercase tracking-[0.25em] text-arc-muted">
+    LOAD #{driverDisplayId}
+  </span>
+
+or, if you don’t want the “LOAD #” prefix visible to the driver, you can simplify to just the number:
+
+  <span className="...">
+    {driverDisplayId}
+  </span>
+
+But per requirement we MUST NOT show `LD-2025-xxxx` when a broker ref exists, so make sure you use the conditional above.
+
+────────────────────────
+3. DRIVER DASHBOARD (/driver) – USE SAME DISPLAY LOGIC
+────────────────────────
+
+Target file: driver dashboard list page, e.g.
+- `src/app/driver/page.tsx`
+or a `DriverLoadsList` component that renders the driver’s loads.
+
+1) Find the section where each load row shows the load number (currently showing `LD-2025-4474`).
+
+Example:
+
+  <Link ...>
+    <span className="...">
+      {load.displayId}
+    </span>
+  </Link>
+
+2) For each load in the list, compute a `driverDisplayId` exactly as in step 2:
+
+  const driverDisplayId =
+    load.customerRef && load.customerRef.trim().length > 0
+      ? load.customerRef.trim()
+      : (load.displayId ?? load.humanReadableId ?? load.id);
+
+3) Use `driverDisplayId` in the UI instead of the internal ID.
+
+This ensures the driver sees the **same broker load number** consistently both in the list and in the detail view.
+
+────────────────────────
+4. DO NOT CHANGE INTERNAL / DISPATCHER VIEWS
+────────────────────────
+
+On dispatcher / admin routes (e.g. `/app/loads`, `/app/loads/[id]`):
+
+- Keep showing the internal ID (`LD-2025-XXXX`) for clarity, together with the broker reference if you already show it.
+- Do NOT replace internal IDs there; the requirement only applies on **driver-side** (PingPoint Driver).
+
+So:
+- `/app/loads` – can continue to show both:
+  - internal ID: `LD-2025-4474`
+  - broker ref: `customerRef` if needed.
+- `/driver` and `/driver/loads/[id]` – show ONLY `driverDisplayId` computed as described.
+
+────────────────────────
+5. NULL / EMPTY SAFETY
+────────────────────────
+
+Make sure that if `customerRef` is missing, null or just whitespace:
+
+- `driverDisplayId` gracefully falls back to the same value that was used before (e.g. `load.displayId` or `load.id`),
+- so the driver still sees some identifier, even if the broker didn’t enter anything.
+
+────────────────────────
+6. FINAL CHECK
+────────────────────────
+
+After changes:
+
+1) Create a load and set a broker-facing number in the “Customer Ref / Optional PO #” field (e.g. `SOAR-1360121`).
+2) As dispatcher / admin view:
+   - On `/app/loads`, you still see the internal ID `LD-2025-4474` (and possibly the customer ref separately).
+3) As driver:
+   - On `/driver`, each load entry shows ONLY the broker number (`SOAR-1360121`) instead of `LD-2025-4474`.
+   - On `/driver/loads/[id]`, the main header also shows ONLY `SOAR-1360121` (or whatever was entered).
+4) If you create a load WITHOUT a customer ref, the driver still sees a fallback ID (the previous internal display id), so the UI is never blank.
+
+END OF INSTRUCTIONS

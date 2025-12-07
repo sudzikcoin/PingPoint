@@ -29,6 +29,7 @@ interface Stop {
 interface LoadData {
   id: string;
   loadNumber: string;
+  customerRef: string | null;
   status: string;
   stops: Stop[];
 }
@@ -250,6 +251,12 @@ export default function DriverDashboard() {
   const firstStop = stops[0];
   const lastStop = stops[stops.length - 1];
 
+  // Show broker's customer reference if available, otherwise fall back to internal load number
+  const driverDisplayId = 
+    load.customerRef && load.customerRef.trim().length > 0
+      ? load.customerRef.trim()
+      : load.loadNumber;
+
   return (
     <div className={cn("min-h-screen pb-20 font-sans transition-colors duration-300", 
       theme === "arcade90s" ? "arcade-bg text-arc-text" : "bg-brand-bg text-brand-text"
@@ -302,7 +309,7 @@ export default function DriverDashboard() {
                 "text-lg",
                 theme === "arcade90s" ? "arcade-pixel-font text-arc-primary" : "text-white"
               )}>
-                Load #{load.loadNumber}
+                Load #{driverDisplayId}
               </CardTitle>
               <Badge className={cn(
                 theme === "arcade90s"
