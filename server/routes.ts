@@ -9,6 +9,7 @@ import multer from "multer";
 import path from "path";
 import fs from "fs";
 import express from "express";
+import { sendBrokerVerificationEmail, sendDriverAppLink } from "./email";
 
 const uploadsDir = path.join(process.cwd(), "uploads", "rate-confirmations");
 if (!fs.existsSync(uploadsDir)) {
@@ -41,14 +42,14 @@ function generateToken(prefix: string): string {
   return `${prefix}_${randomBytes(12).toString('hex')}`;
 }
 
-// TODO: Integrate real email provider (SendGrid/Postmark/etc.)
-async function sendVerificationEmail(email: string, url: string): Promise<void> {
-  console.log(`[EMAIL] Send verification to ${email}: ${url}`);
+// Wrapper for broker verification email using real provider
+async function sendVerificationEmail(email: string, url: string, brokerName?: string): Promise<void> {
+  await sendBrokerVerificationEmail(email, url, brokerName);
 }
 
-// TODO: Integrate real SMS provider (Twilio/etc.)
+// Wrapper for driver SMS (TODO: integrate Twilio)
 async function sendDriverSMS(phone: string, url: string): Promise<void> {
-  console.log(`[SMS] Send driver link to ${phone}: ${url}`);
+  await sendDriverAppLink(phone, url);
 }
 
 export async function registerRoutes(
@@ -118,7 +119,7 @@ export async function registerRoutes(
       // Point to the SPA verification page, not the API endpoint
       const verificationUrl = `${origin}/verify?token=${token}`;
 
-      await sendVerificationEmail(broker.email, verificationUrl);
+      await sendVerificationEmail(broker.email, verificationUrl, broker.name);
 
       return res.json({ ok: true });
     } catch (error) {
@@ -452,8 +453,17 @@ export async function registerRoutes(
 
       // Send notifications
       if (!broker.emailVerified) {
-        // Trigger verification email (call the endpoint internally)
-        sendVerificationEmail(broker.email, "verification-link-here");
+        // Create verification token and send real email
+        const verifyToken = randomBytes(32).toString('hex');
+        const expiresAt = new Date();
+        expiresAt.setDate(expiresAt.getDate() + 2); // Expires in 2 days
+        await storage.createVerificationToken(broker.id, verifyToken, expiresAt);
+        
+        const origin = process.env.REPL_SLUG 
+          ? `https://${process.env.REPL_SLUG}.${process.env.REPL_OWNER}.repl.co`
+          : `http://localhost:5000`;
+        const verificationUrl = `${origin}/verify?token=${verifyToken}`;
+        await sendVerificationEmail(broker.email, verificationUrl, broker.name);
       }
 
       if (driver) {
