@@ -1,11 +1,11 @@
 import { AppLayout } from "@/components/app-layout";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { Plus, Copy, Search, Filter, ChevronRight, Menu, X, Settings, CloudLightning, Truck } from "lucide-react";
+import { Plus, Copy, Search, Filter, ChevronRight, Menu, X, Settings, CloudLightning, Truck, Mail } from "lucide-react";
 import { useLocation } from "wouter";
 import { cn } from "@/lib/utils";
 import { useTheme } from "@/context/theme-context";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { format } from "date-fns";
 import { toast } from "sonner";
 import { api, type BrokerWorkspace } from "@/lib/api";
@@ -25,6 +25,20 @@ export default function AppLoads() {
   const [loads, setLoads] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [showVerificationBanner, setShowVerificationBanner] = useState(false);
+  const [resendingEmail, setResendingEmail] = useState(false);
+
+  const handleResendVerification = useCallback(async () => {
+    if (!broker) return;
+    setResendingEmail(true);
+    try {
+      await api.brokers.sendVerification(broker.id);
+      toast.success("Verification email sent! Check your inbox.");
+    } catch (error) {
+      toast.error("Failed to send verification email");
+    } finally {
+      setResendingEmail(false);
+    }
+  }, [broker]);
 
   useEffect(() => {
     const fetchData = async () => {
@@ -65,22 +79,38 @@ export default function AppLoads() {
         
         {/* Verification Banner */}
         {showVerificationBanner && broker && (
-          // TODO: Check real emailVerified flag from backend
           <div className={cn(
-            "relative flex items-center justify-between p-4 rounded-lg border mb-6",
+            "relative flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 p-4 rounded-lg border mb-6",
             theme === "arcade90s" 
               ? "bg-arc-panel border-arc-secondary/50 shadow-[0_0_15px_rgba(34,211,238,0.2)] arcade-scanline" 
               : "bg-brand-card border-brand-gold/30"
           )}>
-            <div className="flex items-center gap-3">
-              <div className={cn("w-2 h-2 rounded-full animate-pulse", theme === "arcade90s" ? "bg-arc-secondary" : "bg-brand-gold")} />
+            <div className="flex items-center gap-3 flex-1">
+              <div className={cn("w-2 h-2 rounded-full animate-pulse shrink-0", theme === "arcade90s" ? "bg-arc-secondary" : "bg-brand-gold")} />
               <p className={cn("text-sm", theme === "arcade90s" ? "text-arc-text arcade-pixel-font text-xs tracking-wide" : "text-brand-text")}>
                 We've sent a verification link to <span className={theme === "arcade90s" ? "text-arc-secondary" : "text-brand-gold"}>{broker.email}</span>. Please confirm your email to fully activate your workspace.
               </p>
             </div>
-            <button onClick={() => setShowVerificationBanner(false)} className="p-1 hover:opacity-70">
-              <X className="w-4 h-4" />
-            </button>
+            <div className="flex items-center gap-2 shrink-0">
+              <Button
+                onClick={handleResendVerification}
+                disabled={resendingEmail}
+                size="sm"
+                variant="outline"
+                className={cn(
+                  "text-xs",
+                  theme === "arcade90s" 
+                    ? "border-arc-secondary text-arc-secondary hover:bg-arc-secondary/10 rounded-none arcade-pixel-font" 
+                    : "border-brand-gold text-brand-gold hover:bg-brand-gold/10"
+                )}
+              >
+                <Mail className="w-3 h-3 mr-1" />
+                {resendingEmail ? "Sending..." : "Resend"}
+              </Button>
+              <button onClick={() => setShowVerificationBanner(false)} className="p-1 hover:opacity-70">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
           </div>
         )}
 

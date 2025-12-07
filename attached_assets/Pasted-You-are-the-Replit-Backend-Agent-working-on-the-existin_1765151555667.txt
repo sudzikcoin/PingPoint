@@ -1,0 +1,137 @@
+You are the Replit Backend Agent working on the existing PingPoint / `agentos-tracking-core` project.
+
+Context:
+- We have already configured `RESEND_API_KEY` and a mail helper, and Resend test emails work.
+- In the app, when the broker sets or updates their email in `/app/settings`, we show a banner on `/app/loads`:
+
+  "WE'VE SENT A VERIFICATION LINK TO <email>. PLEASE CONFIRM YOUR EMAIL TO FULLY ACTIVATE YOUR WORKSPACE."
+
+- However, no real email is actually being sent yet. The banner logic is correct, but the mail sending is missing or still a stub.
+
+GOAL:
+Keep the existing verification flow and banner EXACTLY as-is, but make sure that whenever this banner appears, a real verification email with a link is sent to the broker using Resend (or the existing email helper).
+
+Do NOT:
+- Change how the workspace or email verification works conceptually.
+- Change how the verification link is validated or which route handles it (if it already exists).
+- Change driver / public tracking flows.
+
+Instead:
+- Locate the existing verification-token and banner logic and just plug in the real email sending.
+
+────────────────────────
+1. FIND WHERE THE BANNER IS CONTROLLED
+────────────────────────
+
+1) Locate the React component/page that renders the banner on `/app/loads`. It will have text similar to:
+
+   "WE'VE SENT A VERIFICATION LINK TO ${email}. PLEASE CONFIRM YOUR EMAIL..."
+
+2) From there, identify:
+   - Which field/flag in the backend determines that the banner should be shown (e.g. `workspace.emailVerified === false` AND `verificationEmailSent === true`, or similar).
+   - Where that flag is set when the broker:
+     - first creates a load, OR
+     - updates `Broker Email` in `/app/settings`.
+
+We want to hook the email sending into the same place where this “verification pending” state is set.
+
+────────────────────────
+2. FIND / CREATE THE VERIFICATION LINK GENERATION
+────────────────────────
+
+1) Search the backend for existing email verification logic:
+   - Models like `EmailVerificationToken`, `WorkspaceVerificationToken`, `VerificationToken`.
+   - API routes like `/api/auth/verify`, `/api/broker/verify`, `/api/workspace/verify`.
+
+2) If such logic already exists and builds a verification URL:
+   - Reuse that URL for the email body.
+   - Do NOT change token structure or route paths.
+
+3) If there is only a stub (e.g. TODO or console.log) but the code clearly intends to create a verification link:
+   - Keep the same structure and simply wire the email sending.
+   - Only if there is absolutely no token logic at all, implement the minimal, standard pattern:
+     - Create a token table (if one already exists, reuse it) with `email`, `token`, `expiresAt`, `usedAt`.
+     - Create a verify route that consumes the token and marks the workspace email as verified.
+     - But preserve the existing banner and redirect behavior.
+
+────────────────────────
+3. USE THE EXISTING RESEND HELPER TO SEND THE EMAIL
+────────────────────────
+
+1) Reuse the central mail helper that was previously implemented for Resend. It may look like:
+
+   ```ts
+   import { sendTransactionalEmail } from "@/lib/email";
+
+or similar. Find the actual helper and use it; do not introduce a new mail library.
+	2.	In the backend place where we:
+	•	set the broker email on the profile, and
+	•	mark that a verification link should be sent / banner should show,
+add a call to sendTransactionalEmail.
+Example (adapt names):
+
+const verificationUrl = /* existing logic that builds the workspace verification URL */;
+const brokerEmail = profile.email;
+
+if (brokerEmail && verificationUrl) {
+  await sendTransactionalEmail({
+    to: brokerEmail,
+    subject: "Verify your email for PingPoint",
+    text: `Hello,\n\nPlease confirm your email to fully activate your PingPoint workspace:\n\n${verificationUrl}\n\nIf you did not request this, you can ignore this email.\n`,
+    html: `
+      <p>Hello,</p>
+      <p>Please confirm your email to fully activate your PingPoint workspace:</p>
+      <p><a href="${verificationUrl}" style="display:inline-block;padding:10px 18px;border-radius:9999px;background:#111827;color:#facc15;text-decoration:none;font-weight:600;">Verify email</a></p>
+      <p>Or copy and paste this URL into your browser:</p>
+      <p><code>${verificationUrl}</code></p>
+      <p>If you did not request this, you can safely ignore this email.</p>
+    `,
+  });
+}
+
+
+	3.	This call should be executed when:
+	•	a broker first sets their email, OR
+	•	updates it in /app/settings.
+	4.	If RESEND_API_KEY is missing, the helper should just log the email instead of crashing (it likely already does; keep that behavior).
+
+────────────────────────
+4. HOOK INTO SETTINGS SAVE (/APP/SETTINGS)
+────────────────────────
+
+The most straightforward integration point is the backend that handles saving broker profile settings.
+	1.	Find the API route or server action used by the /app/settings page to save:
+	•	BROKER / COMPANY NAME
+	•	BROKER EMAIL
+	•	CONTACT PHONE
+	•	TIMEZONE
+	2.	After successfully updating the broker profile in the database:
+	•	Detect if the email field is:
+	•	newly set (was null/empty, now non-empty), or
+	•	changed to a new value.
+	•	If so:
+	•	Generate/refresh a verification token & link (or reuse existing logic).
+	•	Call sendTransactionalEmail as described above.
+	•	Make sure the flag that controls the banner (“verification link sent, waiting for confirm”) is set, so the banner continues to work as it does now.
+
+Do NOT change how the email is later marked as verified; just ensure the email is actually sent when settings are saved.
+
+────────────────────────
+5. TEST END-TO-END
+────────────────────────
+
+After implementation:
+	1.	In the /app/settings page:
+	•	Set BROKER EMAIL to a real test email (e.g. sudzikoinamazon@gmail.com).
+	•	Click “Save Settings”.
+	2.	Verify that:
+	•	The backend does NOT throw errors.
+	•	The banner on /app/loads still says:
+“WE’VE SENT A VERIFICATION LINK TO …”
+	3.	Check the inbox of that email:
+	•	You should receive a verification email from PingPoint (Resend) containing the verification link.
+	4.	Click the link:
+	•	It should hit the existing verification route.
+	•	After success, the workspace email should be marked verified, and the banner should no longer appear (if that was already implemented).
+
+END OF INSTRUCTIONS
