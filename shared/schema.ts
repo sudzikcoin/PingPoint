@@ -9,6 +9,8 @@ export const brokers = pgTable("brokers", {
   id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
   name: text("name").notNull(),
   email: text("email").notNull().unique(),
+  phone: text("phone"),
+  timezone: text("timezone").default("Central (CT)"),
   emailVerified: boolean("email_verified").notNull().default(false),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`now()`),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().default(sql`now()`),
@@ -17,6 +19,24 @@ export const brokers = pgTable("brokers", {
 export const brokersRelations = relations(brokers, ({ many }) => ({
   loads: many(loads),
   verificationTokens: many(verificationTokens),
+  fieldHints: many(brokerFieldHints),
+}));
+
+// Broker Field Hints - for typeahead suggestions
+export const brokerFieldHints = pgTable("broker_field_hints", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  brokerId: uuid("broker_id").notNull().references(() => brokers.id),
+  fieldKey: text("field_key").notNull(),
+  value: text("value").notNull(),
+  usageCount: integer("usage_count").notNull().default(1),
+  lastUsedAt: timestamp("last_used_at", { withTimezone: true }).notNull().default(sql`now()`),
+});
+
+export const brokerFieldHintsRelations = relations(brokerFieldHints, ({ one }) => ({
+  broker: one(brokers, {
+    fields: [brokerFieldHints.brokerId],
+    references: [brokers.id],
+  }),
 }));
 
 // Verification Token model
@@ -155,6 +175,12 @@ export const rateConfirmationFilesRelations = relations(rateConfirmationFiles, (
 export const insertBrokerSchema = createInsertSchema(brokers).pick({
   name: true,
   email: true,
+  phone: true,
+  timezone: true,
+});
+
+export const insertBrokerFieldHintSchema = createInsertSchema(brokerFieldHints).omit({
+  id: true,
 });
 
 export const insertLoadSchema = createInsertSchema(loads, {
@@ -187,6 +213,8 @@ export const insertTrackingPingSchema = createInsertSchema(trackingPings, {
 // Types
 export type Broker = typeof brokers.$inferSelect;
 export type InsertBroker = z.infer<typeof insertBrokerSchema>;
+export type BrokerFieldHint = typeof brokerFieldHints.$inferSelect;
+export type InsertBrokerFieldHint = z.infer<typeof insertBrokerFieldHintSchema>;
 export type VerificationToken = typeof verificationTokens.$inferSelect;
 export type Driver = typeof drivers.$inferSelect;
 export type InsertDriver = z.infer<typeof insertDriverSchema>;

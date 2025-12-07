@@ -6,6 +6,7 @@ import {
   verificationTokens,
   trackingPings,
   rateConfirmationFiles,
+  brokerFieldHints,
   type Broker,
   type InsertBroker,
   type Driver,
@@ -18,9 +19,10 @@ import {
   type TrackingPing,
   type InsertTrackingPing,
   type RateConfirmationFile,
+  type BrokerFieldHint,
 } from "@shared/schema";
 import { db } from "./db";
-import { eq, and, desc } from "drizzle-orm";
+import { eq, and, desc, ilike, sql } from "drizzle-orm";
 
 export interface IStorage {
   // Broker operations
@@ -58,6 +60,10 @@ export interface IStorage {
   // Rate confirmation file operations
   createRateConfirmationFile(data: { loadId: string; fileUrl: string; originalName: string }): Promise<RateConfirmationFile>;
   getLatestRateConfirmationFile(loadId: string): Promise<RateConfirmationFile | undefined>;
+
+  // Broker field hints operations
+  upsertFieldHint(brokerId: string, fieldKey: string, value: string): Promise<BrokerFieldHint>;
+  getFieldHints(brokerId: string, fieldKey: string, query?: string, limit?: number): Promise<BrokerFieldHint[]>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -229,6 +235,82 @@ export class DatabaseStorage implements IStorage {
       .orderBy(desc(rateConfirmationFiles.uploadedAt))
       .limit(1);
     return file || undefined;
+  }
+
+  // Broker field hints operations
+  async upsertFieldHint(brokerId: string, fieldKey: string, value: string): Promise<BrokerFieldHint> {
+    const trimmedValue = value.trim();
+    if (!trimmedValue) {
+      throw new Error("Value cannot be empty");
+    }
+
+    // Check if hint already exists
+    const [existing] = await db
+      .select()
+      .from(brokerFieldHints)
+      .where(
+        and(
+          eq(brokerFieldHints.brokerId, brokerId),
+          eq(brokerFieldHints.fieldKey, fieldKey),
+          eq(brokerFieldHints.value, trimmedValue)
+        )
+      );
+
+    if (existing) {
+      // Update usage count and timestamp
+      const [updated] = await db
+        .update(brokerFieldHints)
+        .set({
+          usageCount: existing.usageCount + 1,
+          lastUsedAt: new Date(),
+        })
+        .where(eq(brokerFieldHints.id, existing.id))
+        .returning();
+      return updated;
+    }
+
+    // Create new hint
+    const [hint] = await db
+      .insert(brokerFieldHints)
+      .values({
+        brokerId,
+        fieldKey,
+        value: trimmedValue,
+        usageCount: 1,
+        lastUsedAt: new Date(),
+      })
+      .returning();
+    return hint;
+  }
+
+  async getFieldHints(brokerId: string, fieldKey: string, query?: string, limit: number = 10): Promise<BrokerFieldHint[]> {
+    let baseQuery = db
+      .select()
+      .from(brokerFieldHints)
+      .where(
+        and(
+          eq(brokerFieldHints.brokerId, brokerId),
+          eq(brokerFieldHints.fieldKey, fieldKey)
+        )
+      );
+
+    // If query provided, filter by partial match
+    if (query && query.trim()) {
+      baseQuery = db
+        .select()
+        .from(brokerFieldHints)
+        .where(
+          and(
+            eq(brokerFieldHints.brokerId, brokerId),
+            eq(brokerFieldHints.fieldKey, fieldKey),
+            ilike(brokerFieldHints.value, `%${query.trim()}%`)
+          )
+        );
+    }
+
+    return await baseQuery
+      .orderBy(desc(brokerFieldHints.usageCount), desc(brokerFieldHints.lastUsedAt))
+      .limit(limit);
   }
 }
 

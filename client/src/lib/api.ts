@@ -10,6 +10,20 @@ export interface BrokerWorkspace {
   updatedAt?: string;
 }
 
+export interface BrokerProfile {
+  id: string;
+  name: string;
+  email: string;
+  phone: string;
+  timezone: string;
+  emailVerified: boolean;
+}
+
+export interface FieldHint {
+  value: string;
+  usageCount: number;
+}
+
 export const api = {
   brokers: {
     ensure: async (email: string, name: string): Promise<BrokerWorkspace> => {
@@ -60,6 +74,49 @@ export const api = {
       
       if (!res.ok) {
         throw new Error('Failed to logout');
+      }
+      
+      return res.json();
+    },
+
+    getProfile: async (): Promise<BrokerProfile> => {
+      const res = await fetch('/api/broker/profile', {
+        credentials: 'include',
+      });
+      
+      if (!res.ok) {
+        throw new Error('Failed to fetch profile');
+      }
+      
+      return res.json();
+    },
+
+    updateProfile: async (data: Partial<BrokerProfile>): Promise<BrokerProfile> => {
+      const res = await fetch('/api/broker/profile', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify(data),
+      });
+      
+      if (!res.ok) {
+        throw new Error('Failed to update profile');
+      }
+      
+      return res.json();
+    },
+
+    getHints: async (fieldKey: string, query?: string, limit?: number): Promise<FieldHint[]> => {
+      const params = new URLSearchParams({ fieldKey });
+      if (query) params.set('q', query);
+      if (limit) params.set('limit', limit.toString());
+      
+      const res = await fetch(`/api/broker/hints?${params}`, {
+        credentials: 'include',
+      });
+      
+      if (!res.ok) {
+        return [];
       }
       
       return res.json();

@@ -1,0 +1,399 @@
+You are the Replit Backend Agent working on the existing PingPoint / `agentos-tracking-core` project (Next.js App Router + TypeScript + Prisma + Tailwind).
+
+GOAL (single feature pack):
+
+1) Make broker onboarding “one-shot”:
+   - When a broker creates their **first load**, use the GENERAL INFORMATION block to automatically create/update their **Broker Profile**.
+   - That Broker Profile is then used to:
+     - pre-fill the **Settings** page,
+     - and auto-fill future **New Load** forms.
+
+2) Add and persist a **Broker Email** field in Settings and in the profile.
+
+3) Implement a per-broker “memory” of frequently used values (shipper/receiver names, emails, phones, etc.) via a `BrokerFieldHint` table + API, and surface them as typeahead suggestions in the **New Load** form. Each broker sees only **their own** hints.
+
+IMPORTANT:
+- Do NOT break existing auth, load creation, or tracking.
+- Reuse existing patterns (Prisma, API handlers, React hooks, components).
+- If something already exists (e.g. workspace/profile model, email verification logic), extend it rather than creating duplicates.
+
+
+────────────────────────
+0. FIND EXISTING ENTITIES & FILES
+────────────────────────
+
+Before coding, locate:
+
+1) Prisma model that represents the **broker workspace / profile** used for:
+   - Broker/company name,
+   - Contact phone,
+   - Timezone,
+   - The banner “We’ve sent a verification link to X… please confirm your email to fully activate your workspace.”
+   Examples of model names: `BrokerProfile`, `Workspace`, `Organization`, etc.
+
+2) API handlers / route handlers for:
+   - Creating a load (e.g. `POST /api/loads` or `/api/app/loads`).
+   - Broker settings (e.g. `GET/PUT /api/broker/settings` or `/api/profile`).
+   - The email verification sending logic currently used for the banner.
+
+3) Frontend pages:
+   - Broker dashboard: `/app/loads`.
+   - New Load form: `/app/loads/new`.
+   - Settings page: `/app/settings`.
+
+Use those actual file paths in your edits.
+
+
+────────────────────────
+1. PRISMA: ADD EMAIL TO BROKER PROFILE + HINTS TABLE
+────────────────────────
+
+1.1. Extend Broker Profile model
+
+In `prisma/schema.prisma`, in the model that stores broker/company profile (whatever you found in step 0), add an **optional email** field:
+
+- Example (adapt field and model names to the actual schema):
+
+  model BrokerProfile {
+    id        String   @id @default(cuid())
+    userId    String
+    name      String
+    phone     String?
+    email     String?       // ← NEW
+    timezone  String?
+    // ...
+  }
+
+If the model already has an `email` field, just reuse it and skip adding a new one.
+
+Run `npx prisma migrate dev` with a sensible migration name like `add_broker_email_and_hints`.
+
+1.2. Create `BrokerFieldHint` model
+
+In the same schema file, add a model to store frequently used values per broker:
+
+  model BrokerFieldHint {
+    id          String   @id @default(cuid())
+    brokerId    String
+    fieldKey    String   // e.g. "shipperName", "shipperEmail", "receiverName", "receiverEmail", etc.
+    value       String
+    usageCount  Int      @default(1)
+    lastUsedAt  DateTime @default(now())
+
+    broker      BrokerProfile @relation(fields: [brokerId], references: [id])
+
+    @@index([brokerId, fieldKey])
+    @@unique([brokerId, fieldKey, value])
+  }
+
+Run `prisma migrate dev` again if needed, or include both changes in a single migration (depending on your workflow).
+
+
+────────────────────────
+2. BACKEND: BROKER PROFILE AUTO-CREATION & UPDATE ON FIRST LOAD
+────────────────────────
+
+We want the very first load the broker creates to also populate their profile, so they don’t have to fill Settings manually.
+
+2.1. In the load creation API
+
+Find the API handler that processes creating a new load, e.g.:
+
+- `src/app/api/loads/route.ts` with `POST` handler
+or
+- `src/pages/api/loads.ts`
+or
+- `src/app/api/app/loads/route.ts`.
+
+Inside the handler, where you currently parse the request body and create the `Load` (or equivalent) record, you should have access to:
+
+- current user `userId` / `brokerWorkspaceId`,
+- fields from the **GENERAL INFORMATION** form such as:
+  - broker/company name,
+  - broker email (if present),
+  - contact phone,
+  - timezone (if provided).
+
+Implement the following logic:
+
+1) Resolve the **broker profile** for this user/workspace:
+
+   const brokerProfile = await prisma.brokerProfile.findUnique({
+     where: { userId: currentUserId } // or workspaceId: currentWorkspaceId etc.
+   });
+
+2) If **no profile exists yet**:
+
+   - Create one using the data from the load creation payload:
+
+     const createdProfile = await prisma.brokerProfile.create({
+       data: {
+         userId: currentUserId,              // or workspaceId
+         name: payload.brokerName,           // field from form
+         email: payload.brokerEmail ?? null,
+         phone: payload.brokerPhone ?? null,
+         timezone: payload.timezone ?? "Central (CT)" // or any default
+       }
+     });
+
+   - Call the existing email verification logic to send a verification email to `payload.brokerEmail` (reuse the same helper you already apply when the user signs up or when workspace is created; do NOT re-implement a new mail system).
+
+3) If a profile already exists:
+
+   - Optionally update any missing fields (e.g. if `email` is null and the form includes brokerEmail, set it).
+   - Do NOT override existing profile values blindly unless you decide that is desired behavior. A safe approach:
+
+     await prisma.brokerProfile.update({
+       where: { id: brokerProfile.id },
+       data: {
+         email: brokerProfile.email ?? payload.brokerEmail ?? undefined,
+         phone: brokerProfile.phone ?? payload.brokerPhone ?? undefined,
+         name: brokerProfile.name || payload.brokerName || undefined,
+         timezone: brokerProfile.timezone ?? payload.timezone ?? undefined,
+       }
+     });
+
+4) Proceed with creating the load as you currently do – no change in the existing business logic for loads except where you may store `brokerProfileId` or `workspaceId` as a foreign key.
+
+Result: after the first load, the broker automatically has a populated profile.
+
+
+────────────────────────
+3. SETTINGS: ADD BROKER EMAIL FIELD & PREFILL
+────────────────────────
+
+3.1. API
+
+Find the API routes for broker settings, likely:
+
+- `GET /api/broker/settings` and `PUT /api/broker/settings`
+or similar.
+
+If not present, create:
+
+- `GET /api/broker/profile` – returns broker profile for current user.
+- `PUT /api/broker/profile` – updates profile.
+
+Ensure the JSON returned includes:
+
+- `name`
+- `phone`
+- `email`
+- `timezone`
+
+3.2. UI: `/app/settings`
+
+In the Settings page component (e.g. `src/app/app/settings/page.tsx` or similar):
+
+1) In the **BROKER PROFILE** block:
+
+   - Add a **Broker Email** input:
+
+     - Label: `Broker Email`
+     - Placeholder: `dispatch@yourcompany.com`
+
+2) When the page loads:
+
+   - Fetch broker profile via `GET /api/broker/profile` or existing settings API.
+   - Use the returned `name`, `phone`, `email`, `timezone` to prefill the form fields.
+
+3) On Save:
+
+   - Send a `PUT /api/broker/profile` with the updated values.
+   - Keep validation simple (basic email pattern, optional).
+
+Make sure any existing UI (banner, etc.) that relies on email verification still works with this updated profile model.
+
+
+────────────────────────
+4. NEW LOAD FORM: AUTO-FILL FROM PROFILE
+────────────────────────
+
+In `/app/loads/new` page component:
+
+1) On mount, fetch broker profile (same endpoint as Settings).
+
+2) When initializing the **GENERAL INFORMATION** form, set `defaultValues` from profile:
+
+   - `brokerName`  ← `profile.name`
+   - `brokerEmail` ← `profile.email`
+   - `driverPhone` ← `profile.phone` (if you decide that broker phone = dispatch/driver phone; adjust as needed)
+   - `timezone`    ← `profile.timezone`
+
+3) Ensure that:
+
+   - Fields remain fully editable: broker can override these for a specific load.
+   - If profile fields are empty, just fall back to the current behavior (no prefill).
+
+Note: for editing an existing load, you should continue to use the load’s own data, not the profile.
+
+
+────────────────────────
+5. HINTS: BACKEND INGESTION ON LOAD CREATE/UPDATE
+────────────────────────
+
+We now wire `BrokerFieldHint` so that it collects frequently used values automatically.
+
+5.1. Decide which fields to track
+
+On the load model / form, pick key fields (adjust to real names):
+
+- `shipperName`
+- `shipperEmail`
+- `shipperPhone`
+- `receiverName` (consignee)
+- `receiverEmail`
+- `receiverPhone`
+- maybe `pickupFacilityName`
+- `deliveryFacilityName`
+- maybe `dispatchEmail`, `dispatchPhone`.
+
+5.2. Helper function
+
+Create a backend helper (e.g. `src/server/hints/brokerFieldHints.ts`) with a function:
+
+- `ingestHintsForLoad(brokerId, loadData)`:
+
+  - For each of the selected fields above:
+    - If `value` is non-empty string:
+      - Upsert into `BrokerFieldHint`:
+
+        await prisma.brokerFieldHint.upsert({
+          where: {
+            brokerId_fieldKey_value: {
+              brokerId,
+              fieldKey,
+              value: normalizedValue // e.g. trimmed, lowercased for uniqueness if you want
+            }
+          },
+          update: {
+            usageCount: { increment: 1 },
+            lastUsedAt: new Date()
+          },
+          create: {
+            brokerId,
+            fieldKey,
+            value: originalValue,
+            usageCount: 1,
+            lastUsedAt: new Date()
+          }
+        });
+
+5.3. Call helper from load API
+
+In the load create (and optionally update) handler, after successfully creating/updating the load:
+
+- Determine `brokerId` (from profile/workspace).
+- Call `ingestHintsForLoad(brokerId, payload)`.
+
+This gradually builds up the hint list per broker as they work with loads.
+
+
+────────────────────────
+6. HINTS: API FOR TYPEAHEAD
+────────────────────────
+
+Create a dedicated route, for example:
+
+- `GET /api/broker/hints`
+
+Parameters:
+
+- `fieldKey` (required): e.g. `shipperName`, `receiverName`, `shipperEmail`, etc.
+- `q` (optional): partial search string user typed.
+- `limit` (optional): default 10.
+
+Behavior:
+
+- Determine current `brokerId` from auth/session.
+- Query `BrokerFieldHint`:
+
+  - `WHERE brokerId = currentBrokerId AND fieldKey = fieldKey`
+  - If `q` provided, filter by `value` containing `q` (case-insensitive).
+  - `ORDER BY usageCount DESC, lastUsedAt DESC`
+  - `LIMIT limit`.
+
+Return JSON array of `{ value, usageCount }`.
+
+Make sure that:
+
+- No hints from other brokers are ever returned.
+- If there are no hints yet, return an empty array.
+
+
+────────────────────────
+7. FRONTEND TYPEAHEAD: NEW LOAD FORM SUGGESTIONS
+────────────────────────
+
+On `/app/loads/new` (and optionally edit load page):
+
+For each of the tracked fields (shipper, receiver, emails, etc.):
+
+1) Replace plain text inputs with an input + suggestion dropdown pattern.
+
+2) Implementation sketch (reuse any existing UI component patterns):
+
+- On input focus or when the user types:
+
+  - Debounce keystrokes (e.g. 250–300ms).
+  - Call `/api/broker/hints?fieldKey=shipperName&q=<typed_value>&limit=8`.
+  - Populate local `suggestions` state.
+
+- Render a small dropdown below the input when:
+  - `suggestions.length > 0`
+  - Input is focused.
+
+- Each suggestion row shows the stored value; optionally show usage count smaller / muted.
+
+- When user clicks a suggestion:
+  - Set input value to that suggestion.
+  - Hide the dropdown.
+
+3) Make sure the UX is non-intrusive:
+
+- If user doesn’t want suggestions, they can ignore them and just type normally.
+- If no hints available, dropdown doesn’t appear.
+
+4) Do not introduce new dependencies; use existing components (e.g. a simple `<div>` list with Tailwind classes).
+
+
+────────────────────────
+8. SAFETY & NON-BREAKING REQUIREMENTS
+────────────────────────
+
+- Do NOT change existing Prisma model names or relations, only extend as described.
+- Keep all IDs and load tracking logic intact.
+- Keep driver-side (PingPoint Driver) behavior as-is; all changes are on the **broker side** (Settings, New Load, hints).
+- Maintain TypeScript types and update any relevant interfaces/DTOs when you add `email` and hints.
+- Reuse existing email verification workflows for sending the broker verification email after profile creation.
+
+
+────────────────────────
+9. FINAL CHECKLIST
+────────────────────────
+
+After implementing:
+
+1) New user signs in, goes to `/app/loads/new`, fills GENERAL INFORMATION and creates their first load.
+   - A `BrokerProfile` is automatically created with name, email, phone, timezone.
+   - Verification email is sent to broker email (existing banner behavior still works).
+
+2) Going to `/app/settings`:
+   - Broker sees their name, phone, email, timezone already filled.
+   - They can edit & save these settings.
+
+3) Creating subsequent loads (`/app/loads/new`):
+   - GENERAL INFORMATION is pre-filled from BrokerProfile (name, email, phone, timezone).
+   - Broker can change values per load if needed.
+
+4) After creating several loads with similar shippers/receivers:
+   - When typing in e.g. Shipper Name or Receiver Name, a dropdown with frequently used values for **this broker only** appears.
+   - Selecting a suggestion fills the field.
+
+5) No data leakage:
+   - Different brokers do not see each other’s hints.
+   - Hints API always filters by current broker’s id.
+
+6) No TypeScript or runtime errors in dev or build.
+
+END OF INSTRUCTIONS

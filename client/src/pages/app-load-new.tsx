@@ -3,33 +3,65 @@ import { AppLayout } from "@/components/app-layout";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { createLoad, Load, Stop } from "@/lib/mock-data";
+import { TypeaheadInput } from "@/components/ui/typeahead-input";
 import { useLocation } from "wouter";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useTheme } from "@/context/theme-context";
 import { cn } from "@/lib/utils";
-import { ArrowLeft, Save } from "lucide-react";
+import { ArrowLeft } from "lucide-react";
 import { toast } from "sonner";
-import { ensureBrokerWorkspace } from "@/lib/brokerWorkspace";
-import { sendBrokerVerificationEmail, sendDriverAppLink } from "@/lib/notifications";
 
 export default function AppLoadNew() {
   const [, setLocation] = useLocation();
   const { theme } = useTheme();
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [loading, setLoading] = useState(true);
+
+  // Form state with profile prefill
+  const [brokerName, setBrokerName] = useState("");
+  const [brokerEmail, setBrokerEmail] = useState("");
+  const [driverPhone, setDriverPhone] = useState("");
+  const [shipperName, setShipperName] = useState("");
+  const [carrierName, setCarrierName] = useState("");
+  const [equipmentType, setEquipmentType] = useState("VAN");
+  const [customerRef, setCustomerRef] = useState("");
+  const [rateAmount, setRateAmount] = useState("");
+
+  // Pickup stop
+  const [pickupName, setPickupName] = useState("");
+  const [pickupAddress, setPickupAddress] = useState("");
+  const [pickupCity, setPickupCity] = useState("");
+  const [pickupState, setPickupState] = useState("");
+  const [pickupZip, setPickupZip] = useState("");
+
+  // Delivery stop
+  const [deliveryName, setDeliveryName] = useState("");
+  const [deliveryAddress, setDeliveryAddress] = useState("");
+  const [deliveryCity, setDeliveryCity] = useState("");
+  const [deliveryState, setDeliveryState] = useState("");
+  const [deliveryZip, setDeliveryZip] = useState("");
+
+  // Fetch broker profile on mount to prefill form
+  useEffect(() => {
+    const fetchProfile = async () => {
+      try {
+        const profile = await api.brokers.getProfile();
+        setBrokerName(profile.name || "");
+        setBrokerEmail(profile.email || "");
+        setDriverPhone(profile.phone || "");
+      } catch (e) {
+        // No session - that's okay, user will fill in manually
+        console.log("No active session for prefill");
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchProfile();
+  }, []);
 
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     setIsSubmitting(true);
-    
-    // Collect form data (mock implementation)
-    const formData = new FormData(e.currentTarget);
-    
-    const brokerName = formData.get("brokerName") as string;
-    const brokerEmail = formData.get("brokerEmail") as string;
-    const driverPhone = formData.get("driverPhone") as string;
 
     // Basic validation
     if (!brokerEmail || !brokerEmail.includes("@")) {
@@ -45,60 +77,52 @@ export default function AppLoadNew() {
     }
 
     try {
-      // Simulate API delay
-      await new Promise(resolve => setTimeout(resolve, 1000));
-
       // 1. Ensure Workspace via API
       const workspace = await api.brokers.ensure(brokerEmail, brokerName);
       
       // 2. Create Load via API
       const newLoad = await api.loads.create({
-        brokerName: brokerName,
-        brokerEmail: brokerEmail,
-        driverPhone: driverPhone,
-        shipperName: formData.get("shipperName") as string,
-        carrierName: formData.get("carrierName") as string,
-        equipmentType: formData.get("equipmentType") as string,
-        rateAmount: Number(formData.get("rateAmount")),
-        customerReference: formData.get("customerReference") as string,
-        internalReference: formData.get("internalReference") as string,
+        brokerName,
+        brokerEmail,
+        brokerPhone: driverPhone,
+        driverPhone,
+        shipperName,
+        carrierName,
+        equipmentType,
+        rateAmount: Number(rateAmount) || 0,
+        customerRef,
         stops: [
           {
-            id: `stop_${Date.now()}_1`,
             type: "PICKUP",
             sequence: 1,
-            name: formData.get("pickupName") as string,
-            addressLine1: formData.get("pickupAddress") as string,
-            city: formData.get("pickupCity") as string,
-            state: formData.get("pickupState") as string,
-            zip: formData.get("pickupZip") as string,
-            windowStart: new Date().toISOString(), // Mock
-            windowEnd: new Date().toISOString(),   // Mock
+            name: pickupName,
+            addressLine1: pickupAddress,
+            city: pickupCity,
+            state: pickupState,
+            zip: pickupZip,
+            windowStart: new Date().toISOString(),
+            windowEnd: new Date().toISOString(),
             status: "PLANNED"
           },
           {
-            id: `stop_${Date.now()}_2`,
             type: "DELIVERY",
             sequence: 2,
-            name: formData.get("deliveryName") as string,
-            addressLine1: formData.get("deliveryAddress") as string,
-            city: formData.get("deliveryCity") as string,
-            state: formData.get("deliveryState") as string,
-            zip: formData.get("deliveryZip") as string,
-            windowStart: new Date().toISOString(), // Mock
-            windowEnd: new Date().toISOString(),   // Mock
+            name: deliveryName,
+            addressLine1: deliveryAddress,
+            city: deliveryCity,
+            state: deliveryState,
+            zip: deliveryZip,
+            windowStart: new Date().toISOString(),
+            windowEnd: new Date().toISOString(),
             status: "PLANNED"
           }
         ]
       });
 
-      // 3. Notifications are handled inside api.loads.create now
-
-      // 4. UI Feedback & Redirect
+      // 3. UI Feedback & Redirect
       toast.success(`Load created! Verification email sent to ${brokerEmail}`);
       toast.info(`Driver app link sent to ${driverPhone}`);
       
-      // Redirect to loads dashboard
       setLocation(`/app/loads?workspace=${workspace.id}`);
     
     } catch (error) {
@@ -119,6 +143,18 @@ export default function AppLoadNew() {
     "text-xs font-medium uppercase tracking-wide mb-2 block",
     theme === "arcade90s" ? "text-arc-muted arcade-pixel-font" : "text-brand-muted"
   );
+
+  if (loading) {
+    return (
+      <AppLayout>
+        <div className="flex items-center justify-center h-64">
+          <div className={cn("text-sm", theme === "arcade90s" ? "text-arc-muted arcade-pixel-font" : "text-brand-muted")}>
+            Loading...
+          </div>
+        </div>
+      </AppLayout>
+    );
+  }
 
   return (
     <AppLayout>
@@ -152,27 +188,69 @@ export default function AppLoadNew() {
             <CardContent className="grid grid-cols-1 md:grid-cols-2 gap-6">
               <div className="space-y-1">
                 <label className={labelClasses}>Broker Name</label>
-                <Input name="brokerName" required className={inputClasses} placeholder="e.g. Soar Transportation" />
+                <Input 
+                  data-testid="input-broker-name"
+                  value={brokerName}
+                  onChange={(e) => setBrokerName(e.target.value)}
+                  required 
+                  className={inputClasses} 
+                  placeholder="e.g. Soar Transportation" 
+                />
               </div>
               <div className="space-y-1">
                 <label className={labelClasses}>Broker Email</label>
-                <Input name="brokerEmail" type="email" required className={inputClasses} placeholder="e.g. dispatch@soartransport.com" />
+                <Input 
+                  data-testid="input-broker-email"
+                  type="email"
+                  value={brokerEmail}
+                  onChange={(e) => setBrokerEmail(e.target.value)}
+                  required 
+                  className={inputClasses} 
+                  placeholder="e.g. dispatch@soartransport.com" 
+                />
               </div>
               <div className="space-y-1">
                 <label className={labelClasses}>Driver Phone</label>
-                <Input name="driverPhone" type="tel" required className={inputClasses} placeholder="e.g. +1 (555) 123-4567" />
+                <Input 
+                  data-testid="input-driver-phone"
+                  type="tel"
+                  value={driverPhone}
+                  onChange={(e) => setDriverPhone(e.target.value)}
+                  required 
+                  className={inputClasses} 
+                  placeholder="e.g. +1 (555) 123-4567" 
+                />
               </div>
               <div className="space-y-1">
                 <label className={labelClasses}>Shipper Name</label>
-                <Input name="shipperName" required className={inputClasses} placeholder="e.g. General Mills" />
+                <TypeaheadInput 
+                  data-testid="input-shipper-name"
+                  fieldKey="shipperName"
+                  value={shipperName}
+                  onValueChange={setShipperName}
+                  className={inputClasses} 
+                  placeholder="e.g. General Mills" 
+                />
               </div>
               <div className="space-y-1">
                 <label className={labelClasses}>Carrier Name</label>
-                <Input name="carrierName" required className={inputClasses} placeholder="e.g. Best Carrier LLC" />
+                <TypeaheadInput 
+                  data-testid="input-carrier-name"
+                  fieldKey="carrierName"
+                  value={carrierName}
+                  onValueChange={setCarrierName}
+                  className={inputClasses} 
+                  placeholder="e.g. Best Carrier LLC" 
+                />
               </div>
               <div className="space-y-1">
                 <label className={labelClasses}>Equipment Type</label>
-                <select name="equipmentType" className={cn("w-full h-10 px-3 py-2 border rounded-md text-sm", inputClasses)}>
+                <select 
+                  data-testid="select-equipment-type"
+                  value={equipmentType}
+                  onChange={(e) => setEquipmentType(e.target.value)}
+                  className={cn("w-full h-10 px-3 py-2 border rounded-md text-sm", inputClasses)}
+                >
                   <option value="VAN">Dry Van</option>
                   <option value="REEFER">Reefer</option>
                   <option value="FLATBED">Flatbed</option>
@@ -180,11 +258,25 @@ export default function AppLoadNew() {
               </div>
               <div className="space-y-1">
                 <label className={labelClasses}>Customer Ref</label>
-                <Input name="customerReference" className={inputClasses} placeholder="Optional PO #" />
+                <TypeaheadInput 
+                  data-testid="input-customer-ref"
+                  fieldKey="customerRef"
+                  value={customerRef}
+                  onValueChange={setCustomerRef}
+                  className={inputClasses} 
+                  placeholder="Optional PO #" 
+                />
               </div>
               <div className="space-y-1">
                 <label className={labelClasses}>Rate Amount ($)</label>
-                <Input name="rateAmount" type="number" className={inputClasses} placeholder="0.00" />
+                <Input 
+                  data-testid="input-rate-amount"
+                  type="number"
+                  value={rateAmount}
+                  onChange={(e) => setRateAmount(e.target.value)}
+                  className={inputClasses} 
+                  placeholder="0.00" 
+                />
               </div>
             </CardContent>
           </Card>
@@ -202,25 +294,58 @@ export default function AppLoadNew() {
               <CardContent className="space-y-4">
                 <div className="space-y-1">
                   <label className={labelClasses}>Facility Name</label>
-                  <Input name="pickupName" required className={inputClasses} />
+                  <TypeaheadInput 
+                    data-testid="input-pickup-name"
+                    fieldKey="pickupName"
+                    value={pickupName}
+                    onValueChange={setPickupName}
+                    required 
+                    className={inputClasses} 
+                  />
                 </div>
                 <div className="space-y-1">
                   <label className={labelClasses}>Address</label>
-                  <Input name="pickupAddress" required className={inputClasses} />
+                  <Input 
+                    data-testid="input-pickup-address"
+                    value={pickupAddress}
+                    onChange={(e) => setPickupAddress(e.target.value)}
+                    required 
+                    className={inputClasses} 
+                  />
                 </div>
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-1">
                     <label className={labelClasses}>City</label>
-                    <Input name="pickupCity" required className={inputClasses} />
+                    <TypeaheadInput 
+                      data-testid="input-pickup-city"
+                      fieldKey="pickupCity"
+                      value={pickupCity}
+                      onValueChange={setPickupCity}
+                      required 
+                      className={inputClasses} 
+                    />
                   </div>
                   <div className="space-y-1">
                     <label className={labelClasses}>State</label>
-                    <Input name="pickupState" required className={inputClasses} />
+                    <TypeaheadInput 
+                      data-testid="input-pickup-state"
+                      fieldKey="pickupState"
+                      value={pickupState}
+                      onValueChange={setPickupState}
+                      required 
+                      className={inputClasses} 
+                    />
                   </div>
                 </div>
                 <div className="space-y-1">
                   <label className={labelClasses}>ZIP</label>
-                  <Input name="pickupZip" required className={inputClasses} />
+                  <Input 
+                    data-testid="input-pickup-zip"
+                    value={pickupZip}
+                    onChange={(e) => setPickupZip(e.target.value)}
+                    required 
+                    className={inputClasses} 
+                  />
                 </div>
               </CardContent>
             </Card>
@@ -236,25 +361,58 @@ export default function AppLoadNew() {
               <CardContent className="space-y-4">
                 <div className="space-y-1">
                   <label className={labelClasses}>Facility Name</label>
-                  <Input name="deliveryName" required className={inputClasses} />
+                  <TypeaheadInput 
+                    data-testid="input-delivery-name"
+                    fieldKey="deliveryName"
+                    value={deliveryName}
+                    onValueChange={setDeliveryName}
+                    required 
+                    className={inputClasses} 
+                  />
                 </div>
                 <div className="space-y-1">
                   <label className={labelClasses}>Address</label>
-                  <Input name="deliveryAddress" required className={inputClasses} />
+                  <Input 
+                    data-testid="input-delivery-address"
+                    value={deliveryAddress}
+                    onChange={(e) => setDeliveryAddress(e.target.value)}
+                    required 
+                    className={inputClasses} 
+                  />
                 </div>
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-1">
                     <label className={labelClasses}>City</label>
-                    <Input name="deliveryCity" required className={inputClasses} />
+                    <TypeaheadInput 
+                      data-testid="input-delivery-city"
+                      fieldKey="deliveryCity"
+                      value={deliveryCity}
+                      onValueChange={setDeliveryCity}
+                      required 
+                      className={inputClasses} 
+                    />
                   </div>
                   <div className="space-y-1">
                     <label className={labelClasses}>State</label>
-                    <Input name="deliveryState" required className={inputClasses} />
+                    <TypeaheadInput 
+                      data-testid="input-delivery-state"
+                      fieldKey="deliveryState"
+                      value={deliveryState}
+                      onValueChange={setDeliveryState}
+                      required 
+                      className={inputClasses} 
+                    />
                   </div>
                 </div>
                 <div className="space-y-1">
                   <label className={labelClasses}>ZIP</label>
-                  <Input name="deliveryZip" required className={inputClasses} />
+                  <Input 
+                    data-testid="input-delivery-zip"
+                    value={deliveryZip}
+                    onChange={(e) => setDeliveryZip(e.target.value)}
+                    required 
+                    className={inputClasses} 
+                  />
                 </div>
               </CardContent>
             </Card>
@@ -262,6 +420,7 @@ export default function AppLoadNew() {
 
           <div className="flex justify-end pt-4">
             <Button 
+              data-testid="button-create-load"
               type="submit" 
               disabled={isSubmitting}
               className={cn(

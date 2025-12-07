@@ -213,6 +213,88 @@ export async function registerRoutes(
     }
   });
 
+  // GET /api/broker/profile - Get broker profile
+  app.get("/api/broker/profile", async (req: Request, res: Response) => {
+    try {
+      const broker = await getBrokerFromRequest(req);
+      if (!broker) {
+        return res.status(401).json({ error: "Unauthorized" });
+      }
+
+      return res.json({
+        id: broker.id,
+        name: broker.name,
+        email: broker.email,
+        phone: broker.phone || "",
+        timezone: broker.timezone || "Central (CT)",
+        emailVerified: broker.emailVerified,
+      });
+    } catch (error) {
+      console.error("Error in GET /api/broker/profile:", error);
+      return res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  // PUT /api/broker/profile - Update broker profile
+  app.put("/api/broker/profile", async (req: Request, res: Response) => {
+    try {
+      const broker = await getBrokerFromRequest(req);
+      if (!broker) {
+        return res.status(401).json({ error: "Unauthorized" });
+      }
+
+      const { name, phone, timezone } = req.body;
+      // Note: email is NOT updatable via this endpoint for security reasons
+      // Email changes would require re-verification flow
+
+      const updatedBroker = await storage.updateBroker(broker.id, {
+        name: name || broker.name,
+        phone: phone || null,
+        timezone: timezone || broker.timezone,
+      });
+
+      return res.json({
+        id: updatedBroker?.id,
+        name: updatedBroker?.name,
+        email: updatedBroker?.email, // Return current email (not editable)
+        phone: updatedBroker?.phone || "",
+        timezone: updatedBroker?.timezone || "Central (CT)",
+        emailVerified: updatedBroker?.emailVerified,
+      });
+    } catch (error) {
+      console.error("Error in PUT /api/broker/profile:", error);
+      return res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  // GET /api/broker/hints - Get field hints for typeahead
+  app.get("/api/broker/hints", async (req: Request, res: Response) => {
+    try {
+      const broker = await getBrokerFromRequest(req);
+      if (!broker) {
+        return res.status(401).json({ error: "Unauthorized" });
+      }
+
+      const { fieldKey, q, limit } = req.query;
+
+      if (!fieldKey || typeof fieldKey !== 'string') {
+        return res.status(400).json({ error: "fieldKey is required" });
+      }
+
+      const hints = await storage.getFieldHints(
+        broker.id,
+        fieldKey,
+        typeof q === 'string' ? q : undefined,
+        typeof limit === 'string' ? parseInt(limit, 10) : 10
+      );
+
+      return res.json(hints.map(h => ({ value: h.value, usageCount: h.usageCount })));
+    } catch (error) {
+      console.error("Error in GET /api/broker/hints:", error);
+      return res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
   // Load endpoints
 
   // POST /api/loads - Create new load
@@ -223,7 +305,7 @@ export async function registerRoutes(
       
       // If no session, allow creation with brokerEmail from body (for demo flow)
       if (!broker) {
-        const { brokerEmail, brokerName } = req.body;
+        const { brokerEmail, brokerName, brokerPhone, timezone } = req.body;
         if (!brokerEmail) {
           return res.status(401).json({ error: "Unauthorized - no session or brokerEmail provided" });
         }
@@ -232,17 +314,56 @@ export async function registerRoutes(
         broker = await storage.getBrokerByEmail(emailNormalized) || null;
         
         if (!broker) {
+          // Create new broker with profile data from form
           broker = await storage.createBroker({
             email: emailNormalized,
             name: brokerName || "Broker",
+            phone: brokerPhone || null,
+            timezone: timezone || "Central (CT)",
           });
+        } else {
+          // Update broker profile with any missing fields
+          const updates: any = {};
+          if (!broker.phone && brokerPhone) updates.phone = brokerPhone;
+          if (!broker.timezone && timezone) updates.timezone = timezone;
+          if (!broker.name && brokerName) updates.name = brokerName;
+          
+          if (Object.keys(updates).length > 0) {
+            broker = await storage.updateBroker(broker.id, updates) || broker;
+          }
         }
         
         // Set session cookie for future requests
         createBrokerSession(broker.id, res);
+      } else {
+        // For existing session, optionally update profile with missing fields
+        const { brokerPhone, timezone } = req.body;
+        const updates: any = {};
+        if (!broker.phone && brokerPhone) updates.phone = brokerPhone;
+        if (!broker.timezone && timezone) updates.timezone = timezone;
+        
+        if (Object.keys(updates).length > 0) {
+          broker = await storage.updateBroker(broker.id, updates) || broker;
+        }
       }
 
-      const { driverPhone, stops: stopsData, brokerEmail: _be, brokerName: _bn, ...loadData } = req.body;
+      // Extract fields that are for broker/driver, not for the load itself
+      const { 
+        driverPhone, 
+        stops: stopsData, 
+        brokerEmail: _be, 
+        brokerName: _bn, 
+        brokerPhone: _bp, 
+        timezone: _tz,
+        customerReference,
+        internalReference,
+        ...loadData 
+      } = req.body;
+
+      // Handle customerReference -> customerRef mapping
+      if (customerReference && !loadData.customerRef) {
+        loadData.customerRef = customerReference;
+      }
 
       // Validate and find/create driver
       let driver = null;
@@ -298,6 +419,36 @@ export async function registerRoutes(
 
         await storage.createStops(stopsToCreate);
       }
+
+      // Ingest field hints for typeahead suggestions (non-blocking)
+      const hintsToIngest = [
+        { fieldKey: "shipperName", value: loadData.shipperName },
+        { fieldKey: "carrierName", value: loadData.carrierName },
+        { fieldKey: "equipmentType", value: loadData.equipmentType },
+        { fieldKey: "customerRef", value: loadData.customerRef },
+      ];
+
+      // Add stop-related hints
+      if (stopsData && Array.isArray(stopsData)) {
+        for (const stop of stopsData) {
+          if (stop.type === 'PICKUP') {
+            if (stop.name) hintsToIngest.push({ fieldKey: "pickupName", value: stop.name });
+            if (stop.city) hintsToIngest.push({ fieldKey: "pickupCity", value: stop.city });
+            if (stop.state) hintsToIngest.push({ fieldKey: "pickupState", value: stop.state });
+          } else if (stop.type === 'DELIVERY') {
+            if (stop.name) hintsToIngest.push({ fieldKey: "deliveryName", value: stop.name });
+            if (stop.city) hintsToIngest.push({ fieldKey: "deliveryCity", value: stop.city });
+            if (stop.state) hintsToIngest.push({ fieldKey: "deliveryState", value: stop.state });
+          }
+        }
+      }
+
+      // Ingest hints in background (don't await to avoid blocking response)
+      Promise.all(
+        hintsToIngest
+          .filter(h => h.value && typeof h.value === 'string' && h.value.trim())
+          .map(h => storage.upsertFieldHint(broker!.id, h.fieldKey, h.value))
+      ).catch(err => console.error("Error ingesting hints:", err));
 
       // Send notifications
       if (!broker.emailVerified) {

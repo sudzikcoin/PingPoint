@@ -12,29 +12,39 @@ import { api } from "@/lib/api";
 export default function AppSettings() {
   const { theme } = useTheme();
   const [brokerName, setBrokerName] = useState("");
+  const [brokerEmail, setBrokerEmail] = useState("");
   const [contactPhone, setContactPhone] = useState("");
-  const [timezone, setTimezone] = useState("America/Chicago");
+  const [timezone, setTimezone] = useState("Central (CT)");
   const [saving, setSaving] = useState(false);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const fetchBroker = async () => {
+    const fetchProfile = async () => {
       try {
-        const broker = await api.brokers.me();
-        setBrokerName(broker.name || "");
+        const profile = await api.brokers.getProfile();
+        setBrokerName(profile.name || "");
+        setBrokerEmail(profile.email || "");
+        setContactPhone(profile.phone || "");
+        setTimezone(profile.timezone || "Central (CT)");
       } catch (e) {
         console.log("No active session");
+      } finally {
+        setLoading(false);
       }
     };
-    fetchBroker();
+    fetchProfile();
   }, []);
 
   const handleSave = async () => {
     setSaving(true);
     try {
-      // For now, just show success - backend PATCH endpoint can be added later
-      await new Promise(r => setTimeout(r, 500));
+      // Note: email is not editable for security reasons
+      await api.brokers.updateProfile({
+        name: brokerName,
+        phone: contactPhone,
+        timezone: timezone,
+      });
       toast.success("Settings saved");
-      console.log("Settings:", { brokerName, contactPhone, timezone });
     } catch (e) {
       toast.error("Failed to save settings");
     } finally {
@@ -47,6 +57,18 @@ export default function AppSettings() {
       ? "bg-arc-bg border-arc-border text-arc-text rounded-none focus:border-arc-secondary" 
       : "bg-brand-dark-pill border-brand-border text-white"
   );
+
+  if (loading) {
+    return (
+      <AppLayout>
+        <div className="flex items-center justify-center h-64">
+          <div className={cn("text-sm", theme === "arcade90s" ? "text-arc-muted arcade-pixel-font" : "text-brand-muted")}>
+            Loading...
+          </div>
+        </div>
+      </AppLayout>
+    );
+  }
 
   return (
     <AppLayout>
@@ -72,6 +94,7 @@ export default function AppSettings() {
                 Broker / Company Name
               </label>
               <Input 
+                data-testid="input-broker-name"
                 value={brokerName}
                 onChange={(e) => setBrokerName(e.target.value)}
                 className={inputClasses}
@@ -81,9 +104,24 @@ export default function AppSettings() {
 
             <div className="space-y-2">
               <label className={cn("text-xs font-bold uppercase tracking-wide", theme === "arcade90s" ? "text-arc-muted" : "text-brand-muted")}>
+                Broker Email
+              </label>
+              <Input 
+                data-testid="input-broker-email"
+                type="email"
+                value={brokerEmail}
+                onChange={(e) => setBrokerEmail(e.target.value)}
+                className={inputClasses}
+                placeholder="dispatch@yourcompany.com"
+              />
+            </div>
+
+            <div className="space-y-2">
+              <label className={cn("text-xs font-bold uppercase tracking-wide", theme === "arcade90s" ? "text-arc-muted" : "text-brand-muted")}>
                 Contact Phone
               </label>
               <Input 
+                data-testid="input-contact-phone"
                 value={contactPhone}
                 onChange={(e) => setContactPhone(e.target.value)}
                 className={inputClasses}
@@ -96,18 +134,20 @@ export default function AppSettings() {
                 Timezone
               </label>
               <select 
+                data-testid="select-timezone"
                 value={timezone}
                 onChange={(e) => setTimezone(e.target.value)}
                 className={cn("w-full h-10 px-3 py-2 border rounded-md text-sm", inputClasses)}
               >
-                <option value="America/New_York">Eastern (ET)</option>
-                <option value="America/Chicago">Central (CT)</option>
-                <option value="America/Denver">Mountain (MT)</option>
-                <option value="America/Los_Angeles">Pacific (PT)</option>
+                <option value="Eastern (ET)">Eastern (ET)</option>
+                <option value="Central (CT)">Central (CT)</option>
+                <option value="Mountain (MT)">Mountain (MT)</option>
+                <option value="Pacific (PT)">Pacific (PT)</option>
               </select>
             </div>
 
             <Button 
+              data-testid="button-save-settings"
               onClick={handleSave}
               disabled={saving}
               className={cn("w-full", theme === "arcade90s" ? "bg-arc-secondary text-black rounded-none shadow-arc-glow-cyan" : "bg-brand-gold text-black")}
