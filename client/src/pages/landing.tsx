@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useLocation } from "wouter";
 import { cn } from "@/lib/utils";
 import { PillButton } from "@/components/ui/pill-button";
@@ -171,10 +171,11 @@ export default function LandingPage() {
     return true;
   });
 
-  const handleIntroComplete = () => {
+  // Memoize callback to prevent useEffect dependency changes causing re-runs
+  const handleIntroComplete = useCallback(() => {
     localStorage.setItem("pingpoint_has_seen_intro", "true");
     setShowIntro(false);
-  };
+  }, []);
 
   return showIntro ? (
     <IntroAnimationView onComplete={handleIntroComplete} />
