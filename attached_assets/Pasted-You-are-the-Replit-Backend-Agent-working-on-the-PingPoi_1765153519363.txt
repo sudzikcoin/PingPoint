@@ -1,0 +1,56 @@
+You are the Replit Backend Agent working on the PingPoint project.
+
+Email verification now works and I receive the "Your PingPoint Access Link" email. However, the link inside the email points to a wrong domain:
+
+  https://workspace.sudzikgroup.repl.co/verify?token=...
+
+This domain does NOT exist, so the link fails with ERR_NAME_NOT_RESOLVED.
+
+GOAL:
+- Keep the verification token logic and route exactly as-is.
+- Only fix the BASE URL used in the email so that the link points to the real deployed PingPoint app.
+- I have created a secret `PINGPOINT_PUBLIC_URL` that contains the correct base URL (e.g. `https://<my-real-repl-url>`).
+- The verify link should look like:
+  `${PINGPOINT_PUBLIC_URL}/verify?token=...`
+
+Do NOT:
+- Change the token model or verify handler.
+- Change how the token is generated or validated.
+- Change driver / tracking flows.
+
+Your tasks:
+
+1) Find where the verification URL for the broker access link is constructed.  
+   - It currently hardcodes `https://workspace.sudzikgroup.repl.co/...` or uses some old base.
+   - This is used in the email template "Your PingPoint Access Link".
+
+2) Refactor this so that the base URL is taken from environment variables:
+   - Read `process.env.PINGPOINT_PUBLIC_URL` and use it as the base.
+   - If `PINGPOINT_PUBLIC_URL` is not set, as a fallback you may:
+     - try to infer the base from the current request host, OR
+     - log a clear warning and throw a 500 error when generating the link (better to fail loudly than send broken URLs).
+
+   Example pattern (adapt to the actual code):
+
+   ```ts
+   const baseUrl =
+     process.env.PINGPOINT_PUBLIC_URL ||
+     `${req.headers["x-forwarded-proto"] || "https"}://${req.headers.host}`;
+
+   const verifyUrl = `${baseUrl}/verify?token=${token}`;
+
+3.	Make sure that:
+	•	The email template uses this verifyUrl (not a hardcoded domain).
+	•	Both the big “Open PingPoint Console” button and the plain URL in the email body use the same verifyUrl.
+	4.	Test:
+	•	Restart the app.
+	•	In /app/settings, set the broker email to my Resend test email and save.
+	•	Ensure that:
+	•	A new email is sent.
+	•	The URL inside the email starts with the value of PINGPOINT_PUBLIC_URL, e.g.:
+https://<my-real-repl-url>/verify?token=...
+	•	Opening this link in the browser loads the correct PingPoint app and hits the existing verify route.
+
+Do NOT change anything else in the auth / verification logic; only swap the base URL to use PINGPOINT_PUBLIC_URL.
+
+END OF INSTRUCTIONS

@@ -42,6 +42,26 @@ function generateToken(prefix: string): string {
   return `${prefix}_${randomBytes(12).toString('hex')}`;
 }
 
+function getBaseUrl(req?: Request): string {
+  // Priority: explicit env var > request headers > fallback
+  if (process.env.PINGPOINT_PUBLIC_URL) {
+    return process.env.PINGPOINT_PUBLIC_URL.replace(/\/$/, ''); // Remove trailing slash
+  }
+  
+  // Try to infer from request headers
+  if (req) {
+    const proto = req.headers['x-forwarded-proto'] || 'https';
+    const host = req.headers['x-forwarded-host'] || req.headers.host;
+    if (host) {
+      return `${proto}://${host}`;
+    }
+  }
+  
+  // Fallback to localhost for development
+  console.warn("[PingPoint] PINGPOINT_PUBLIC_URL not set, using localhost fallback");
+  return 'http://localhost:5000';
+}
+
 // Wrapper for broker verification email using real provider
 async function sendVerificationEmail(email: string, url: string, brokerName?: string): Promise<void> {
   await sendBrokerVerificationEmail(email, url, brokerName);
@@ -113,11 +133,10 @@ export async function registerRoutes(
 
       await storage.createVerificationToken(broker.id, token, expiresAt);
 
-      const origin = process.env.REPL_SLUG 
-        ? `https://${process.env.REPL_SLUG}.${process.env.REPL_OWNER}.repl.co`
-        : `http://localhost:5000`;
+      const origin = getBaseUrl(req);
       // Point to the SPA verification page, not the API endpoint
       const verificationUrl = `${origin}/verify?token=${token}`;
+      console.log(`[PingPoint] Sending verification email to ${broker.email} with URL: ${verificationUrl}`);
 
       await sendVerificationEmail(broker.email, verificationUrl, broker.name);
 
@@ -452,6 +471,8 @@ export async function registerRoutes(
       ).catch(err => console.error("Error ingesting hints:", err));
 
       // Send notifications
+      const origin = getBaseUrl(req);
+      
       if (!broker.emailVerified) {
         // Create verification token and send real email
         const verifyToken = randomBytes(32).toString('hex');
@@ -459,17 +480,12 @@ export async function registerRoutes(
         expiresAt.setDate(expiresAt.getDate() + 2); // Expires in 2 days
         await storage.createVerificationToken(broker.id, verifyToken, expiresAt);
         
-        const origin = process.env.REPL_SLUG 
-          ? `https://${process.env.REPL_SLUG}.${process.env.REPL_OWNER}.repl.co`
-          : `http://localhost:5000`;
         const verificationUrl = `${origin}/verify?token=${verifyToken}`;
+        console.log(`[PingPoint] Sending verification email to ${broker.email} with URL: ${verificationUrl}`);
         await sendVerificationEmail(broker.email, verificationUrl, broker.name);
       }
 
       if (driver) {
-        const origin = process.env.REPL_SLUG 
-          ? `https://${process.env.REPL_SLUG}.${process.env.REPL_OWNER}.repl.co`
-          : `http://localhost:5000`;
         const driverAppUrl = `${origin}/driver/${driverToken}`;
         await sendDriverSMS(driver.phone, driverAppUrl);
       }
@@ -704,9 +720,7 @@ export async function registerRoutes(
         originalName: file.originalname,
       });
 
-      const origin = process.env.REPL_SLUG 
-        ? `https://${process.env.REPL_SLUG}.${process.env.REPL_OWNER}.repl.co`
-        : `http://localhost:5000`;
+      const origin = getBaseUrl(req);
       const publicUrl = `${origin}${relativePath}`;
 
       return res.json({
