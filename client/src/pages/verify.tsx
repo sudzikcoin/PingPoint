@@ -39,6 +39,7 @@ export default function VerifyPage() {
     // Call the POST endpoint for verification
     const verifyToken = async () => {
       try {
+        console.log("[Verify] Verifying token:", token);
         const res = await fetch('/api/brokers/verify', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -47,15 +48,21 @@ export default function VerifyPage() {
         });
         
         if (res.ok) {
+          console.log("[Verify] Verification successful, redirecting to /app/loads");
           setStatus("success");
           setMessage("Email verified successfully! Redirecting to your console...");
-          setTimeout(() => setLocation("/app/loads"), 2000);
+          setTimeout(() => {
+            console.log("[Verify] Performing redirect to /app/loads");
+            setLocation("/app/loads");
+          }, 2000);
         } else {
           const data = await res.json().catch(() => ({}));
+          console.error("[Verify] Verification failed:", data);
           setStatus("error");
           setMessage(data.error || "Verification failed. The link may be invalid or expired.");
         }
       } catch (err) {
+        console.error("[Verify] Verification error:", err);
         setStatus("error");
         setMessage("Verification failed. Please try again.");
       }

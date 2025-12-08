@@ -151,21 +151,37 @@ export async function registerRoutes(
   app.post("/api/brokers/verify", async (req: Request, res: Response) => {
     try {
       const { token } = req.body;
+      console.log(`[Verify] POST /api/brokers/verify called with token: ${token?.substring(0, 16)}...`);
 
       if (!token || typeof token !== 'string') {
+        console.log("[Verify] Invalid token format");
         return res.status(400).json({ error: "Invalid token" });
       }
 
       const verificationToken = await storage.getVerificationToken(token);
 
-      if (!verificationToken || verificationToken.used || verificationToken.expiresAt < new Date()) {
+      if (!verificationToken) {
+        console.log("[Verify] Token not found in database");
         return res.status(400).json({ error: "Token is invalid or expired" });
       }
+
+      if (verificationToken.used) {
+        console.log("[Verify] Token already used");
+        return res.status(400).json({ error: "Token is invalid or expired" });
+      }
+
+      if (verificationToken.expiresAt < new Date()) {
+        console.log("[Verify] Token expired at:", verificationToken.expiresAt);
+        return res.status(400).json({ error: "Token is invalid or expired" });
+      }
+
+      console.log(`[Verify] Token valid for brokerId: ${verificationToken.brokerId}`);
 
       await storage.markTokenUsed(verificationToken.id);
       await storage.updateBroker(verificationToken.brokerId, { emailVerified: true });
 
       createBrokerSession(verificationToken.brokerId, res);
+      console.log(`[Verify] Session created for broker ${verificationToken.brokerId}, redirecting to /app/loads`);
       
       return res.json({ ok: true });
     } catch (error) {
