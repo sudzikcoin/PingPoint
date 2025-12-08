@@ -1,0 +1,41 @@
+You are the Replit Backend Agent working on the PingPoint project.
+
+Problem:
+- The broker verification banner shows “WE'VE SENT A VERIFICATION LINK…”, and there is a RESEND button.
+- `RESEND_API_KEY` is set and Resend “Hello World” test email arrives, but NO verification emails from the app are received (not even in spam).
+- We must NOT change the business logic (banner, tokens, routes). We only need to make real emails actually send and be delivered.
+
+Your tasks:
+
+1) Check the server logs when:
+   - `/app/loads` is loaded and the banner appears.
+   - The user clicks the **RESEND** button.
+   Confirm whether `sendTransactionalEmail` (or equivalent) is being called, or if it still only logs to console.
+
+2) Open the email helper file (e.g. `src/lib/email.ts` or similar):
+   - Make sure it reads `process.env.RESEND_API_KEY` (exact name).
+   - If `RESEND_API_KEY` is missing, it should log in DEV but not throw in PROD.
+   - Ensure the helper is used in the code path for:
+     - initial verification email when broker email is set,
+     - and when the RESEND button is clicked.
+
+3) Ensure the `from` address:
+   - Uses either a verified domain in Resend,
+   - OR temporarily use `onboarding@resend.dev` as the `from` address to confirm emails are delivered.
+   For now, you may set a safe default:
+   - `from = process.env.MAIL_FROM || "onboarding@resend.dev"`.
+
+4) If Resend returns any errors (e.g. “Domain not verified”), handle them:
+   - Log a clear message to server logs.
+   - Do NOT break the request; just let the frontend still show the banner.
+
+5) After fixing:
+   - Trigger sending a verification email when broker email is saved in `/app/settings`.
+   - Trigger sending again when RESEND button is clicked.
+   - Verify in code that each of these flows calls the email helper with:
+     - `to = brokerEmail` from profile,
+     - a proper subject,
+     - `html` and `text` containing the existing verification link.
+
+Goal:
+- When we save a broker email in Settings OR click RESEND on the banner, a real email appears in the Resend dashboard **and** is successfully delivered to the inbox (or at least not blocked due to missing domain verification).

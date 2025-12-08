@@ -1,7 +1,9 @@
 import { Resend } from "resend";
 
 const resendApiKey = process.env.RESEND_API_KEY;
-const defaultFrom = process.env.MAIL_FROM || "PingPoint <no-reply@pingpoint.app>";
+// Use Resend's test domain if no verified domain is configured
+// onboarding@resend.dev works without domain verification for testing
+const defaultFrom = process.env.MAIL_FROM || "PingPoint <onboarding@resend.dev>";
 
 if (!resendApiKey) {
   console.warn("[Email] RESEND_API_KEY is not set; email sending will fallback to console logging.");
@@ -18,28 +20,36 @@ interface EmailParams {
 }
 
 export async function sendTransactionalEmail(params: EmailParams): Promise<boolean> {
+  const fromAddress = params.from || defaultFrom;
+  
   if (!resend) {
     console.log("[DEV EMAIL] Would send email:");
     console.log(`  To: ${params.to}`);
     console.log(`  Subject: ${params.subject}`);
-    console.log(`  From: ${params.from || defaultFrom}`);
+    console.log(`  From: ${fromAddress}`);
     console.log(`  Body (text): ${params.text || "(html only)"}`);
     return true;
   }
 
   try {
+    console.log(`[Email] Sending to ${params.to} from ${fromAddress}...`);
     const result = await resend.emails.send({
-      from: params.from || defaultFrom,
+      from: fromAddress,
       to: params.to,
       subject: params.subject,
       html: params.html,
       text: params.text,
     });
     
-    console.log(`[Email] Sent to ${params.to}, id: ${result.data?.id}`);
+    if (result.error) {
+      console.error(`[Email] Resend API error:`, result.error);
+      return false;
+    }
+    
+    console.log(`[Email] Successfully sent to ${params.to}, id: ${result.data?.id}`);
     return true;
-  } catch (error) {
-    console.error("[Email] Failed to send:", error);
+  } catch (error: any) {
+    console.error("[Email] Failed to send:", error?.message || error);
     return false;
   }
 }
