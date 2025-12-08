@@ -1,0 +1,124 @@
+You are the Replit Backend Agent working on the PingPoint project.
+
+Important facts:
+- RESEND_API_KEY is set and works: Resend dashboard shows a delivered "Hello World" test email.
+- When I open `/app/settings`, set BROKER EMAIL and save, I see the banner on `/app/loads`:
+  "WE'VE SENT A VERIFICATION LINK TO <email>..."
+- There is a RESEND button on that banner.
+- However, when I save settings or click RESEND, **no new emails appear in the Resend dashboard at all** (not even blocked). So the application is NOT calling the Resend email helper.
+
+GOAL (very specific):
+1. When the broker saves their email in `/app/settings`, send a real verification email.
+2. When the broker clicks the RESEND button on the banner in `/app/loads`, send the same verification email again.
+3. Emails must show up in Resend → Sending list.
+
+Do NOT:
+- Change the business logic of verification tokens or banner visibility.
+- Change driver / tracking flows.
+- Change the verification route. Only wire email sending.
+
+────────────────────────
+1. FIND THE RESEND BUTTON HANDLER
+────────────────────────
+
+1) Locate the React component for the banner on `/app/loads` (the one that shows "WE'VE SENT A VERIFICATION LINK...").
+2) Find the RESEND button and its onClick handler.
+3) Trace what API endpoint or server action it calls, for example:
+   - `/api/broker/resend-verification`
+   - `/api/workspace/email/resend`
+   - or a server action in the same file.
+
+This endpoint / action is where we must call the email helper.
+
+────────────────────────
+2. FIND THE SETTINGS SAVE HANDLER
+────────────────────────
+
+1) Locate the API route or server action used by `/app/settings` to save:
+   - broker/company name,
+   - broker email,
+   - contact phone,
+   - timezone.
+
+2) After updating the broker profile in the database, this handler should:
+   - create or refresh the verification token and URL (if not already done),
+   - and trigger sending the verification email.
+
+If there is already a “TODO: send email” or just a console.log with the link, replace it with a real call to the email helper.
+
+────────────────────────
+3. USE THE RESEND EMAIL HELPER FOR BOTH CASES
+────────────────────────
+
+1) Find the existing email helper (previously created for Resend), for example `src/lib/email.ts` with a function like:
+   - `sendTransactionalEmail({ to, subject, html, text })`.
+
+2) In BOTH places:
+   - Settings save handler,
+   - RESEND button handler,
+
+   call this helper with the same verification URL and broker email.
+
+Pseudo-code (adapt names to actual code):
+
+```ts
+import { sendTransactionalEmail } from "@/lib/email";
+
+async function sendVerificationEmailToBroker(email: string, verificationUrl: string) {
+  if (!email || !verificationUrl) {
+    console.warn("[PingPoint] Missing email or verification URL for broker verification email.");
+    return;
+  }
+
+  await sendTransactionalEmail({
+    to: email,
+    subject: "Verify your email for PingPoint",
+    text: `Hello,\n\nPlease confirm your email to fully activate your PingPoint workspace:\n\n${verificationUrl}\n\nIf you did not request this, you can ignore this email.\n`,
+    html: `
+      <p>Hello,</p>
+      <p>Please confirm your email to fully activate your PingPoint workspace:</p>
+      <p><a href="${verificationUrl}" style="display:inline-block;padding:10px 18px;border-radius:9999px;background:#111827;color:#facc15;text-decoration:none;font-weight:600;">Verify email</a></p>
+      <p>Or copy and paste this URL into your browser:</p>
+      <p><code>${verificationUrl}</code></p>
+      <p>If you did not request this, you can safely ignore this email.</p>
+    `,
+  });
+}
+
+	3.	Reuse that function:
+
+	•	After saving settings when email is set or changed.
+	•	Inside the RESEND endpoint.
+
+	4.	Temporarily, to avoid domain issues, you may use a neutral from-address in the helper:
+	•	from = process.env.MAIL_FROM || "onboarding@resend.dev"
+(later I will configure a custom verified domain).
+
+────────────────────────
+4. ADD EXPLICIT LOGS TO CONFIRM IT RUNS
+────────────────────────
+
+In each place where we send the email, log:
+
+console.log("[PingPoint] Sending verification email to", email, "with URL", verificationUrl);
+
+So that when I click RESEND or save settings, I can see in Replit logs that the email helper was called.
+
+────────────────────────
+5. TEST
+────────────────────────
+
+After changes:
+	1.	Restart the app in Replit.
+	2.	Open /app/settings, set a test broker email (my Gmail) and click Save.
+	•	Confirm in server logs that [PingPoint] Sending verification email appears.
+	•	Confirm in Resend dashboard → Sending that a new email entry appears.
+	3.	In /app/loads, click the RESEND button:
+	•	Again confirm the log message.
+	•	Confirm a second email entry appears in Resend.
+
+Only consider the task done when:
+	•	Both actions (save settings and RESEND) produce new emails in Resend Sending list, and
+	•	There are no unhandled errors in the console.
+
+END OF INSTRUCTIONS
