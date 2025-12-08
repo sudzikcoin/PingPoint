@@ -1,0 +1,190 @@
+You are the Replit Backend Agent working on the PingPoint project.
+
+Current behavior:
+- When a broker creates a load via the public “new load” flow, a broker workspace is created and loads are stored in the database.
+- A verification / access email is sent with a magic link like:  <BASE_URL>/verify?token=...
+- When the broker clicks the link, they are redirected into the app, but:
+  - The page shows “WELCOME, BROKER” (generic, not the actual broker/company name).
+  - The loads list is empty (0 Active).
+  - If they try to open a load via a direct link, they see “LOAD NOT FOUND”.
+
+This means:
+- The verify route is not restoring the correct broker workspace for that email / token.
+- Either it creates a new workspace or loads data without using the original workspaceId.
+
+GOAL:
+- Fix the verification flow so that the magic link logs the broker into the **same workspace** that owns the loads created in the public flow.
+- After clicking the email link:
+  - The broker should see their existing loads.
+  - No “LOAD NOT FOUND” for loads that belong to that workspace.
+- Do NOT change the general UX (still magic link via /verify?token=...).
+
+Do NOT:
+- Change the high-level conception of brokers / workspaces / loads.
+- Break existing load creation from the public form.
+- Remove or weaken security checks on verification tokens.
+
+────────────────────────
+1. MODEL: LINK VERIFICATION TOKEN TO WORKSPACE
+────────────────────────
+
+1) Find the data model for verification tokens, something like:
+   - `VerificationToken`
+   - `MagicLinkToken`
+   - or similar.
+
+2) Inspect its fields. Right now it likely stores:
+   - `id` or `token`
+   - `email`
+   - `expiresAt`
+
+If it does NOT yet store `workspaceId` (or equivalent broker profile ID), extend the model so that it can be associated with a specific broker workspace:
+
+- In Prisma (adapt naming to actual models):
+
+```prisma
+model VerificationToken {
+  id           String   @id @default(cuid())
+  token        String   @unique
+  email        String
+  workspaceId  String?   // <— add this
+  workspace    Workspace? @relation(fields: [workspaceId], references: [id])
+  expiresAt    DateTime
+  createdAt    DateTime @default(now())
+}
+
+Adjust to the actual workspace model name (e.g. BrokerWorkspace, BrokerProfile).
+
+Run the migration if needed.
+
+────────────────────────
+2. TOKEN CREATION: ATTACH THE CORRECT WORKSPACE
+────────────────────────
+	1.	Find where the verification / access email token is created, likely in the backend logic that runs after:
+	•	first load is created for a broker, or
+	•	the broker updates email in Settings, or
+	•	a “resend” request is triggered.
+	2.	When generating the token, make sure you:
+	•	Already know the corresponding workspaceId (the broker workspace that owns this load).
+	•	Write it to the token:
+
+const token = generateRandomToken(); // or however it’s done
+
+await prisma.verificationToken.create({
+  data: {
+    token,
+    email: brokerEmail,
+    workspaceId,  // <— store it here
+    expiresAt,
+  },
+});
+
+	3.	Use this token value in the email link:
+
+const verifyUrl = `${baseUrl}/verify?token=${token}`;
+
+Make sure the same token is stored and emailed (no mismatch between hashed/hashed+plain if you use hashing).
+
+────────────────────────
+3. VERIFY ROUTE: RESTORE WORKSPACE FROM TOKEN
+────────────────────────
+	1.	Open the verify handler (likely route /verify or /api/verify):
+	•	It reads token from query params.
+	•	It validates token / expiry.
+	•	It currently may:
+	•	find / create a user or workspace based only on email, or
+	•	even create a new workspace instead of using the original one.
+	•	It then sets some session/cookie and redirects to /app/loads.
+	2.	Change the logic so that:
+
+	•	Look up the token:
+
+const token = await prisma.verificationToken.findUnique({
+  where: { token: tokenFromQuery },
+  include: { workspace: true },
+});
+
+	•	Validate expiry and existence.
+	•	Determine workspaceId:
+
+if (!token || token.expiresAt < new Date()) {
+  // handle invalid/expired (redirect with error, etc.)
+}
+
+const workspaceId = token.workspaceId;
+// As a fallback, you may look up workspace by email if workspaceId is null,
+// but the primary path is using workspaceId.
+
+	•	Do NOT create a new workspace if workspaceId already exists.
+	•	Set the current workspace in session/auth state:
+
+Depending on how the app stores current workspace (examples):
+
+// If you use a session cookie:
+session.workspaceId = workspaceId;
+await saveSession(session);
+
+// Or for a JWT-based auth, embed workspaceId into the token and set cookie.
+// Adapt to your existing auth system.
+
+	•	Redirect to /app/loads after setting the session.
+
+	3.	Optionally, mark the email as verified on the workspace profile:
+
+await prisma.workspace.update({
+  where: { id: workspaceId },
+  data: { emailVerifiedAt: new Date() },
+});
+
+────────────────────────
+4. ENSURE LOAD QUERIES USE CURRENT WORKSPACE
+────────────────────────
+	1.	On /app/loads and related load pages:
+	•	Confirm that loads are always filtered by the current workspaceId from the session.
+	•	Something like:
+
+const workspaceId = getCurrentWorkspaceIdFromSession();
+const loads = await prisma.load.findMany({
+  where: { workspaceId },
+});
+
+	2.	On the load detail page /app/loads/[id]:
+	•	Also ensure you filter by workspaceId:
+
+const load = await prisma.load.findFirst({
+  where: {
+    id: params.id,
+    workspaceId,
+  },
+});
+
+This prevents “LOAD NOT FOUND” for valid loads of that workspace and also avoids leaking loads between workspaces.
+
+────────────────────────
+5. CLEAN UP TOKEN AFTER USE
+────────────────────────
+
+After successful verification:
+	•	Delete or invalidate the token, so the link can’t be reused indefinitely:
+
+await prisma.verificationToken.delete({
+  where: { token: tokenFromQuery },
+});
+
+Or mark it as used.
+
+────────────────────────
+6. TEST FLOW END-TO-END
+────────────────────────
+	1.	In a fresh state, create a new load via the public “create load” flow:
+	•	A workspace and a verification token should be created and an email sent.
+	2.	Open the received email and click the magic link:
+	•	The browser loads the correct PingPoint app URL.
+	•	You are logged into the workspace associated with that load.
+	•	On /app/loads, you see that load in the list (not 0 Active).
+	•	Opening the load detail works (no “Load Not Found”).
+	3.	Try changing the broker email in /app/settings if that flow exists:
+	•	The email is persisted.
+	•	New verification email still links you into the same workspace (not a new empty one).
+
+End of instructions.
