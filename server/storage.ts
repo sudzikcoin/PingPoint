@@ -44,6 +44,7 @@ export interface IStorage {
   // Load operations
   getLoad(id: string): Promise<Load | undefined>;
   getLoadsByBroker(brokerId: string): Promise<Load[]>;
+  getLoadsByBrokerPaginated(brokerId: string, options: { limit: number; offset: number; status?: string }): Promise<{ loads: Load[]; total: number }>;
   getLoadByToken(token: string, type: 'tracking' | 'driver'): Promise<Load | undefined>;
   createLoad(load: InsertLoad): Promise<Load>;
   updateLoad(id: string, data: Partial<Load>): Promise<Load | undefined>;
@@ -150,6 +151,35 @@ export class DatabaseStorage implements IStorage {
       .from(loads)
       .where(eq(loads.brokerId, brokerId))
       .orderBy(desc(loads.createdAt));
+  }
+
+  async getLoadsByBrokerPaginated(
+    brokerId: string, 
+    options: { limit: number; offset: number; status?: string }
+  ): Promise<{ loads: Load[]; total: number }> {
+    const { limit, offset, status } = options;
+    
+    const whereConditions = status 
+      ? and(eq(loads.brokerId, brokerId), eq(loads.status, status))
+      : eq(loads.brokerId, brokerId);
+
+    const [countResult] = await db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(loads)
+      .where(whereConditions);
+
+    const loadsList = await db
+      .select()
+      .from(loads)
+      .where(whereConditions)
+      .orderBy(desc(loads.createdAt))
+      .limit(limit)
+      .offset(offset);
+
+    return {
+      loads: loadsList,
+      total: countResult?.count || 0,
+    };
   }
 
   async getLoadByToken(token: string, type: 'tracking' | 'driver'): Promise<Load | undefined> {

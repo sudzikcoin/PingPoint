@@ -10,6 +10,7 @@ import path from "path";
 import fs from "fs";
 import express from "express";
 import { sendBrokerVerificationEmail, sendDriverAppLink } from "./email";
+import { strictRateLimit } from "./middleware/rateLimit";
 
 const uploadsDir = path.join(process.cwd(), "uploads", "rate-confirmations");
 if (!fs.existsSync(uploadsDir)) {
@@ -119,8 +120,8 @@ export async function registerRoutes(
     }
   });
 
-  // POST /api/brokers/send-verification
-  app.post("/api/brokers/send-verification", async (req: Request, res: Response) => {
+  // POST /api/brokers/send-verification (rate limited: 5 per minute)
+  app.post("/api/brokers/send-verification", strictRateLimit(5, 60000), async (req: Request, res: Response) => {
     try {
       const { brokerId } = req.body;
 
@@ -153,8 +154,8 @@ export async function registerRoutes(
     }
   });
 
-  // POST /api/brokers/verify - Called by SPA to verify token
-  app.post("/api/brokers/verify", async (req: Request, res: Response) => {
+  // POST /api/brokers/verify - Called by SPA to verify token (rate limited: 10 per minute)
+  app.post("/api/brokers/verify", strictRateLimit(10, 60000), async (req: Request, res: Response) => {
     try {
       const { token } = req.body;
       console.log(`[Verify] POST /api/brokers/verify called with token: ${token?.substring(0, 16)}...`);
@@ -525,7 +526,7 @@ export async function registerRoutes(
     }
   });
 
-  // GET /api/loads - List loads for current broker
+  // GET /api/loads - List loads for current broker (with pagination)
   app.get("/api/loads", async (req: Request, res: Response) => {
     try {
       const broker = await getBrokerFromRequest(req);
@@ -533,11 +534,18 @@ export async function registerRoutes(
         return res.status(401).json({ error: "Unauthorized" });
       }
 
-      const loads = await storage.getLoadsByBroker(broker.id);
+      const page = Math.max(1, parseInt(req.query.page as string) || 1);
+      const limit = Math.min(100, Math.max(1, parseInt(req.query.limit as string) || 25));
+      const status = req.query.status as string | undefined;
+      const offset = (page - 1) * limit;
 
-      // Enrich loads with stop data
+      const { loads: allLoads, total } = await storage.getLoadsByBrokerPaginated(
+        broker.id, 
+        { limit, offset, status }
+      );
+
       const enrichedLoads = await Promise.all(
-        loads.map(async (load) => {
+        allLoads.map(async (load) => {
           const loadStops = await storage.getStopsByLoad(load.id);
           const pickupStop = loadStops.find(s => s.type === 'PICKUP');
           const deliveryStop = loadStops.find(s => s.type === 'DELIVERY');
@@ -560,7 +568,10 @@ export async function registerRoutes(
 
       return res.json({
         items: enrichedLoads,
-        total: enrichedLoads.length,
+        total,
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit),
       });
     } catch (error) {
       console.error("Error in /api/loads:", error);
@@ -659,8 +670,8 @@ export async function registerRoutes(
     }
   });
 
-  // POST /api/driver/:token/ping - Submit location ping
-  app.post("/api/driver/:token/ping", async (req: Request, res: Response) => {
+  // POST /api/driver/:token/ping - Submit location ping (rate limited: 60 per minute)
+  app.post("/api/driver/:token/ping", strictRateLimit(60, 60000), async (req: Request, res: Response) => {
     try {
       const { token } = req.params;
       const { lat, lng, accuracy } = req.body;

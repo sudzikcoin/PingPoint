@@ -2,6 +2,7 @@ import express, { type Express, type Request, Response, NextFunction } from "exp
 import cookieParser from "cookie-parser";
 import { createServer as createHttpServer, Server } from "http";
 import { registerRoutes, registerHealthRoutes } from "./routes";
+import { errorHandler, securityHeaders, corsHandler } from "./middleware";
 
 declare module "http" {
   interface IncomingMessage {
@@ -29,6 +30,8 @@ export async function createApp(): Promise<AppInstance> {
   const app = express();
   const httpServer = createHttpServer(app);
 
+  app.use(securityHeaders);
+  app.use(corsHandler);
   app.use(cookieParser());
   app.use(
     express.json({
@@ -70,13 +73,7 @@ export async function createApp(): Promise<AppInstance> {
 
   await registerRoutes(httpServer, app);
 
-  app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
-    const status = err.status || err.statusCode || 500;
-    const message = err.message || "Internal Server Error";
-
-    log(`Error: ${message}`, "error");
-    res.status(status).json({ message });
-  });
+  app.use(errorHandler);
 
   return { app, httpServer };
 }
