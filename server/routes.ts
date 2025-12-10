@@ -72,6 +72,12 @@ async function sendDriverSMS(phone: string, url: string): Promise<void> {
   await sendDriverAppLink(phone, url);
 }
 
+export function registerHealthRoutes(app: Express) {
+  app.get("/api/health", (_req: Request, res: Response) => {
+    res.json({ status: "ok", timestamp: new Date().toISOString() });
+  });
+}
+
 export async function registerRoutes(
   httpServer: Server,
   app: Express

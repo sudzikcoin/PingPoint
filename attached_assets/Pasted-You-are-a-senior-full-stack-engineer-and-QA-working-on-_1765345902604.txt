@@ -1,0 +1,213 @@
+You are a senior full-stack engineer and QA working on the PingPoint project already loaded in this Replit workspace.
+
+IMPORTANT GLOBAL CONSTRAINTS
+- Do NOT break or significantly change existing business flows:
+  - Broker gets a link → creates first load → receives magic-link email → verifies account → works in Broker Console.
+  - Driver receives a link → sees only their loads → can share location and update stop statuses.
+  - Public tracking link is read-only for shippers/clients.
+- Prefer small, localized, incremental changes over large refactors.
+- Keep the existing UI and design language (Arcade 90s + Premium modes) intact. We are focusing on backend behaviour, safety, and automated tests.
+- Use TypeScript everywhere. Keep the current stack (Express, Drizzle ORM + Postgres, React client).
+- Always run and fix TypeScript/build errors before moving to the next phase.
+
+Your job is to go through THREE PHASES:
+
+PHASE 1 – TEST INFRASTRUCTURE AND SMOKE TESTS
+Goal: add a practical automated test suite that verifies the core flows at the API level.
+
+1. Test runner & basic setup
+   - Add Vitest as the primary test runner, plus any necessary packages (for example: vitest, supertest, ts-node/tsx integration if needed).
+   - Add NPM scripts in package.json:
+     - "test": runs the full test suite once in CI mode.
+     - "test:watch": optional, runs tests in watch mode for local dev.
+   - Create a vitest configuration (vitest.config.ts) if helpful (TS support, test environment "node", paths).
+
+2. Testable server entrypoint
+   - In the server code (current Express entry: e.g. server/index.ts), refactor in a backward-compatible way:
+     - Extract server creation into an exported function:
+       - `export function createServer(): Express` that configures middleware, routes, and error handlers but does NOT call app.listen.
+     - Keep the existing runtime behaviour:
+       - If this file is executed directly (normal dev/prod run), call createServer() and start listening on process.env.PORT.
+   - This will allow Vitest + supertest to run the app in memory without opening a real port.
+
+3. Test database strategy
+   - Reuse the existing Drizzle schema.
+   - For tests, set up a dedicated test database using either:
+     - a separate DATABASE_URL (for example by reading DATABASE_URL_TEST if present), OR
+     - a schema/namespace approach if your current DB tooling supports it.
+   - Implement utility helpers in a test support file (e.g. `server/tests/utils/dbTestUtils.ts`):
+     - `resetDatabase()` – clears or recreates the schema between tests (truncate or re-migrate tables).
+   - Ensure tests are deterministic: before each test suite or test file, start from a clean DB state.
+
+4. Core API smoke tests
+   Create a `server/tests/` folder and add the following test files. Use Vitest + supertest.
+
+   A) `brokerMagicLink.test.ts`
+   - Scenario: create a new load from the broker side (same endpoint used by `/app/loads/new`).
+   - Steps:
+     - Call the create-load endpoint with realistic payload (broker name/email, shipper, carrier, stops, customerRef etc.).
+     - Assert:
+       - A broker workspace/profile is created if none exists.
+       - A load record exists with the expected core fields (status PLANNED, correct stops, customerRef stored).
+       - If the broker email is not verified, a verification token is created.
+       - The email-sending component is invoked exactly once with the correct "to" and a verification URL that contains a token.
+   - Implementation detail:
+     - Mock or stub Resend so that tests do NOT send real emails. You can create a small email service abstraction that you can spy on in tests.
+
+   B) `magicLinkVerification.test.ts`
+   - Scenario: simulate clicking the magic link.
+   - Steps:
+     - Using DB helpers, create a broker + a verification token.
+     - Call the verify endpoint (`/verify?token=...` or whatever your current route is).
+     - Assert:
+       - Token marked as used / consumed.
+       - Broker record updated with `emailVerifiedAt` (or similar flag).
+       - HTTP response indicates success (redirect or JSON); verify status code and key fields.
+
+   C) `brokerLoadsListing.test.ts`
+   - Scenario: a verified broker opens the console.
+   - Steps:
+     - Seed DB: create a verified broker, workspace, and a couple of loads for that workspace.
+     - Call the API endpoint used by `/app/loads` to fetch loads (e.g. `/api/app/loads`).
+     - Assert:
+       - Response includes only loads from that broker’s workspace.
+       - Internal IDs like "LD-2025-XXXX" (if still present) are not used as the primary client-facing identifier.
+       - The main load number field in the response matches the `customerRef` or the field that driver sees as the load number.
+
+   D) `driverAccessAndLoads.test.ts`
+   - Scenario: driver opens their driver URL.
+   - Steps:
+     - Seed DB: create a load with an associated driver access code (use the same logic as production code).
+     - Call the driver endpoint (the API that backs `/driver/:code`).
+     - Assert:
+       - The driver sees exactly that load and its stops.
+       - The visible load number is the broker’s reference (customerRef), not an internal ID.
+
+   E) `driverLocationAndStatus.test.ts`
+   - Scenario: driver shares location and progresses through stops.
+   - Steps:
+     - Seed DB: load with pickup and delivery, driver session.
+     - Call the endpoint used by "Send my location" with fake lat/lng multiple times.
+     - Call endpoints used by "Arrive" / "Depart" for pickup and delivery.
+     - Assert:
+       - Location pings are saved and associated with the driver + load.
+       - Stop statuses update correctly.
+       - Load status transitions through appropriate states (e.g. PLANNED → IN_TRANSIT → DELIVERED or whatever the schema uses).
+
+   F) `publicTracking.test.ts`
+   - Scenario: shipper uses public tracking link.
+   - Steps:
+     - Seed DB: delivered load with a public tracking code and a last known location from location_pings.
+     - Call the API backing `/track/:publicCode`.
+     - Assert:
+       - Response contains origin, destination, current status, and last known location.
+       - Sensitive broker data (email, internal notes, phone) is NOT present in the public payload.
+
+5. Non-functional checks
+   - Add a small health endpoint in the server (if missing):
+     - `GET /api/health` → `{ status: "ok" }` and optionally DB connectivity info.
+   - Add `health.test.ts` to verify that the server boots and returns status "ok".
+   - Add one test that documents the current behaviour regarding unverified brokers. For now:
+     - If unverified brokers are currently allowed to create loads, write a test that captures this behaviour, and add a clear TODO comment saying that this should be tightened in a future iteration to prevent creating loads before email verification.
+
+6. Documentation
+   - Update or create README.md with a short "Testing" section:
+     - How to configure the test database (env variables).
+     - How to run `npm test` and what it covers.
+
+Only when PHASE 1 tests pass and the project builds without errors, proceed to PHASE 2.
+
+PHASE 2 – PRODUCTION HARDENING (BACKEND FOCUS)
+Goal: make the backend safer and more production-ready, without changing core UX or flows.
+
+1. Environment separation (dev vs prod)
+   - Introduce clear environment handling:
+     - `NODE_ENV` used consistently for behaviour differences.
+     - Config module (e.g. `server/config.ts`) that reads and validates env variables (using zod or a small custom validator).
+   - Ensure we have distinct variables or conventions for:
+     - Database URL (dev/test/prod).
+     - Base public URL (the one currently in PINGPOINT_PUBLIC_URL).
+     - Resend API key.
+
+2. Build & run
+   - Ensure TypeScript compilation to `dist/`:
+     - Add `npm run build` script that runs `tsc` for the server and client as currently configured.
+     - Add `npm start` script that runs `node dist/server/index.js` (or the server’s compiled entry).
+   - Confirm that dev mode still works (e.g. `npm run dev` with tsx or similar).
+
+3. Centralized error handling & logging
+   - Add a centralized error-handling middleware in Express:
+     - Catches unhandled errors.
+     - Logs error details via a simple logger (for example, pino or console wrapper).
+     - Returns a consistent JSON error response with HTTP status, code, and message.
+   - Add a simple logger utility (no external SaaS needed right now) that:
+     - Provides `info`, `warn`, `error` methods.
+     - In production, logs structured JSON to stdout.
+   - Make sure all routes use `next(err)` properly or wrap async handlers so errors do not crash the process.
+
+4. Basic security and rate limiting
+   - Add a simple rate limit on sensitive endpoints:
+     - Example: `/api/brokers/magic-link`, `/api/brokers/verify`, `/api/driver/location`.
+     - Use a lightweight rate limiting middleware (either in-memory, or a small package; in dev/preview Replit this is enough).
+   - Ensure cookies/tokens (if any) are set with:
+     - `httpOnly` true,
+     - `secure` true when NODE_ENV is "production",
+     - `sameSite: "strict"` or "lax" where appropriate.
+   - If there is no CORS configuration yet, add one place where it can be configured later. For now, since client and server share the same origin in Replit, allow same-origin and leave comments on how to restrict in real production.
+
+5. DB performance considerations
+   - Review the Drizzle schema and identify fields that are frequently filtered on:
+     - At a minimum: broker email, verification token, workspaceId, loadId, driver access code, public tracking code, status.
+   - Add indices in migrations where missing (using Drizzle migrations) for those critical lookup fields.
+   - Ensure `location_pings` has an index on (loadId, createdAt) to support efficient queries for last known location.
+
+6. Pagination & internal limits
+   - For any list endpoints that can grow large (broker loads, public loads, location pings), implement basic pagination:
+     - Accept `limit` and `offset` or a simple `page` parameter.
+     - Default to a sane `limit` (for example 20–50).
+   - Make sure the client calls still work; if necessary, leave existing behaviour but add server-side caps so a client cannot request thousands of rows in a single call.
+
+PHASE 3 – BACKEND FEATURES WITHOUT UI BLOAT (OPTIONAL BUT DESIRABLE)
+Goal: add small backend capabilities that improve robustness and analytics without complicating the current interface.
+
+1. Activity log / audit trail
+   - Create a new table, for example `events`:
+     - Columns: id, timestamp, brokerId, workspaceId, loadId (nullable), type (string enum like "LOAD_CREATED", "LOCATION_SHARED", "STATUS_UPDATED"), payload (JSON).
+   - Add small helper functions to log key events:
+     - When a load is created.
+     - When driver shares location.
+     - When stop status changes.
+   - Do NOT add a complex UI for this yet; optionally, add a simple `/api/admin/events` endpoint protected or flagged as "internal" with a TODO note for future admin UI.
+
+2. Auto-archiving of old loads
+   - Add a background job mechanism appropriate for this project (for Replit, this could be a simple cron-style script or an endpoint you can call periodically).
+   - Implement logic:
+     - All loads with status "Delivered" older than X days (for example 30) → mark as "Archived" and exclude from default `/app/loads` listing.
+   - Ensure API supports a filter to include archived loads if needed in the future, but by default hide them from the main list.
+
+3. Export endpoint
+   - Add an endpoint like `GET /api/app/loads/export.csv`:
+     - Returns all loads for the current broker workspace in CSV format (or at least a clear subset of useful fields).
+   - Ensure permissions: only the broker who owns the workspace can export their data.
+   - Keep the UI simple: you can add a TODO comment for a future small "Export" button; do not change the current screens heavily.
+
+4. Documentation stub
+   - Add a markdown file `docs/api.md` or similar:
+     - Briefly document the most important endpoints:
+       - Broker magic link flow.
+       - Load creation.
+       - Driver location & status updates.
+       - Public tracking.
+       - Export and health endpoints.
+     - This does not need to be a full OpenAPI spec; just enough for another developer or integrator to understand the basic API.
+
+FINAL STEP
+- After completing all phases:
+  - Run TypeScript build (`npm run build`) and ensure it passes.
+  - Run the full test suite (`npm test`) and ensure all tests pass.
+  - Provide a short summary comment in the Replit agent log (or in a final message) describing:
+    - Which test files were added and what they cover (1 sentence each).
+    - Which production-hardening features were implemented.
+    - Any TODOs or limitations you intentionally left in place for future work.
+
+Work carefully, keep changes focused, and always prefer minimal, well-scoped modifications over large rewrites.
