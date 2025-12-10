@@ -1,0 +1,87 @@
+version: '3.8'
+
+services:
+  # =============================================================================
+  # PostgreSQL Database
+  # =============================================================================
+  db:
+    image: postgres:15-alpine
+    container_name: pingpoint-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: pingpoint
+      POSTGRES_USER: pingpoint
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-pingpoint_password}
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    networks:
+      - pingpoint-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pingpoint -d pingpoint"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # =============================================================================
+  # PingPoint Application
+  # =============================================================================
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: pingpoint-app
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: 8080
+      DATABASE_URL: postgres://pingpoint:${POSTGRES_PASSWORD:-pingpoint_password}@db:5432/pingpoint
+      RESEND_API_KEY: ${RESEND_API_KEY:-}
+      JWT_SECRET: ${JWT_SECRET:-change_this_in_production_min_32_chars!}
+      PINGPOINT_PUBLIC_URL: ${PINGPOINT_PUBLIC_URL:-http://localhost}
+      SESSION_COOKIE_NAME: ${SESSION_COOKIE_NAME:-pingpoint_broker_session}
+    volumes:
+      - uploads_data:/app/uploads
+    networks:
+      - pingpoint-network
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/api/health"]
+      interval: 30s
+      timeout: 10s
+      start_period: 30s
+      retries: 3
+    # Expose port directly if not using nginx
+    # ports:
+    #   - "8080:8080"
+
+  # =============================================================================
+  # Nginx Reverse Proxy (Optional - comment out if not needed)
+  # =============================================================================
+  nginx:
+    image: nginx:alpine
+    container_name: pingpoint-nginx
+    restart: unless-stopped
+    depends_on:
+      app:
+        condition: service_healthy
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/nginx.conf:/etc/nginx/nginx.conf:ro
+      # Uncomment for SSL certificates (after running certbot)
+      # - /etc/letsencrypt:/etc/letsencrypt:ro
+    networks:
+      - pingpoint-network
+
+networks:
+  pingpoint-network:
+    driver: bridge
+
+volumes:
+  db_data:
+    driver: local
+  uploads_data:
+    driver: local

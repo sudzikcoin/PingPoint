@@ -1,0 +1,295 @@
+You are the Replit Backend Agent working on the **PingPoint** project that is already loaded in this workspace.
+
+Your ONLY goal in this run is to prepare the project for **real-world deployment on a VPS** using Docker and (optionally) Nginx, while keeping the existing Replit dev workflow intact.
+
+HIGH-LEVEL REQUIREMENTS
+- Do NOT break the current dev experience inside Replit:
+  - `npm run dev` (or existing dev scripts) must still work as before.
+- Do NOT change the core business logic or frontend design:
+  - Broker → magic link verification → Broker Console.
+  - Driver mini-app.
+  - Public tracking.
+- Focus on “infra & deploy”:
+  1) Production build scripts.
+  2) Dockerfile.
+  3) docker-compose.yml (app + Postgres, optional Nginx).
+  4) Nginx config template.
+  5) Production env template.
+  6) A clear deployment README with hardware recommendations.
+
+Assume the user will later take the repository (from GitHub or exported from Replit) and run it on a small VPS (e.g., Contabo/Hetzner/DigitalOcean) with Docker installed.
+
+────────────────────────────────────────
+PHASE 0 – DISCOVER CURRENT STRUCTURE
+────────────────────────────────────────
+
+1. Inspect the repo layout:
+   - Locate:
+     - The **server entrypoint** (likely something like `server/index.ts`, `server/main.ts`).
+     - The **client** build entry (e.g., `client` folder, or `frontend`, or a monorepo root with Vite/React).
+   - Inspect `package.json` in the root (and inside subfolders if present).
+     - Identify:
+       - Dev scripts (`dev`, `start:dev`, etc.).
+       - Build scripts for server/client (`build`, `build:server`, `build:client`).
+       - Start script for production (or add one if missing).
+
+2. Do NOT change any dev-time scripts that Replit currently uses, unless you just add new ones.
+
+Your next steps should adapt to the actual structure you find. The instructions below are a target; implement them according to the real project layout.
+
+────────────────────────────────────────
+PHASE 1 – PRODUCTION BUILD & START SCRIPTS
+────────────────────────────────────────
+
+Goal: ensure we can do `npm run build` → `npm start` in a clean environment and get a production server that:
+- serves the API,
+- serves the built frontend (static files),
+- listens on a configurable port (e.g. 8080).
+
+1. Add/adjust build scripts in root `package.json`:
+   - If the project is split into `client` and `server`:
+     - Add a root `"build"` script that runs both, e.g.:
+
+       - `"build": "npm run build:server && npm run build:client"`
+
+     - Ensure `build:server` and `build:client` exist and produce output into `dist` folders (e.g. `dist/server`, `dist/client`).
+
+   - If it’s a single package (combined server+client build), reuse the existing `"build"` script but make sure it produces a compiled server (JS) and a static client bundle.
+
+2. Add a production start script:
+   - `"start": "node dist/server/index.js"` or adapt to the actual compiled server entry file.
+   - If your server is compiled somewhere else (e.g. `build/server.js`), adjust accordingly.
+
+3. Verify locally (inside Replit) that:
+   - `npm run build` succeeds.
+   - `npm start` boots up the production server and can serve at least one API endpoint and the frontend.
+
+Make minimal changes needed to achieve this. Do NOT remove dev scripts.
+
+────────────────────────────────────────
+PHASE 2 – DOCKERFILE (SINGLE APP CONTAINER)
+────────────────────────────────────────
+
+Goal: create a **single Docker image** that contains:
+- Node runtime,
+- compiled server,
+- compiled client,
+- serves everything on an internal port (e.g. 8080).
+
+1. Create `Dockerfile` at the project root.
+
+2. Use a multi-stage build pattern, something like (ADAPT to actual build commands and folder structure):
+
+   - Stage 1: builder
+     - Base image: `node:20-alpine` (or similar).
+     - Set `WORKDIR /app`.
+     - Copy `package.json`, `package-lock.json` or `pnpm-lock.yaml`, etc.
+     - Run `npm install` (or appropriate package manager).
+     - Copy the rest of the project.
+     - Run `npm run build` to produce compiled assets in `dist` (or the equivalent).
+
+   - Stage 2: runtime
+     - Base image: `node:20-alpine`.
+     - Set `WORKDIR /app`.
+     - Copy only the necessary artifacts from builder:
+       - Compiled server code (`dist/server` or equivalent),
+       - Compiled client assets (probably inside `dist/client` or similar),
+       - Production `node_modules` if needed (or re-run `npm ci --omit=dev`).
+     - Set environment:
+       - `NODE_ENV=production`
+       - `PORT=8080` (or use existing env default).
+     - Expose `8080`.
+     - CMD: `["node", "dist/server/index.js"]` (or the correct server entry for production).
+
+3. Important:
+   - Do NOT hardcode secrets in Dockerfile.
+   - Read runtime configuration (DB URL, RESEND, PINGPOINT_PUBLIC_URL, etc.) from environment variables.
+
+4. After creating Dockerfile:
+   - Locally (inside Replit shell), you do NOT need to build it, but ensure Dockerfile syntax is valid.
+   - The user will later run:
+     - `docker build -t pingpoint-app .`
+     - `docker run -p 8080:8080 --env-file .env pingpoint-app`
+
+────────────────────────────────────────
+PHASE 3 – docker-compose.yml (App + Postgres + Optional Nginx)
+────────────────────────────────────────
+
+Goal: create `docker-compose.yml` at project root that defines:
+
+- `app` service (PingPoint).
+- `db` service (Postgres).
+- Optionally `nginx` service as reverse proxy.
+
+1. Create `docker-compose.yml` with at least the following services:
+
+   A) `db` service:
+   - Use official Postgres image (e.g. `postgres:15-alpine`).
+   - Environment variables (example):
+     - `POSTGRES_DB=pingpoint`
+     - `POSTGRES_USER=pingpoint`
+     - `POSTGRES_PASSWORD=pingpoint_password`
+   - Volumes:
+     - `db_data:/var/lib/postgresql/data`
+   - Expose internal port `5432` (no need to publish to host in production unless desired).
+
+   B) `app` service:
+   - `build: .` (uses Dockerfile you created).
+   - `depends_on: [db]`
+   - Environment:
+     - `NODE_ENV=production`
+     - `PORT=8080`
+     - `DATABASE_URL=postgres://pingpoint:pingpoint_password@db:5432/pingpoint`
+       (or the correct URL format for Drizzle/Postgres)
+     - `RESEND_API_KEY=...` (will be overridden via env file)
+     - `PINGPOINT_PUBLIC_URL=http://localhost` (in compose context, final Nginx will handle external domain)
+   - Ports (if using Nginx separately, app can stay internal, e.g. only accessible to nginx):
+     - Option 1 (with Nginx): no ports section, app only exposed to nginx via internal network.
+     - Option 2 (no Nginx yet): `ports: ["8080:8080"]`.
+
+   C) `nginx` service (optional but recommended for production-like setup):
+   - `image: nginx:alpine`
+   - `depends_on: [app]`
+   - `volumes`:
+     - Mount a local `deploy/nginx.conf` → `/etc/nginx/nginx.conf:ro`
+   - `ports: ["80:80"]`
+   - `networks`: same as `app` so Nginx can reach `app:8080`.
+
+   D) Volumes:
+   - `db_data:` for Postgres.
+
+2. Make sure services are attached to a default network so `app` can resolve `db` and `nginx` can resolve `app`.
+
+3. The user should later be able to run:
+
+   - `docker compose up -d`  
+   and have:
+   - Postgres running.
+   - App running (behind Nginx or directly on 8080).
+
+────────────────────────────────────────
+PHASE 4 – Nginx CONFIG TEMPLATE
+────────────────────────────────────────
+
+Goal: provide a ready-to-use Nginx config that:
+
+- Listens on port 80.
+- Proxies all HTTP traffic to the `app` service on port 8080.
+- Sets basic headers and timeouts.
+
+1. Create a directory `deploy/` at the project root if it does not exist.
+
+2. Inside `deploy/`, create `nginx.conf` with something like (ADAPT domain names and upstream name as needed):
+
+   - `events { worker_connections 1024; }`
+   - `http { ... }` containing:
+     - `upstream pingpoint_app { server app:8080; }`
+     - A `server` block:
+
+       - `listen 80;`
+       - `server_name _;` (user will later replace with real domain).
+       - `location / { proxy_pass http://pingpoint_app; ... }`
+
+   - Make sure to set:
+     - `proxy_set_header Host $host;`
+     - `proxy_set_header X-Real-IP $remote_addr;`
+     - `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;`
+     - `proxy_set_header X-Forwarded-Proto $scheme;`
+
+3. Configure `nginx` service in `docker-compose.yml` to reference this config file as `/etc/nginx/nginx.conf`.
+
+4. Add comments in `nginx.conf` for the user, explaining where to put the real domain.
+
+────────────────────────────────────────
+PHASE 5 – PRODUCTION ENV TEMPLATE
+────────────────────────────────────────
+
+Goal: provide a template file describing required env vars for production deployment.
+
+1. Create a new file at the root:
+
+   - `.env.production.example`
+
+2. Include keys like:
+
+   - `NODE_ENV=production`
+   - `PORT=8080`
+   - `DATABASE_URL=postgres://pingpoint:pingpoint_password@db:5432/pingpoint`
+   - `RESEND_API_KEY=your_resend_key`
+   - `MAIL_FROM=no-reply@yourdomain.com`
+   - `PINGPOINT_PUBLIC_URL=https://yourdomain.com`
+   - Any other critical env vars currently used in the project (`JWT_SECRET` if present, etc.).
+
+3. Add comments explaining:
+   - This file is an example; user should create a real `.env.production` or use env vars in Docker/compose.
+   - Secrets must NOT be committed with real values.
+
+────────────────────────────────────────
+PHASE 6 – DEPLOYMENT README (HARDWARE + STEPS)
+────────────────────────────────────────
+
+Goal: create a clear deployment guide for a typical small VPS (Ubuntu with Docker). Include hardware recommendations.
+
+1. Create a file at root:
+
+   - `README_DEPLOY.md`
+
+2. Document:
+
+   A) Recommended minimal hardware
+   - For a pilot / small production:
+     - 1–2 vCPU.
+     - 2–4 GB RAM.
+     - 20–40 GB SSD.
+   - Enough for:
+     - dozens of brokers,
+     - thousands of loads,
+     - tens/hundreds of active drivers.
+
+   B) Prerequisites on the server
+   - Ubuntu (or similar).
+   - Docker installed.
+   - Docker Compose plugin (`docker compose`).
+
+   C) Steps to deploy
+   - Clone repository or copy project to server.
+   - Create a `.env.production` file (or use env vars) based on `.env.production.example`.
+   - Option 1: Using only app container:
+     - `docker build -t pingpoint-app .`
+     - `docker run -d --name pingpoint-app --env-file .env.production -p 80:8080 pingpoint-app`
+   - Option 2: Using `docker-compose` with Postgres + Nginx:
+     - `cp .env.production .env` (or configure env vars as needed).
+     - `docker compose up -d`
+   - How to check logs:
+     - `docker compose logs -f app`
+     - `docker compose logs -f db`
+   - How to update:
+     - `git pull`
+     - `docker compose build app`
+     - `docker compose up -d app`
+
+   D) Notes about DNS and HTTPS
+   - Explain that:
+     - DNS should be pointed to the VPS IP.
+     - HTTPS can be added later with a reverse proxy and Let’s Encrypt (e.g. using Nginx or Caddy). You can add TODO notes here, but you do NOT need to implement full TLS automation in this run.
+
+────────────────────────────────────────
+PHASE 7 – FINAL CHECK
+────────────────────────────────────────
+
+Before finishing:
+
+1. Ensure:
+   - `Dockerfile` exists and is syntactically valid.
+   - `docker-compose.yml` exists and references the correct Dockerfile and services.
+   - `deploy/nginx.conf` exists and references `app:8080`.
+   - `.env.production.example` exists with correct keys mentioned in the code.
+   - `README_DEPLOY.md` exists with clear, step-by-step instructions.
+
+2. Ensure:
+   - Existing Replit dev scripts still work (do not break `npm run dev` or whatever is used there).
+   - `npm run build` and `npm start` run without TypeScript/build errors inside Replit.
+
+3. Do NOT introduce unrelated refactors to the application code. Only change what is necessary to support production deploy with Docker.
+
+When all of the above is done and validated inside this Replit workspace, you are finished.
