@@ -463,6 +463,16 @@ export async function registerRoutes(
         await storage.createStops(stopsToCreate);
       }
 
+      // Log activity (non-blocking)
+      storage.createActivityLog({
+        entityType: "load",
+        entityId: load.id,
+        action: "load_created",
+        actorType: "broker",
+        actorId: broker!.id,
+        metadata: { loadNumber: load.loadNumber, driverId: driver?.id || null },
+      }).catch(err => console.error("Error logging activity:", err));
+
       // Ingest field hints for typeahead suggestions (non-blocking)
       const hintsToIngest = [
         { fieldKey: "shipperName", value: loadData.shipperName },
@@ -816,6 +826,18 @@ export async function registerRoutes(
       }
 
       const archived = await storage.archiveLoad(load.id);
+
+      // Log activity (non-blocking)
+      storage.createActivityLog({
+        entityType: "load",
+        entityId: load.id,
+        action: "archived",
+        actorType: "broker",
+        actorId: broker.id,
+        previousValue: { isArchived: false },
+        newValue: { isArchived: true },
+      }).catch(err => console.error("Error logging activity:", err));
+
       return res.json({ ok: true, load: archived });
     } catch (error) {
       console.error("Error archiving load:", error);
