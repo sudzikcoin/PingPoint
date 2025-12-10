@@ -1,0 +1,210 @@
+You are the Replit Backend Agent working on the **PingPoint** project that is already loaded in this workspace.
+
+Your ONLY goal in this run is to prepare PingPoint for **simple production deployment on a VPS with Docker**, WITHOUT breaking the current Replit dev workflow.
+
+IMPORTANT CONSTRAINTS
+- Do NOT change core business logic:
+  - Broker → magic link → Broker Console.
+  - Driver mini-app.
+  - Public tracking.
+- Do NOT break existing dev scripts used in Replit:
+  - `npm run dev` and `npm run build` must continue to work as they do now.
+- Reuse the existing build pipeline:
+  - The project already uses `script/build.ts` and produces a server bundle (`dist/index.cjs`) and client assets.
+  - `npm start` should continue to start the production server using that bundle.
+- Focus ONLY on:
+  1) Clarifying build/start scripts (if needed).
+  2) Adding a Dockerfile for the app.
+  3) Adding `docker-compose.yml` with Postgres + app.
+  4) Adding `.env.production.example`.
+  5) Adding `README_DEPLOY.md` with clear deployment instructions and hardware recommendation.
+
+Work in the following phases.
+
+────────────────────────
+PHASE 1 – VERIFY BUILD & START
+────────────────────────
+
+1. Inspect `package.json` and `script/build.ts`:
+   - Confirm how `npm run build` currently works and what it outputs.
+   - Confirm how `npm start` currently runs the production server (likely `node dist/index.cjs`).
+
+2. If necessary, make MINIMAL adjustments so that:
+   - `npm run build`:
+     - compiles the server to a single entry (e.g. `dist/index.cjs`),
+     - builds client assets into a folder that the production server already serves (via `serveStatic` in `server/index.ts`).
+   - `npm start`:
+     - runs the compiled server entry from `dist/` (e.g. `"start": "NODE_ENV=production node dist/index.cjs"`).
+
+3. Do NOT remove or rename existing dev scripts (like `dev`) that Replit uses. You may only add or slightly adjust `build` and `start` if required for Docker.
+
+────────────────────────
+PHASE 2 – DOCKERFILE (APP CONTAINER)
+────────────────────────
+
+Goal: create a **Dockerfile** at the project root that builds and runs PingPoint in production.
+
+1. Create `Dockerfile` in the repo root.
+
+2. Use a **multi-stage build** based on the actual build commands from PHASE 1:
+
+   Stage 1: builder
+   - Base: `node:20-alpine` (or another small Node 20 image).
+   - `WORKDIR /app`
+   - Copy `package.json` and lockfile (e.g. `package-lock.json` or `pnpm-lock.yaml`) and install dependencies:
+     - Use `npm ci` if lockfile exists; otherwise `npm install`.
+   - Copy the rest of the project into the container.
+   - Run `npm run build` to produce the production build (server bundle + client assets).
+
+   Stage 2: runtime
+   - Base: `node:20-alpine`
+   - `WORKDIR /app`
+   - Copy only what is needed from the builder:
+     - The compiled server bundle (`dist/index.cjs` or whatever the real entry is).
+     - Compiled client assets (wherever `script/build.ts` puts them).
+     - Any runtime configuration files (e.g. `package.json` if needed).
+     - You may copy `node_modules` from the builder or perform a second `npm ci --omit=dev` in this stage if you prefer.
+   - Set environment variables:
+     - `NODE_ENV=production`
+     - `PORT=8080` (use 8080 as the container’s internal port).
+   - `EXPOSE 8080`
+   - `CMD` should run the compiled server entry, for example:
+     - `CMD ["node", "dist/index.cjs"]`
+     - Adapt the path if the actual entry is different.
+
+3. Do NOT hardcode secrets inside the Dockerfile. All runtime secrets must come from environment variables.
+
+────────────────────────
+PHASE 3 – docker-compose.yml (APP + POSTGRES)
+────────────────────────
+
+Goal: create a simple `docker-compose.yml` at the project root that starts:
+- Postgres (`db` service),
+- PingPoint app (`app` service).
+
+We will keep Nginx/HTTPS for a later iteration. For now, app will be directly available on port 8080 (mapped to host).
+
+1. Create `docker-compose.yml` with:
+
+   Service `db`:
+   - Image: `postgres:15-alpine` (or similar stable Postgres).
+   - Environment variables (example):
+     - `POSTGRES_DB=pingpoint`
+     - `POSTGRES_USER=pingpoint`
+     - `POSTGRES_PASSWORD=pingpoint_password`
+   - Volumes:
+     - `db_data:/var/lib/postgresql/data`
+   - No need to publish port 5432 to host; keep it internal.
+
+   Service `app`:
+   - `build: .` (use the Dockerfile you just created).
+   - `depends_on: [db]`
+   - Environment:
+     - `NODE_ENV=production`
+     - `PORT=8080`
+     - `DATABASE_URL=postgres://pingpoint:pingpoint_password@db:5432/pingpoint`
+       (or the correct Postgres URL format expected by Drizzle/your code).
+     - `RESEND_API_KEY=your_resend_key` (placeholder, will be overridden by real env or env file).
+     - `MAIL_FROM=no-reply@yourdomain.com` (placeholder).
+     - `PINGPOINT_PUBLIC_URL=http://localhost:8080` (for local docker-compose usage; in real VPS this will be replaced by https://yourdomain.com).
+   - Ports:
+     - `ports: ["8080:8080"]` so that on the server the app is reachable at `http://SERVER_IP:8080`.
+
+   Volumes:
+   - `db_data:` (named volume for Postgres).
+
+2. Ensure that:
+   - Both services share the default docker-compose network so that the `app` can reach `db` by hostname `db`.
+   - The `DATABASE_URL` you set is compatible with the existing DB code.
+
+3. This should allow the user to run:
+   - `docker compose up -d`
+   - and then open `http://SERVER_IP:8080` to access PingPoint.
+
+────────────────────────
+PHASE 4 – .env.production.example
+────────────────────────
+
+Goal: provide a template for production environment variables so the user knows what to configure.
+
+1. Create `.env.production.example` at the project root.
+
+2. Include at least the following keys (adjust names to match what the code actually uses):
+
+   - `NODE_ENV=production`
+   - `PORT=8080`
+   - `DATABASE_URL=postgres://pingpoint:pingpoint_password@db:5432/pingpoint`
+   - `RESEND_API_KEY=your_resend_api_key_here`
+   - `MAIL_FROM=no-reply@yourdomain.com`
+   - `PINGPOINT_PUBLIC_URL=https://yourdomain.com`
+   - Any other critical env vars that the code currently reads from `process.env` (for example, `LOG_LEVEL`, `SESSION_SECRET`, etc., if they exist).
+
+3. Add short comments inside the file (as plain text comments at the top) explaining:
+   - This is an example; real secrets should NOT be committed.
+   - In production, the user should create a real `.env.production` or pass these values with `--env-file` / docker-compose env.
+
+────────────────────────
+PHASE 5 – README_DEPLOY.md
+────────────────────────
+
+Goal: create a clear, simple deployment guide for a small VPS using Docker Compose.
+
+1. Create `README_DEPLOY.md` in the project root.
+
+2. Describe:
+
+   A) Recommended minimal hardware
+   - For a pilot / small production:
+     - 1–2 vCPU
+     - 2–4 GB RAM
+     - 20–40 GB SSD
+   - Explain that this is enough for:
+     - dozens of brokers,
+     - hundreds/thousands of loads,
+     - tens/hundreds of active drivers doing periodic location updates.
+
+   B) Prerequisites on the server
+   - Ubuntu (or similar Linux).
+   - Docker installed.
+   - Docker Compose plugin available (`docker compose` command).
+
+   C) Basic deployment steps (using the files you created):
+   - Copy or clone the repo on the server.
+   - Create a real `.env.production` (or `.env`) based on `.env.production.example` and fill in:
+     - `DATABASE_URL` (if you use an external DB instead of the docker `db`),
+     - `RESEND_API_KEY`,
+     - `PINGPOINT_PUBLIC_URL`,
+     - `MAIL_FROM`.
+   - Start with docker-compose:
+     - `docker compose up -d`
+   - Check logs:
+     - `docker compose logs -f app`
+     - `docker compose logs -f db`
+   - Open in browser:
+     - `http://SERVER_IP:8080` (later can be hidden behind Nginx/HTTPS).
+
+   D) Notes for future HTTPS / domain
+   - Briefly say that:
+     - To use a custom domain and HTTPS, user can put Nginx or Caddy in front of PingPoint on the same server.
+     - For now, this README only covers running PingPoint directly on port 8080 via Docker.
+
+────────────────────────
+PHASE 6 – QUICK SELF-CHECK
+────────────────────────
+
+Before finishing:
+
+1. Ensure:
+   - `Dockerfile` exists and references the correct compiled server entry (e.g. `dist/index.cjs`).
+   - `docker-compose.yml` exists and defines `db` and `app` as described.
+   - `.env.production.example` exists and lists all required env vars.
+   - `README_DEPLOY.md` exists and has clear steps.
+
+2. Ensure:
+   - `npm run build` still works in Replit.
+   - `npm start` still works in Replit (in production mode) without errors.
+   - `npm run dev` (or the existing dev script) still works, unchanged.
+
+3. Do NOT introduce any unrelated refactors or UI changes. Only infra/deploy-related files and minimal script tweaks are allowed.
+
+When everything above is implemented and passes basic build/start checks in this Replit workspace, you are finished.
