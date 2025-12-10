@@ -91,7 +91,7 @@ export const api = {
       return res.json();
     },
 
-    updateProfile: async (data: Partial<BrokerProfile>): Promise<BrokerProfile> => {
+    updateProfile: async (data: Partial<BrokerProfile>): Promise<BrokerProfile & { emailChanged?: boolean }> => {
       const res = await fetch('/api/broker/profile', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
@@ -100,7 +100,16 @@ export const api = {
       });
       
       if (!res.ok) {
-        throw new Error('Failed to update profile');
+        const errorData = await res.json().catch(() => ({ error: 'Failed to update profile' }));
+        const error = new Error(errorData.error || 'Failed to update profile') as Error & {
+          code?: string;
+          emailChanged?: boolean;
+          status?: number;
+        };
+        error.code = errorData.code;
+        error.emailChanged = errorData.emailChanged;
+        error.status = res.status;
+        throw error;
       }
       
       return res.json();
@@ -133,7 +142,16 @@ export const api = {
       });
       
       if (!res.ok) {
-        throw new Error('Failed to create load');
+        const errorData = await res.json().catch(() => ({ error: 'Failed to create load' }));
+        const error = new Error(errorData.error || 'Failed to create load') as Error & {
+          code?: string;
+          email?: string;
+          status?: number;
+        };
+        error.code = errorData.code;
+        error.email = errorData.email;
+        error.status = res.status;
+        throw error;
       }
       
       return res.json();

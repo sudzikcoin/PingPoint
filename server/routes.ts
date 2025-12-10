@@ -286,23 +286,83 @@ export async function registerRoutes(
         return res.status(401).json({ error: "Unauthorized" });
       }
 
-      const { name, phone, timezone } = req.body;
-      // Note: email is NOT updatable via this endpoint for security reasons
-      // Email changes would require re-verification flow
-
-      const updatedBroker = await storage.updateBroker(broker.id, {
+      const { name, phone, timezone, email } = req.body;
+      
+      const updates: {
+        name?: string;
+        phone?: string | null;
+        timezone?: string;
+        email?: string;
+        emailVerified?: boolean;
+      } = {
         name: name || broker.name,
         phone: phone || null,
         timezone: timezone || broker.timezone,
-      });
+      };
+
+      // Handle email change with re-verification
+      let emailChanged = false;
+      if (email && email.trim().toLowerCase() !== broker.email) {
+        const newEmail = email.trim().toLowerCase();
+        
+        // Check if email is already taken by another broker
+        const existingBroker = await storage.getBrokerByEmail(newEmail);
+        if (existingBroker && existingBroker.id !== broker.id) {
+          return res.status(400).json({ error: "Email is already in use" });
+        }
+        
+        updates.email = newEmail;
+        updates.emailVerified = false;
+        emailChanged = true;
+      }
+
+      // For email changes, send verification BEFORE updating database (atomic)
+      if (emailChanged) {
+        try {
+          const origin = getBaseUrl(req);
+          const verifyToken = randomBytes(32).toString('hex');
+          const expiresAt = new Date();
+          expiresAt.setDate(expiresAt.getDate() + 2);
+          
+          const verificationUrl = `${origin}/verify?token=${verifyToken}`;
+          const newEmail = updates.email as string;
+          
+          console.log(`[PingPoint] Attempting email change. Sending verification to ${newEmail}`);
+          await sendVerificationEmail(newEmail, verificationUrl, broker.name);
+          
+          // Email sent successfully - now update database
+          const updatedBroker = await storage.updateBroker(broker.id, updates);
+          await storage.createVerificationToken(updatedBroker!.id, verifyToken, expiresAt);
+          
+          return res.json({
+            id: updatedBroker?.id,
+            name: updatedBroker?.name,
+            email: updatedBroker?.email,
+            phone: updatedBroker?.phone || "",
+            timezone: updatedBroker?.timezone || "Central (CT)",
+            emailVerified: updatedBroker?.emailVerified,
+            emailChanged: true,
+          });
+        } catch (emailError) {
+          console.error("Failed to send verification email:", emailError);
+          return res.status(500).json({
+            error: "Could not send verification email. Email was not changed.",
+            code: "VERIFICATION_EMAIL_FAILED",
+          });
+        }
+      }
+
+      // Non-email updates
+      const updatedBroker = await storage.updateBroker(broker.id, updates);
 
       return res.json({
         id: updatedBroker?.id,
         name: updatedBroker?.name,
-        email: updatedBroker?.email, // Return current email (not editable)
+        email: updatedBroker?.email,
         phone: updatedBroker?.phone || "",
         timezone: updatedBroker?.timezone || "Central (CT)",
         emailVerified: updatedBroker?.emailVerified,
+        emailChanged: false,
       });
     } catch (error) {
       console.error("Error in PUT /api/broker/profile:", error);
@@ -340,45 +400,56 @@ export async function registerRoutes(
 
   // Load endpoints
 
-  // POST /api/loads - Create new load
+  // POST /api/loads - Create new load (requires verified session)
   app.post("/api/loads", async (req: Request, res: Response) => {
     try {
-      // Try to get broker from session first
+      // Get broker from session - required for load creation
       let broker = await getBrokerFromRequest(req);
       
-      // If no session, allow creation with brokerEmail from body (for demo flow)
+      // If no session, check if brokerEmail provided for lookup
       if (!broker) {
-        const { brokerEmail, brokerName, brokerPhone, timezone } = req.body;
+        const { brokerEmail } = req.body;
         if (!brokerEmail) {
-          return res.status(401).json({ error: "Unauthorized - no session or brokerEmail provided" });
+          return res.status(401).json({ 
+            error: "Authentication required. Please verify your email first.",
+            code: "UNAUTHORIZED"
+          });
         }
         
         const emailNormalized = brokerEmail.trim().toLowerCase();
         broker = await storage.getBrokerByEmail(emailNormalized) || null;
         
+        // If broker doesn't exist, direct them to register first
         if (!broker) {
-          // Create new broker with profile data from form
-          broker = await storage.createBroker({
-            email: emailNormalized,
-            name: brokerName || "Broker",
-            phone: brokerPhone || null,
-            timezone: timezone || "Central (CT)",
+          return res.status(401).json({ 
+            error: "No account found. Please register first using your email.",
+            code: "BROKER_NOT_FOUND"
           });
-        } else {
-          // Update broker profile with any missing fields
-          const updates: any = {};
-          if (!broker.phone && brokerPhone) updates.phone = brokerPhone;
-          if (!broker.timezone && timezone) updates.timezone = timezone;
-          if (!broker.name && brokerName) updates.name = brokerName;
-          
-          if (Object.keys(updates).length > 0) {
-            broker = await storage.updateBroker(broker.id, updates) || broker;
-          }
         }
         
-        // Set session cookie for future requests
+        // For existing unverified broker, block without sending email
+        if (!broker.emailVerified) {
+          return res.status(403).json({
+            error: "Please verify your email before creating loads. Check your inbox for the verification link, or use Resend Verification.",
+            code: "EMAIL_NOT_VERIFIED",
+            email: broker.email,
+            brokerId: broker.id,
+          });
+        }
+        
+        // Verified broker found via email - set session
         createBrokerSession(broker.id, res);
       } else {
+        // Authenticated session - check verification first
+        if (!broker.emailVerified) {
+          return res.status(403).json({
+            error: "Please verify your email before creating loads.",
+            code: "EMAIL_NOT_VERIFIED",
+            email: broker.email,
+            brokerId: broker.id,
+          });
+        }
+        
         // For existing session, optionally update profile with missing fields
         const { brokerPhone, timezone } = req.body;
         const updates: any = {};
@@ -503,22 +574,9 @@ export async function registerRoutes(
           .map(h => storage.upsertFieldHint(broker!.id, h.fieldKey, h.value))
       ).catch(err => console.error("Error ingesting hints:", err));
 
-      // Send notifications
-      const origin = getBaseUrl(req);
-      
-      if (!broker.emailVerified) {
-        // Create verification token and send real email
-        const verifyToken = randomBytes(32).toString('hex');
-        const expiresAt = new Date();
-        expiresAt.setDate(expiresAt.getDate() + 2); // Expires in 2 days
-        await storage.createVerificationToken(broker.id, verifyToken, expiresAt);
-        
-        const verificationUrl = `${origin}/verify?token=${verifyToken}`;
-        console.log(`[PingPoint] Sending verification email to ${broker.email} with URL: ${verificationUrl}`);
-        await sendVerificationEmail(broker.email, verificationUrl, broker.name);
-      }
-
+      // Send driver notification
       if (driver) {
+        const origin = getBaseUrl(req);
         const driverAppUrl = `${origin}/driver/${driverToken}`;
         await sendDriverSMS(driver.phone, driverAppUrl);
       }

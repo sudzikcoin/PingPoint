@@ -1,0 +1,360 @@
+You are the Replit Backend Agent working on the **PingPoint** project already loaded in this workspace.
+
+Your goal in THIS run is to implement TWO functional blocks in the backend + minimal frontend glue:
+
+1) **Hardened broker email verification & account model** (no “дырки”).
+2) **Smart field hints for the New Load form** (per-broker, auto-suggest).
+
+You must do this WITHOUT breaking the existing core flows and tests.
+
+────────────────────────────────
+GLOBAL CONSTRAINTS (VERY IMPORTANT)
+────────────────────────────────
+
+- Do NOT break existing business flows, just tighten them:
+  - Broker gets a creation link → fills New Load → receives magic-link email → verifies → accesses Broker Console `/app/loads`.
+  - Driver receives driver link → sees assigned loads → can Send my location, Arrive/Depart.
+  - Public tracking link is read-only for shippers/receivers.
+- Do NOT break existing tests; update or extend them as needed.
+- Do NOT significantly change the UI design:
+  - Keep the current PingPoint arcade/premium styling,
+  - Keep the overall layout of `/app/loads` and `/app/loads/new`.
+- Minimize migrations and avoid destructive changes. If you must alter schema, do so with Drizzle migrations and preserve existing data semantics.
+- Work in TypeScript everywhere.
+
+You will work in PHASES. Finish each phase cleanly (tests + build) before moving on.
+
+==================================================
+PHASE 1 – HARDEN BROKER EMAIL VERIFICATION & MODEL
+==================================================
+
+Goal: make broker accounts and verification consistent and safe:
+
+- One workspace + broker profile per email.
+- No creating loads until email is verified.
+- Magic link tokens tied to broker, not to loads.
+- Changing email in Settings triggers a new verification and blocks usage until confirmed.
+
+────────────
+Task 1.1 – Audit current broker model and email column
+────────────
+
+1. Inspect existing shared schema (`shared/schema.ts`) and server code (likely `server/auth.ts`, `server/routes.ts` and related files) to understand:
+   - How brokers and workspaces are modelled (`brokers`, `brokerProfiles`, `workspaces` or similar).
+   - How magic link tokens are stored (`verificationTokens` table or equivalent).
+   - Which field currently stores broker email (may be in `brokers` or `brokerProfiles`) and how email verification is represented (boolean or timestamp).
+
+2. If not already present, ensure there is a **single canonical email field** for the broker account (e.g. in `brokerProfiles` or `brokers` table).
+   - If multiple places store email, choose one as canonical (most likely the one already used by Settings) and:
+     - Minimize changes: keep other fields if needed for now, but use a single canonical source for future logic.
+
+3. Make sure there is a clear verification marker:
+   - Either a boolean `isEmailVerified` or a timestamp `emailVerifiedAt`.
+   - If not present, add a column via Drizzle migration (e.g. `emailVerifiedAt`).
+   - Update any existing code that checks verification to use this canonical field.
+
+────────────
+Task 1.2 – Enforce “one broker workspace per email”
+────────────
+
+Goal: the same email should correspond to a single broker profile/workspace, not multiple.
+
+1. Find the piece of server logic that:
+   - Handles “ensure broker” or “create broker/workspace” when a user fills the New Load form or first visits the app:
+     - This might be in a function like `ensureBrokerForEmail` or inside the load-creation handler.
+   - It likely:
+     - Checks if a broker profile exists for that email,
+     - Creates broker + workspace if not.
+
+2. Update this logic so that:
+   - It first **searches for an existing broker by canonical email**.
+   - If found:
+     - Reuse the same broker + workspace.
+   - If not found:
+     - Create a **single new broker + workspace** for that email.
+
+3. Ensure that if broker email is changed later in Settings (see Phase 1.4), we don’t accidentally create a second workspace for the new email. The mapping should be:
+   - 1 email → 1 broker profile → 1 workspace.
+
+4. Add or update tests to cover:
+   - Creating a load with an email that doesn’t exist → creates a broker + workspace.
+   - Creating another load with the SAME email → does NOT create a new broker/workspace; it reuses the existing one.
+
+────────────
+Task 1.3 – Magic link / verification token semantics
+────────────
+
+Goal: magic links should be strictly about verifying the broker account (email), not about an individual load.
+
+1. Inspect how verification tokens are currently stored:
+   - Table: `verificationTokens` or similar.
+   - Fields: token, email, brokerId, expiresAt, usedAt, etc.
+
+2. Ensure each token is **tied to the broker**:
+   - It must have a `brokerId` (or equivalent) that uniquely identifies the broker profile.
+   - Optionally also store the email that was being verified (for debugging/audit).
+
+3. Inspect the verification endpoint (something like `GET /api/brokers/verify?token=...`):
+   - It should:
+     - Look up token by value.
+     - Check expiry and used status.
+     - Mark token as used.
+     - Mark the broker as verified (update `emailVerifiedAt` or `isEmailVerified`).
+     - Redirect or respond with success.
+
+4. Adjust logic so that it is **clearly verifying the broker account**:
+   - After verification:
+     - Broker is marked verified.
+     - No new broker/workspace is created because of the token itself.
+   - Redirection:
+     - Redirect to the Broker Console route (e.g. `/app/loads`).
+     - Make sure it lands in the context of the correct workspace/broker.
+
+5. Add/update tests:
+   - `magicLinkVerification` tests should:
+     - Create a broker and a verification token.
+     - Call the verify endpoint.
+     - Assert broker is now verified, token is marked used, and response indicates success.
+
+────────────
+Task 1.4 – Block unverified brokers from creating loads
+────────────
+
+Goal: until email is verified, broker should NOT be able to create new loads, to avoid spam and partial accounts.
+
+1. Find the endpoint/function that handles **New Load creation** from the broker side (the one used by `/app/loads/new`).
+   - It likely:
+     - Ensures broker/workspace,
+     - Creates load + stops,
+     - Sends magic link email if email not verified.
+
+2. Add a guard:
+   - If broker is NOT verified (`!isEmailVerified` or `!emailVerifiedAt`):
+     - Return a 403 or 401 HTTP error with a structured JSON, e.g.:
+       - `status: 403`
+       - `code: "EMAIL_NOT_VERIFIED"`
+       - `message: "Please verify your email before creating new loads."`
+   - Optionally: in the same handler, trigger resend of verification email if a token has expired or does not exist.
+
+3. On the **frontend** in the New Load form:
+   - Catch this specific error code (`EMAIL_NOT_VERIFIED`).
+   - Show a prominent banner:
+     - “Please verify your email to continue. We’ve sent a verification link to {email}.”
+     - A button “Resend verification email” that calls the existing resend endpoint.
+   - Disable form submission while broker is unverified, or at least prevent successfully posting.
+
+4. Ensure existing flows still work:
+   - If broker is verified, everything works as before.
+   - Magic link itself should still be triggered when necessary, but loads are not created until verification is done (or adjust so the first load is created only after verification; choose the minimal change that fits current code and tests).
+
+5. Update tests:
+   - Add or adjust tests so that:
+     - Unverified broker gets an error when trying to create a load.
+     - Verified broker can create loads normally.
+
+────────────
+Task 1.5 – Changing broker email in Settings
+────────────
+
+Goal: when broker changes email, we:
+- Update canonical email,
+- Mark email as NOT verified,
+- Send a new magic link,
+- Block operations until re-verified.
+
+1. Locate the Settings update endpoint:
+   - Probably something like `PATCH /api/broker/settings` or `/api/app/broker/settings`.
+
+2. Current issues were:
+   - Email was not persisting correctly,
+   - Banner didn’t update.
+
+3. Update the Settings update logic so that when `email` is changed:
+
+   - If new email ≠ old email:
+     - Update the canonical email field.
+     - Set `isEmailVerified = false` or `emailVerifiedAt = null`.
+     - Invalidate old verification tokens for that broker (or keep them but mark them not usable).
+     - Create a new verification token for the new email.
+     - Send a new magic link email via Resend.
+   - Return a response that frontend can use to display:
+     - New email.
+     - A flag that verification is pending.
+
+4. On the frontend Settings page:
+   - After successful email change:
+     - Show a banner: “We’ve sent a verification link to {newEmail}. Please verify to continue creating loads.”
+   - Optionally lock down creation of loads until `isEmailVerified` is true (this should already be enforced by backend; UI just reflects it).
+
+5. Add/update tests:
+   - A test that:
+     - Changes broker email via Settings.
+     - Asserts the email changed, verification flag is cleared, a new token was created, and email-sending stub was invoked.
+
+======================================================
+PHASE 2 – SMART FIELD HINTS FOR NEW LOAD (PER BROKER)
+======================================================
+
+Goal: when broker fills the New Load form, frequently used values (emails, phones, shipper names, receiver names, addresses, etc.) show up as suggestions, per broker.
+
+Note: There is already a `brokerFieldHints` concept in the codebase. Reuse it if it exists. Otherwise, create a lightweight equivalent.
+
+────────────
+Task 2.1 – Confirm / define BrokerFieldHint entity
+────────────
+
+1. Check `shared/schema.ts` for any existing **hint** table, e.g. `brokerFieldHints` or similar.
+   - If it exists:
+     - Examine fields: `id`, `brokerId`, `field`, `value`, `usageCount`, etc.
+     - Reuse it.
+   - If it does NOT exist:
+     - Create a small Drizzle model, e.g.:
+
+       - `id` (primary key)
+       - `brokerId` (foreign key to brokers)
+       - `field` (string enum: "shipperName", "shipperAddress", "receiverName", "receiverAddress", "brokerEmail", "driverPhone", etc.)
+       - `value` (text, trimmed)
+       - `usageCount` (integer, default 1)
+       - `lastUsedAt` (timestamp, default now)
+
+     - Add migration to create the table.
+
+2. Indexes:
+   - Add an index on `(brokerId, field, value)` for upsert/lookups.
+   - Optionally, index `(brokerId, field, usageCount)` for ordering.
+
+────────────
+Task 2.2 – Backend helper to record hints when a load is created/updated
+────────────
+
+1. Implement a small helper in server code, e.g. `server/hints.ts`:
+
+   - `recordFieldHint(brokerId, field, value)`:
+     - If `value` is short (< 2 chars) or empty, ignore.
+     - Trim whitespace.
+     - Try to find existing hint for `(brokerId, field, value)`.
+       - If exists: increment `usageCount`, update `lastUsedAt`.
+       - If not: insert new record with `usageCount = 1`.
+
+2. In the **load creation** logic (New Load endpoint):
+   - After successfully creating a load and its stops, call `recordFieldHint(...)` for relevant fields:
+     - `brokerEmail` (if provided),
+     - `driverPhone`,
+     - `shipperName`,
+     - `shipperAddress`,
+     - `receiverName`,
+     - `receiverAddress`,
+     - any other textual fields you find reused (but do NOT go crazy – pick 5–8 key ones).
+   - If loads can be updated, optionally call `recordFieldHint` on update too.
+
+3. Add tests:
+   - A test that:
+     - Creates a load with specific shipper/receiver names and addresses.
+     - Asserts that hints are created in the DB for those values.
+     - Creates another load with the same values.
+     - Asserts `usageCount` increased.
+
+────────────
+Task 2.3 – API endpoint for fetching hints
+────────────
+
+1. Add an endpoint, e.g.:
+
+   - `GET /api/broker/hints`
+   - Query parameters:
+     - `field` (required, string)
+     - `q` (optional, string query / prefix; if absent, return top N most used for that field)
+
+2. Behaviour:
+
+   - Identify `brokerId` from the authenticated broker context (same as other broker APIs).
+   - Validate `field` against a whitelist (e.g. ["shipperName", "shipperAddress", "receiverName", "receiverAddress", "driverPhone", "brokerEmail"]).
+   - If invalid → 400.
+   - Query:
+     - Filter by `brokerId` and `field`.
+     - If `q` provided, filter where `value ILIKE q%` or `value ILIKE %q%` (your choice, but prefix is usually fine).
+     - Order by `usageCount DESC`, then `lastUsedAt DESC`.
+     - Limit results to a reasonable number (e.g. 5–10).
+   - Return JSON like:
+
+     ```json
+     {
+       "field": "shipperName",
+       "items": [
+         { "value": "General Mills", "usageCount": 5 },
+         { "value": "Nestle", "usageCount": 3 }
+       ]
+     }
+     ```
+
+3. Tests:
+   - A test for `/api/broker/hints` that:
+     - Seeds a few hints with various `usageCount`.
+     - Calls endpoint without `q` → expects top N by usage.
+     - Calls endpoint with `q` → expects filtered list.
+
+────────────
+Task 2.4 – Frontend integration: suggestions in New Load form
+────────────
+
+Goal: for key text fields in `/app/loads/new`, show a lightweight suggestion dropdown that fetches from `/api/broker/hints`.
+
+1. Identify the New Load form component(s), probably in `client/src/app/loads/new` or similar.
+
+2. For target fields (start with a small set):
+   - `Shipper name`
+   - `Shipper address`
+   - `Receiver name`
+   - `Receiver address`
+   - `Driver phone` (optional, depending on UI)
+
+3. For each such field:
+   - On focus:
+     - Fetch hints with empty `q` (or with the first character as user types).
+   - On input change (after user typed ≥ 2 chars):
+     - Debounce the input (e.g. 200–300 ms).
+     - Call `/api/broker/hints?field=shipperName&q=Ge` etc.
+   - Show a small dropdown under the input:
+     - The dropdown should have the same dark theme and subtle border as the rest of the app.
+     - On click on an item → fill the field value and close the dropdown.
+
+4. Keep UI minimal and non-intrusive:
+   - No big modals, no heavy components.
+   - Just a thin suggestion list that appears under the focused input.
+   - Use existing UI primitives if available (e.g. any existing `<Select>` or `<Autocomplete>` style component); otherwise, implement a simple one.
+
+5. Ensure accessibility:
+   - Use `role="listbox"` and `role="option"` where appropriate if easy.
+   - At minimum, make the items clickable with mouse/touch.
+
+6. Add basic frontend tests if your current setup supports them; otherwise, rely on manual testing + API tests (already added in Task 2.3).
+
+────────────────────────
+PHASE 3 – VALIDATION & CLEANUP
+────────────────────────
+
+Before finishing:
+
+1. TypeScript & build:
+   - Run `npm run check` (if configured) or `tsc` to ensure type checking passes.
+   - Run `npm run build` to ensure the server + client still build correctly.
+
+2. Tests:
+   - Run `npm test` (or `npx vitest`) to execute the existing test suite.
+   - Update tests as needed so that:
+     - Broker verification flow tests pass with the new semantics (one broker per email, explicit verification, blocking unverified brokers).
+     - New hint-related tests pass.
+
+3. Minimal manual sanity checks (within Replit environment):
+   - Start dev server (`npm run dev`).
+   - From the browser:
+     - Create a broker / load with a new email.
+     - Confirm:
+       - Magic link is generated (in dev, logged in console) and email verification is required before proceeding.
+       - After verification, broker can create loads.
+     - Fill New Load form with some shipper/receiver data.
+     - Create another load and verify that hints appear for those fields.
+
+4. Do NOT add unrelated features (analytics, push notifications, etc.) in this run. Only what is described in Phases 1 and 2.
+
+When all of the above is complete and all tests/builds pass, you are done.

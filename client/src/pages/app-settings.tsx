@@ -38,15 +38,27 @@ export default function AppSettings() {
   const handleSave = async () => {
     setSaving(true);
     try {
-      // Note: email is not editable for security reasons
-      await api.brokers.updateProfile({
+      const result = await api.brokers.updateProfile({
         name: brokerName,
+        email: brokerEmail,
         phone: contactPhone,
         timezone: timezone,
       });
-      toast.success("Settings saved");
-    } catch (e) {
-      toast.error("Failed to save settings");
+      
+      if (result.emailChanged) {
+        toast.success("Settings saved! Please verify your new email address.");
+        toast.info("Check your inbox for a verification link.");
+      } else {
+        toast.success("Settings saved");
+      }
+    } catch (e: any) {
+      if (e.message === "Email is already in use") {
+        toast.error("This email is already in use by another account.");
+      } else if (e.code === "VERIFICATION_EMAIL_FAILED") {
+        toast.error(e.message);
+      } else {
+        toast.error(e.message || "Failed to save settings");
+      }
     } finally {
       setSaving(false);
     }
