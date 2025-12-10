@@ -77,10 +77,7 @@ export default function AppLoadNew() {
     }
 
     try {
-      // 1. Ensure Workspace via API
-      const workspace = await api.brokers.ensure(brokerEmail, brokerName);
-      
-      // 2. Create Load via API
+      // Create Load via API (backend handles broker creation/lookup)
       const newLoad = await api.loads.create({
         brokerName,
         brokerEmail,
@@ -119,11 +116,11 @@ export default function AppLoadNew() {
         ]
       });
 
-      // 3. UI Feedback & Redirect
-      toast.success(`Load created! Verification email sent to ${brokerEmail}`);
-      toast.info(`Driver app link sent to ${driverPhone}`);
+      // UI Feedback & Redirect
+      toast.success(`Load ${newLoad.loadNumber} created!`);
+      toast.info(`Verification email sent to ${brokerEmail}`);
       
-      setLocation(`/app/loads?workspace=${workspace.id}`);
+      setLocation(`/app/loads`);
     
     } catch (error: any) {
       console.error("Failed to create load", error);
@@ -131,16 +128,10 @@ export default function AppLoadNew() {
       if (error.code === 'EMAIL_NOT_VERIFIED') {
         toast.error("Please verify your email first!");
         toast.info(`Check your inbox at ${error.email || brokerEmail} for a verification link.`);
-      } else if (error.code === 'BROKER_NOT_FOUND') {
-        toast.error("Account not found. We'll send you a verification email.");
-        try {
-          const workspace = await api.brokers.ensure(brokerEmail, brokerName);
-          await api.brokers.sendVerification(workspace.id);
-          toast.info(`Verification email sent to ${brokerEmail}. Please verify and try again.`);
-        } catch (regError) {
-          toast.error("Failed to send verification email. Please try again.");
-        }
+      } else if (error.code === 'BROKER_EMAIL_REQUIRED') {
+        toast.error("Please enter a valid email address.");
       } else {
+        // Show the specific error message from the backend
         toast.error(error.message || "Failed to create load. Please try again.");
       }
     } finally {

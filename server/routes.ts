@@ -400,58 +400,74 @@ export async function registerRoutes(
 
   // Load endpoints
 
-  // POST /api/loads - Create new load (requires verified session)
+  // POST /api/loads - Create new load
+  // First-time brokers can create their first load; verification email is sent.
+  // Subsequent loads require email verification.
   app.post("/api/loads", async (req: Request, res: Response) => {
     try {
-      // Get broker from session - required for load creation
-      let broker = await getBrokerFromRequest(req);
+      const { brokerEmail, brokerName, brokerPhone, timezone } = req.body;
       
-      // If no session, check if brokerEmail provided for lookup
+      // Validate required fields
+      if (!brokerEmail || !brokerEmail.includes('@')) {
+        return res.status(400).json({ 
+          error: "A valid broker email is required.",
+          code: "BROKER_EMAIL_REQUIRED"
+        });
+      }
+      
+      // Get broker from session or lookup/create by email
+      let broker = await getBrokerFromRequest(req);
+      let isNewBroker = false;
+      let needsVerificationEmail = false;
+      
       if (!broker) {
-        const { brokerEmail } = req.body;
-        if (!brokerEmail) {
-          return res.status(401).json({ 
-            error: "Authentication required. Please verify your email first.",
-            code: "UNAUTHORIZED"
-          });
-        }
-        
         const emailNormalized = brokerEmail.trim().toLowerCase();
         broker = await storage.getBrokerByEmail(emailNormalized) || null;
         
-        // If broker doesn't exist, direct them to register first
         if (!broker) {
-          return res.status(401).json({ 
-            error: "No account found. Please register first using your email.",
-            code: "BROKER_NOT_FOUND"
+          // Create new broker
+          broker = await storage.createBroker({
+            email: emailNormalized,
+            name: brokerName || "Broker",
+            phone: brokerPhone || null,
+            timezone: timezone || "Central (CT)",
           });
+          isNewBroker = true;
+          needsVerificationEmail = true;
+        } else if (!broker.emailVerified) {
+          // Existing unverified broker - check if they have any loads
+          const existingLoads = await storage.getLoadsByBroker(broker.id);
+          if (existingLoads.length > 0) {
+            // Has loads but unverified - block with verification required
+            return res.status(403).json({
+              error: "Please verify your email before creating more loads. Check your inbox for the verification link.",
+              code: "EMAIL_NOT_VERIFIED",
+              email: broker.email,
+              brokerId: broker.id,
+            });
+          }
+          // No loads yet - allow first load creation, will send verification
+          needsVerificationEmail = true;
         }
         
-        // For existing unverified broker, block without sending email
-        if (!broker.emailVerified) {
-          return res.status(403).json({
-            error: "Please verify your email before creating loads. Check your inbox for the verification link, or use Resend Verification.",
-            code: "EMAIL_NOT_VERIFIED",
-            email: broker.email,
-            brokerId: broker.id,
-          });
-        }
-        
-        // Verified broker found via email - set session
+        // Set session cookie
         createBrokerSession(broker.id, res);
       } else {
-        // Authenticated session - check verification first
+        // Has session - check verification for subsequent loads
         if (!broker.emailVerified) {
-          return res.status(403).json({
-            error: "Please verify your email before creating loads.",
-            code: "EMAIL_NOT_VERIFIED",
-            email: broker.email,
-            brokerId: broker.id,
-          });
+          const existingLoads = await storage.getLoadsByBroker(broker.id);
+          if (existingLoads.length > 0) {
+            return res.status(403).json({
+              error: "Please verify your email before creating more loads.",
+              code: "EMAIL_NOT_VERIFIED",
+              email: broker.email,
+              brokerId: broker.id,
+            });
+          }
+          needsVerificationEmail = true;
         }
         
-        // For existing session, optionally update profile with missing fields
-        const { brokerPhone, timezone } = req.body;
+        // Update profile with missing fields
         const updates: any = {};
         if (!broker.phone && brokerPhone) updates.phone = brokerPhone;
         if (!broker.timezone && timezone) updates.timezone = timezone;
@@ -541,7 +557,7 @@ export async function registerRoutes(
         action: "load_created",
         actorType: "broker",
         actorId: broker!.id,
-        metadata: { loadNumber: load.loadNumber, driverId: driver?.id || null },
+        metadata: JSON.stringify({ loadNumber: load.loadNumber, driverId: driver?.id || null }),
       }).catch(err => console.error("Error logging activity:", err));
 
       // Ingest field hints for typeahead suggestions (non-blocking)
@@ -579,6 +595,24 @@ export async function registerRoutes(
         const origin = getBaseUrl(req);
         const driverAppUrl = `${origin}/driver/${driverToken}`;
         await sendDriverSMS(driver.phone, driverAppUrl);
+      }
+
+      // Send verification email for new/unverified broker
+      if (needsVerificationEmail && broker && !broker.emailVerified) {
+        try {
+          const origin = getBaseUrl(req);
+          const verifyToken = randomBytes(32).toString('hex');
+          const expiresAt = new Date();
+          expiresAt.setDate(expiresAt.getDate() + 2);
+          await storage.createVerificationToken(broker.id, verifyToken, expiresAt);
+          
+          const verificationUrl = `${origin}/verify?token=${verifyToken}`;
+          console.log(`[PingPoint] Sending verification email to ${broker.email}`);
+          await sendVerificationEmail(broker.email, verificationUrl, broker.name);
+        } catch (emailErr) {
+          console.error("Failed to send verification email:", emailErr);
+          // Don't fail the load creation if email fails - load was already created
+        }
       }
 
       return res.status(201).json({
@@ -892,8 +926,8 @@ export async function registerRoutes(
         action: "archived",
         actorType: "broker",
         actorId: broker.id,
-        previousValue: { isArchived: false },
-        newValue: { isArchived: true },
+        previousValue: JSON.stringify({ isArchived: false }),
+        newValue: JSON.stringify({ isArchived: true }),
       }).catch(err => console.error("Error logging activity:", err));
 
       return res.json({ ok: true, load: archived });

@@ -70,9 +70,12 @@ describe("Verification Enforcement", () => {
       expect(response.body).toHaveProperty("loadNumber");
     });
 
-    it("should return 401 BROKER_NOT_FOUND for unknown email without session", async () => {
+    it("should create first load for new broker and send verification email", async () => {
       const request = await getTestRequest();
-      const testEmail = `unknown-${Date.now()}@example.com`;
+      const testEmail = `newbroker-${Date.now()}@example.com`;
+      
+      const mockSendEmail = vi.spyOn(email, 'sendBrokerVerificationEmail');
+      mockSendEmail.mockClear();
       
       const response = await request
         .post("/api/loads")
@@ -90,8 +93,10 @@ describe("Verification Enforcement", () => {
           ]
         });
       
-      expect(response.status).toBe(401);
-      expect(response.body.code).toBe("BROKER_NOT_FOUND");
+      expect(response.status).toBe(201);
+      expect(response.body).toHaveProperty("id");
+      expect(response.body).toHaveProperty("loadNumber");
+      expect(mockSendEmail).toHaveBeenCalled();
     });
 
     it("should return 401 for unauthenticated request without brokerEmail", async () => {
