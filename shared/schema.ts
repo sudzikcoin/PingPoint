@@ -87,6 +87,8 @@ export const loads = pgTable("loads", {
   deliveryEta: timestamp("delivery_eta", { withTimezone: true }),
   billingMonth: timestamp("billing_month", { mode: 'date' }),
   isBillable: boolean("is_billable").notNull().default(true),
+  isArchived: boolean("is_archived").notNull().default(false),
+  archivedAt: timestamp("archived_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`now()`),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().default(sql`now()`),
 });
@@ -171,6 +173,20 @@ export const rateConfirmationFilesRelations = relations(rateConfirmationFiles, (
   }),
 }));
 
+// Activity Log / Events model
+export const activityLogs = pgTable("activity_logs", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  entityType: text("entity_type").notNull(), // LOAD, DRIVER, BROKER, STOP
+  entityId: uuid("entity_id").notNull(),
+  action: text("action").notNull(), // CREATED, UPDATED, STATUS_CHANGED, PING_RECEIVED, etc.
+  actorType: text("actor_type").notNull(), // BROKER, DRIVER, SYSTEM
+  actorId: uuid("actor_id"),
+  previousValue: text("previous_value"),
+  newValue: text("new_value"),
+  metadata: text("metadata"), // JSON string for extra context
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`now()`),
+});
+
 // Insert schemas
 export const insertBrokerSchema = createInsertSchema(brokers).pick({
   name: true,
@@ -225,3 +241,14 @@ export type InsertStop = z.infer<typeof insertStopSchema>;
 export type TrackingPing = typeof trackingPings.$inferSelect;
 export type InsertTrackingPing = z.infer<typeof insertTrackingPingSchema>;
 export type RateConfirmationFile = typeof rateConfirmationFiles.$inferSelect;
+export type ActivityLog = typeof activityLogs.$inferSelect;
+export type InsertActivityLog = {
+  entityType: string;
+  entityId: string;
+  action: string;
+  actorType: string;
+  actorId?: string;
+  previousValue?: string;
+  newValue?: string;
+  metadata?: string;
+};

@@ -78,7 +78,7 @@ Preferred communication style: Simple, everyday language.
 
 **ORM**: Drizzle ORM with PostgreSQL dialect
 
-**Database Schema** (6 core tables):
+**Database Schema** (8 core tables):
 
 1. **brokers** - Broker accounts/workspaces
    - id (UUID), name, email (unique), emailVerified (boolean)
@@ -96,6 +96,7 @@ Preferred communication style: Simple, everyday language.
    - shipperName, carrierName, equipmentType, customerRef, rateAmount
    - status, trackingToken (unique), driverToken (unique)
    - pickupEta, deliveryEta, billingMonth, isBillable
+   - isArchived, archivedAt (for auto-archiving feature)
 
 5. **stops** - Pickup/delivery locations
    - id, loadId (FK), type (PICKUP/DELIVERY), sequence (integer)
@@ -104,7 +105,14 @@ Preferred communication style: Simple, everyday language.
 
 6. **trackingPings** - Driver location history
    - id, loadId (FK), driverId (FK nullable)
-   - latitude, longitude, city, state, timestamp
+   - lat, lng, accuracy, source, createdAt
+
+7. **activityLogs** - Audit trail for entities
+   - id, entityType, entityId, action, actorType, actorId
+   - previousValue, newValue, metadata, createdAt
+
+8. **brokerFieldHints** - Typeahead suggestions
+   - id, brokerId, fieldKey, value, usageCount, lastUsedAt
 
 **Relationships**:
 - Broker → Loads (1:N)
@@ -182,3 +190,43 @@ Preferred communication style: Simple, everyday language.
 - Integrations page has webhook toggle UI
 - TODO: Implement outbound webhook system for load status changes
 - Intended for TMS/AgentOS integration
+
+## Test Infrastructure
+
+**Framework**: Vitest with Supertest for API testing
+
+**Test Files** (server/tests/):
+- `brokerMagicLink.test.ts` - Magic link email flow
+- `magicLinkVerification.test.ts` - Token verification
+- `brokerLoadsListing.test.ts` - Load CRUD and pagination
+- `driverAccessAndLoads.test.ts` - Driver token access
+- `driverLocationAndStatus.test.ts` - Location pings
+- `publicTracking.test.ts` - Public tracking API
+- `health.test.ts` - Health endpoint
+
+**Test Utilities** (server/tests/utils/):
+- `dbTestUtils.ts` - Database reset and test data factories
+- `testApp.ts` - Test application bootstrap
+
+**Running Tests**: `npm test` or `npx vitest run`
+
+## Production Hardening
+
+**Middleware Stack** (server/middleware/):
+- `errorHandler.ts` - Centralized error handling with typed errors
+- `logger.ts` - Structured request logging
+- `rateLimit.ts` - In-memory rate limiting
+- `security.ts` - Security headers and CORS
+
+**Rate Limits**:
+- `/api/brokers/send-verification`: 5/min
+- `/api/brokers/verify`: 10/min  
+- `/api/driver/:token/ping`: 60/min
+
+**Database Indices**: Optimized for common queries on brokerId, status, tokens, timestamps
+
+**Pagination**: All list endpoints support `?page=N&limit=N` with metadata response
+
+## API Documentation
+
+See `docs/API.md` for complete endpoint reference

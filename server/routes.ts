@@ -767,5 +767,88 @@ export async function registerRoutes(
     }
   });
 
+  // GET /api/loads/export/csv - Export loads as CSV
+  app.get("/api/loads/export/csv", async (req: Request, res: Response) => {
+    try {
+      const broker = await getBrokerFromRequest(req);
+      if (!broker) {
+        return res.status(401).json({ error: "Unauthorized" });
+      }
+
+      const allLoads = await storage.getLoadsByBroker(broker.id);
+      
+      const headers = ["Load Number", "Shipper", "Carrier", "Equipment", "Rate", "Status", "Created"];
+      const rows = allLoads.map(load => [
+        load.loadNumber,
+        load.shipperName,
+        load.carrierName,
+        load.equipmentType,
+        load.rateAmount,
+        load.status,
+        load.createdAt.toISOString().split("T")[0],
+      ]);
+      
+      const csvContent = [
+        headers.join(","),
+        ...rows.map(row => row.map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(",")),
+      ].join("\n");
+
+      res.setHeader("Content-Type", "text/csv");
+      res.setHeader("Content-Disposition", `attachment; filename="loads-${Date.now()}.csv"`);
+      return res.send(csvContent);
+    } catch (error) {
+      console.error("Error exporting CSV:", error);
+      return res.status(500).json({ error: "Failed to export CSV" });
+    }
+  });
+
+  // POST /api/loads/:loadId/archive - Archive a single load
+  app.post("/api/loads/:loadId/archive", async (req: Request, res: Response) => {
+    try {
+      const broker = await getBrokerFromRequest(req);
+      if (!broker) {
+        return res.status(401).json({ error: "Unauthorized" });
+      }
+
+      const load = await storage.getLoad(req.params.loadId);
+      if (!load || load.brokerId !== broker.id) {
+        return res.status(404).json({ error: "Load not found" });
+      }
+
+      const archived = await storage.archiveLoad(load.id);
+      return res.json({ ok: true, load: archived });
+    } catch (error) {
+      console.error("Error archiving load:", error);
+      return res.status(500).json({ error: "Failed to archive load" });
+    }
+  });
+
+  // GET /api/loads/archived - Get archived loads
+  app.get("/api/loads/archived", async (req: Request, res: Response) => {
+    try {
+      const broker = await getBrokerFromRequest(req);
+      if (!broker) {
+        return res.status(401).json({ error: "Unauthorized" });
+      }
+
+      const page = Math.max(1, parseInt(req.query.page as string) || 1);
+      const limit = Math.min(100, Math.max(1, parseInt(req.query.limit as string) || 25));
+      const offset = (page - 1) * limit;
+
+      const { loads, total } = await storage.getArchivedLoads(broker.id, limit, offset);
+
+      return res.json({
+        items: loads,
+        total,
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit),
+      });
+    } catch (error) {
+      console.error("Error fetching archived loads:", error);
+      return res.status(500).json({ error: "Failed to fetch archived loads" });
+    }
+  });
+
   return httpServer;
 }

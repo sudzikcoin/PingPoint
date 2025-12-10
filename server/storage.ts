@@ -7,6 +7,7 @@ import {
   trackingPings,
   rateConfirmationFiles,
   brokerFieldHints,
+  activityLogs,
   type Broker,
   type InsertBroker,
   type Driver,
@@ -20,9 +21,11 @@ import {
   type InsertTrackingPing,
   type RateConfirmationFile,
   type BrokerFieldHint,
+  type ActivityLog,
+  type InsertActivityLog,
 } from "@shared/schema";
 import { db } from "./db";
-import { eq, and, desc, ilike, sql } from "drizzle-orm";
+import { eq, and, desc, ilike, sql, lt, gte } from "drizzle-orm";
 
 export interface IStorage {
   // Broker operations
@@ -65,6 +68,15 @@ export interface IStorage {
   // Broker field hints operations
   upsertFieldHint(brokerId: string, fieldKey: string, value: string): Promise<BrokerFieldHint>;
   getFieldHints(brokerId: string, fieldKey: string, query?: string, limit?: number): Promise<BrokerFieldHint[]>;
+
+  // Activity log operations
+  createActivityLog(log: InsertActivityLog): Promise<ActivityLog>;
+  getActivityLogsByEntity(entityType: string, entityId: string, limit?: number): Promise<ActivityLog[]>;
+
+  // Archive operations
+  archiveLoad(loadId: string): Promise<Load | undefined>;
+  archiveOldDeliveredLoads(daysOld: number): Promise<number>;
+  getArchivedLoads(brokerId: string, limit: number, offset: number): Promise<{ loads: Load[]; total: number }>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -341,6 +353,88 @@ export class DatabaseStorage implements IStorage {
     return await baseQuery
       .orderBy(desc(brokerFieldHints.usageCount), desc(brokerFieldHints.lastUsedAt))
       .limit(limit);
+  }
+
+  // Activity log operations
+  async createActivityLog(log: InsertActivityLog): Promise<ActivityLog> {
+    const [activityLog] = await db
+      .insert(activityLogs)
+      .values(log)
+      .returning();
+    return activityLog;
+  }
+
+  async getActivityLogsByEntity(entityType: string, entityId: string, limit: number = 50): Promise<ActivityLog[]> {
+    return await db
+      .select()
+      .from(activityLogs)
+      .where(and(
+        eq(activityLogs.entityType, entityType),
+        eq(activityLogs.entityId, entityId)
+      ))
+      .orderBy(desc(activityLogs.createdAt))
+      .limit(limit);
+  }
+
+  // Archive operations
+  async archiveLoad(loadId: string): Promise<Load | undefined> {
+    const [load] = await db
+      .update(loads)
+      .set({ 
+        isArchived: true, 
+        archivedAt: new Date(),
+        updatedAt: new Date() 
+      })
+      .where(eq(loads.id, loadId))
+      .returning();
+    return load || undefined;
+  }
+
+  async archiveOldDeliveredLoads(daysOld: number): Promise<number> {
+    const cutoffDate = new Date();
+    cutoffDate.setDate(cutoffDate.getDate() - daysOld);
+
+    const result = await db
+      .update(loads)
+      .set({ 
+        isArchived: true, 
+        archivedAt: new Date(),
+        updatedAt: new Date() 
+      })
+      .where(and(
+        eq(loads.status, "DELIVERED"),
+        eq(loads.isArchived, false),
+        lt(loads.updatedAt, cutoffDate)
+      ))
+      .returning({ id: loads.id });
+
+    return result.length;
+  }
+
+  async getArchivedLoads(brokerId: string, limit: number, offset: number): Promise<{ loads: Load[]; total: number }> {
+    const [countResult] = await db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(loads)
+      .where(and(
+        eq(loads.brokerId, brokerId),
+        eq(loads.isArchived, true)
+      ));
+
+    const loadsList = await db
+      .select()
+      .from(loads)
+      .where(and(
+        eq(loads.brokerId, brokerId),
+        eq(loads.isArchived, true)
+      ))
+      .orderBy(desc(loads.archivedAt))
+      .limit(limit)
+      .offset(offset);
+
+    return {
+      loads: loadsList,
+      total: countResult?.count || 0,
+    };
   }
 }
 
