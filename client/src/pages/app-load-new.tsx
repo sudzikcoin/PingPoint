@@ -118,7 +118,6 @@ export default function AppLoadNew() {
 
       // UI Feedback & Redirect
       toast.success(`Load ${newLoad.loadNumber} created!`);
-      toast.info(`Verification email sent to ${brokerEmail}`);
       
       setLocation(`/app/loads`);
     

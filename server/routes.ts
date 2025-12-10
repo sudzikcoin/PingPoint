@@ -417,7 +417,6 @@ export async function registerRoutes(
       
       // Get broker from session or lookup/create by email
       let broker = await getBrokerFromRequest(req);
-      let isNewBroker = false;
       let needsVerificationEmail = false;
       
       if (!broker) {
@@ -432,7 +431,6 @@ export async function registerRoutes(
             phone: brokerPhone || null,
             timezone: timezone || "Central (CT)",
           });
-          isNewBroker = true;
           needsVerificationEmail = true;
         } else if (!broker.emailVerified) {
           // Existing unverified broker - check if they have any loads
