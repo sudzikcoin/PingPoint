@@ -1,0 +1,187 @@
+You are Replit Dev Agent working on the PingPoint project (Arcade 90s + Premium themes). Your ONLY task in this run is to RESTORE a 3-second animated splash / loading screen at app startup, WITHOUT breaking or refactoring any existing flows, styles, routes, or email/auth logic.
+
+Context / goals
+- Tech stack: React + TypeScript + Vite (or similar) with Tailwind-like utility classes already in place.
+- Current behavior:
+  - When the app loads at `/`, it immediately shows the “PINGPOINT / BY SUVERSE LABS / Broker / Driver” console selection screen.
+  - Previously there was a short (≈3s) animated splash screen with a truck + dots + ghosts (Pac-Man vibe) and “PINGPOINT BY SUVERSE LABS” text.
+  - That splash disappeared after recent redesign.
+- Desired behavior:
+  - When user first visits the root route `/` (landing / console selector), show a full-screen Splash overlay for ~3 seconds, then automatically transition to the existing console selection UI.
+  - Splash should appear ONLY on the root landing screen, NOT on internal broker/driver routes like `/app/loads`, `/driver`, etc.
+  - Splash should not interfere with routing, email verification, or any other logic.
+  - Other pages must remain exactly as they are.
+
+High-level plan
+1. Add a reusable `<SplashScreen />` component with the PingPoint Pac-Man styled animation and branding.
+2. Wrap the root landing page component (the one that renders “PINGPOINT BY SUVERSE LABS” + cards “Broker / Dispatcher” + “Driver”) in a small state/timer controller:
+   - `showSplash` state (default `true`).
+   - `useEffect` → `setTimeout` for 3000 ms to set `showSplash` to `false`.
+   - While `showSplash` is true:
+     - Render `<SplashScreen />` as a fixed, full-screen overlay.
+     - Keep main content in the DOM but hidden with `opacity-0` + `pointer-events-none`.
+   - When `showSplash` becomes false:
+     - Hide/Unmount splash (prefer unmount).
+     - Main content fades in with `opacity-100` (smooth transition).
+3. Do NOT change any other files except:
+   - New `SplashScreen` component file.
+   - Root landing page file that corresponds to `/`.
+
+Step 1 – Locate the root landing page (console selector)
+1. Search the codebase for the component that renders:
+   - Text “PINGPOINT” and “BY SUVERSE LABS”
+   - Cards / buttons “Broker / Dispatcher” and “Driver”
+   - This is the landing screen shown in the screenshot where user chooses console.
+2. Common file names / locations might be:
+   - `src/App.tsx`
+   - `src/pages/index.tsx`
+   - `src/routes/Root.tsx`
+   - `src/app/page.tsx`
+3. Once found, **do not** change its JSX structure except for wrapping it in the splash logic as described below.
+
+Step 2 – Create SplashScreen component
+1. Create a new file, for example:
+
+   `src/components/SplashScreen.tsx`
+
+2. Implement a full-screen overlay splash with PingPoint branding and arcade vibe. Use Tailwind-like classes consistent with the current design (dark background, neon yellow/cyan). Example implementation:
+
+```tsx
+// src/components/SplashScreen.tsx
+import React from "react";
+
+export const SplashScreen: React.FC = () => {
+  return (
+    <div className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-[#020308] text-center">
+      {/* Title */}
+      <div className="mb-10">
+        <h1 className="text-4xl md:text-5xl font-semibold tracking-[0.4em] text-yellow-400">
+          PINGPOINT
+        </h1>
+        <p className="mt-3 text-xs md:text-sm tracking-[0.3em] text-cyan-400">
+          BY SUVERSE LABS
+        </p>
+      </div>
+
+      {/* Arcade frame */}
+      <div className="w-[280px] h-[180px] md:w-[340px] md:h-[200px] rounded-[28px] border border-cyan-500/40 bg-[#050814] shadow-[0_0_40px_rgba(0,255,255,0.25)] relative overflow-hidden flex items-center justify-center">
+        {/* Background grid dots can mimic app background */}
+        <div className="absolute inset-0 bg-[radial-gradient(circle,_rgba(0,255,255,0.18)_1px,_transparent_1px)] bg-[size:18px_18px] opacity-40" />
+
+        {/* Truck + pellets + ghosts (simple shapes, no heavy animation logic) */}
+        <div className="relative flex items-center justify-center space-x-3 z-10">
+          {/* Truck */}
+          <div className="w-8 h-6 rounded-[6px] bg-yellow-400 shadow-[0_0_18px_rgba(250,204,21,0.8)] relative">
+            <div className="absolute -right-2 top-1 w-3 h-4 bg-yellow-300 rounded-[4px]" />
+            <div className="absolute bottom-0 left-1 w-2 h-2 rounded-full bg-black" />
+            <div className="absolute bottom-0 right-1 w-2 h-2 rounded-full bg-black" />
+          </div>
+
+          {/* Dots */}
+          <div className="flex space-x-1">
+            {Array.from({ length: 6 }).map((_, idx) => (
+              <span
+                key={idx}
+                className="w-1.5 h-1.5 rounded-full bg-yellow-300 shadow-[0_0_6px_rgba(250,204,21,0.9)]"
+              />
+            ))}
+          </div>
+
+          {/* Ghost */}
+          <div className="w-7 h-8 bg-pink-500 rounded-t-[999px] rounded-b-[4px] flex items-end justify-between px-0.5 pb-0.5 shadow-[0_0_18px_rgba(236,72,153,0.8)]">
+            <span className="w-1.5 h-1.5 bg-white rounded-full mx-[2px] mb-[3px]" />
+            <span className="w-1.5 h-1.5 bg-white rounded-full mx-[2px] mb-[3px]" />
+          </div>
+        </div>
+      </div>
+
+      <p className="mt-10 text-[10px] uppercase tracking-[0.25em] text-slate-400">
+        LOADING ASSETS…
+      </p>
+    </div>
+  );
+};
+
+	•	Feel free to tweak sizes/spacing to match the existing design language but keep it visually similar to the original splash with truck & ghosts.
+
+Step 3 – Wrap the landing page with splash logic
+	1.	In the landing page component (root /), add:
+	•	useState to control showSplash.
+	•	useEffect with setTimeout (3000 ms).
+	•	Conditional rendering of <SplashScreen />.
+	•	Fade-in transition on the existing content.
+	2.	Example wrapping (adjust imports + component name + path):
+
+// Example: src/App.tsx OR src/pages/index.tsx OR src/app/page.tsx
+import React, { useEffect, useState } from "react";
+import { SplashScreen } from "./components/SplashScreen"; // adjust relative path
+// ... keep other existing imports (logos, cards, themes, etc.)
+
+const HomePage: React.FC = () => {
+  const [showSplash, setShowSplash] = useState(true);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setShowSplash(false);
+    }, 3000); // ~3 seconds
+
+    return () => clearTimeout(timer);
+  }, []);
+
+  return (
+    <>
+      {showSplash && <SplashScreen />}
+
+      {/* Existing content wrapper */}
+      <main
+        className={
+          "min-h-screen transition-opacity duration-500 ease-out" +
+          (showSplash ? " opacity-0 pointer-events-none" : " opacity-100")
+        }
+      >
+        {/* IMPORTANT:
+           Leave EVERYTHING inside this main exactly as it is now:
+           - PingPoint logo / header
+           - “BY SUVERSE LABS”
+           - Buttons/cards for Broker / Dispatcher and Driver
+           - Theme toggle (Arcade 90s / Premium)
+           - All layout / sections
+         */}
+        {/* ... existing JSX of the console selector page ... */}
+      </main>
+    </>
+  );
+};
+
+export default HomePage;
+
+	3.	DO NOT:
+	•	Change routes (no modifications to /app/loads, /driver, verification routes, etc.).
+	•	Touch email / verification logic, PINGPOINT_PUBLIC_URL, or any API integration.
+	•	Move or rename files unrelated to the splash feature.
+
+Step 4 – Make sure splash appears only on /
+	•	Confirm that:
+	•	Navigating directly to / shows splash for 3 seconds, then the console selector.
+	•	Navigating to internal routes (e.g., clicking magic-link /app/loads/verify?token=... and then redirect) will only show splash if they land on the root landing component; don’t add splash to internal broker/driver consoles.
+	•	Do NOT add splash wrappers to other route files.
+
+Step 5 – Quick self-test checklist
+	1.	Start the dev server in Replit.
+	2.	Open the root URL (the same one stored in PINGPOINT_PUBLIC_URL).
+	•	Expected: Full-screen splash with PINGPOINT logo + arcade frame + “LOADING ASSETS…”.
+	•	After ~3 seconds: splash disappears, console selection screen fades in.
+	3.	Click between Broker / Driver consoles:
+	•	No extra splashes.
+	•	No broken navigation or console missing.
+	4.	Trigger broker email flows just to ensure nothing was accidentally changed:
+	•	They should behave exactly as before (same magic link behavior).
+
+When finished
+	•	Confirm that only two files were modified/added:
+	•	src/components/SplashScreen.tsx (new)
+	•	Landing page file (root /) where you wrapped the console selection UI with the splash logic.
+	•	Do not perform any other refactors.
+
+Now implement these changes.
+

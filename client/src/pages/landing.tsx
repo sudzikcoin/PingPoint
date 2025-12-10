@@ -163,17 +163,11 @@ function RoleSelectorView() {
 }
 
 export default function LandingPage() {
-  // Check localStorage to skip intro on repeat visits
-  const [showIntro, setShowIntro] = useState(() => {
-    if (typeof window !== 'undefined') {
-      return localStorage.getItem("pingpoint_has_seen_intro") !== "true";
-    }
-    return true;
-  });
+  // Always show splash for ~3 seconds on landing page
+  const [showIntro, setShowIntro] = useState(true);
 
   // Memoize callback to prevent useEffect dependency changes causing re-runs
   const handleIntroComplete = useCallback(() => {
-    localStorage.setItem("pingpoint_has_seen_intro", "true");
     setShowIntro(false);
   }, []);
 
