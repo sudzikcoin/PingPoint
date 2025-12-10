@@ -1,0 +1,122 @@
+You are the Replit Backend Agent working on the **PingPoint** project in this workspace.
+
+Your ONLY goal in this run is to make THREE precise, tiny fixes:
+
+1) Actually register the `/api/health` route in `createApp()`.
+2) Add npm test scripts (`test` and `test:watch`) for Vitest.
+3) Fix a small typo in `README_DEPLOY.md` where the `docker compose` command is split across two lines.
+
+Do NOT change any business logic, database schema, or UI. Do NOT refactor anything beyond what is explicitly listed below.
+
+────────────────────────
+TASK 1 – Register /api/health in createApp()
+────────────────────────
+
+Context:
+- `server/routes.ts` already exports `registerHealthRoutes(app: Express)` which mounts `GET /api/health`.
+- `server/app.ts` imports `registerRoutes` (and likely `registerHealthRoutes`), but currently only calls `registerRoutes`.
+- As a result, `/api/health` does not exist at runtime and the Dockerfile HEALTHCHECK fails.
+
+What to do:
+
+1. Open `server/app.ts`.
+
+2. Ensure the imports include BOTH `registerRoutes` and `registerHealthRoutes`. If needed, adjust the import:
+
+```ts
+import { registerRoutes, registerHealthRoutes } from "./routes";
+
+	3.	In the createApp() function, call registerHealthRoutes(app) BEFORE registerRoutes(...).
+
+The function should look conceptually like this (keep existing middleware and logic, just insert the health registration):
+
+export async function createApp(): Promise<AppInstance> {
+  const app = express();
+  const httpServer = createHttpServer(app);
+
+  app.use(securityHeaders);
+  app.use(corsHandler);
+  app.use(cookieParser());
+  // any existing logger / body parsers, etc.
+
+  // Register health route so /api/health is always available
+  registerHealthRoutes(app);
+
+  // Then register main application routes (broker, driver, public tracking, etc.)
+  await registerRoutes(httpServer, app);
+
+  app.use(errorHandler);
+
+  return { app, httpServer };
+}
+
+	4.	Make sure registerHealthRoutes(app) is called exactly once and not duplicated anywhere else.
+
+────────────────────────
+TASK 2 – Add npm test scripts (Vitest)
+────────────────────────
+
+Context:
+	•	Vitest is configured and test files exist in server/tests/.
+	•	package.json currently has scripts like dev, build, start, db:push, but no "test" or "test:watch".
+
+What to do:
+	1.	Open the root package.json.
+	2.	In the "scripts" section, ADD the following entries without removing or changing the existing ones:
+
+"test": "vitest",
+"test:watch": "vitest watch"
+
+For example, the scripts block should end up looking like this (order is not important, content is):
+
+"scripts": {
+  "dev:client": "vite dev --port 5000",
+  "dev": "NODE_ENV=development tsx server/index.ts",
+  "build": "tsx script/build.ts",
+  "start": "NODE_ENV=production node dist/index.cjs",
+  "check": "tsc",
+  "db:push": "drizzle-kit push",
+  "test": "vitest",
+  "test:watch": "vitest watch"
+}
+
+	3.	Do NOT modify other script commands.
+
+────────────────────────
+TASK 3 – Fix the db:push command in README_DEPLOY.md
+────────────────────────
+
+Context:
+	•	README_DEPLOY.md already contains a section about initializing the database schema with Drizzle.
+	•	However, the docker compose exec command is accidentally split across two lines, something like:
+
+docker compose exec a
+pp npm run db:push
+
+This is invalid and confusing.
+
+What to do:
+	1.	Open README_DEPLOY.md.
+	2.	Find the section that explains how to initialize the database schema (Drizzle). It should contain a fenced code block with docker compose exec ....
+	3.	Fix the command so it’s exactly ONE line:
+
+docker compose exec app npm run db:push
+
+	4.	Ensure that the markdown code block is properly formatted as:
+
+```bash
+docker compose exec app npm run db:push
+
+(no line break inside the command name).
+
+────────────────────────
+FINAL CHECK
+────────────────────────
+
+Before finishing, inside this Replit workspace:
+
+1. Run `npm run build` to ensure the project still builds successfully.
+2. Run `npm start` (or use the existing dev flow) to ensure the server starts without runtime errors.
+3. Run `npm test` once to confirm that Vitest starts and discovers tests (you do NOT need to fix any failing tests beyond what’s caused by the changes above, but the command must execute).
+
+Make NO other changes beyond what is described in Tasks 1–3.
