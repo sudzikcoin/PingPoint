@@ -1,0 +1,128 @@
+You are the Replit Backend Agent working on the **PingPoint** project in this workspace.
+
+Your ONLY goal in this run is to make three very small but important fixes:
+
+1) Wire up the `/api/health` route so the Docker healthcheck and tests work.
+2) Add npm test scripts for Vitest.
+3) Update the deploy README with a step to initialize the database (`db:push`).
+
+Do NOT change any business logic or UI. Do NOT refactor anything beyond what is described below.
+
+────────────────────────
+TASK 1 – Wire /api/health into createApp()
+────────────────────────
+
+Context:
+- There is already a `registerHealthRoutes(app: Express)` function defined in `server/routes.ts` which mounts `GET /api/health`.
+- In `server/app.ts`, you already import `registerRoutes` and probably also `registerHealthRoutes`, but currently `registerHealthRoutes` is NOT called, so `/api/health` does not exist at runtime.
+
+What to do:
+
+1. Open `server/app.ts`.
+
+2. Ensure you have this import (adjust path if needed, but it likely already exists):
+
+```ts
+import { registerRoutes, registerHealthRoutes } from "./routes";
+
+	3.	In the createApp() function, call registerHealthRoutes(app) once, BEFORE registering the main routes:
+
+Roughly like this (keep existing code, just insert the health hook):
+
+export async function createApp(): Promise<AppInstance> {
+  const app = express();
+  const httpServer = createHttpServer(app);
+
+  app.use(securityHeaders);
+  app.use(corsHandler);
+  app.use(cookieParser());
+  // ... logger, any other middlewares
+
+  // Register health endpoint first so it's always available
+  registerHealthRoutes(app);
+
+  // Then register the rest of the app routes (broker, driver, etc.)
+  await registerRoutes(httpServer, app);
+
+  app.use(errorHandler);
+
+  return { app, httpServer };
+}
+
+	4.	Make sure registerHealthRoutes(app) is called exactly once and is not duplicated elsewhere.
+
+This will make:
+	•	/api/health respond in dev and prod,
+	•	Dockerfile HEALTHCHECK work correctly,
+	•	health.test.ts pass.
+
+────────────────────────
+TASK 2 – Add npm test scripts for Vitest
+────────────────────────
+
+Context:
+	•	Vitest and tests already exist (vitest.config.ts, server/tests/...), but there is no test or test:watch script in package.json.
+
+What to do:
+	1.	Open the root package.json.
+	2.	In the "scripts" section, add the following entries (do not remove existing ones):
+
+"test": "vitest",
+"test:watch": "vitest watch"
+
+For example, your scripts block should look like (order can differ, but content must exist):
+
+"scripts": {
+  "dev:client": "vite dev --port 5000",
+  "dev": "NODE_ENV=development tsx server/index.ts",
+  "build": "tsx script/build.ts",
+  "start": "NODE_ENV=production node dist/index.cjs",
+  "check": "tsc",
+  "db:push": "drizzle-kit push",
+  "test": "vitest",
+  "test:watch": "vitest watch"
+}
+
+	3.	Do not change other script names or commands.
+
+────────────────────────
+TASK 3 – Update README_DEPLOY.md with DB initialization step
+────────────────────────
+
+Context:
+	•	There is already a README_DEPLOY.md that explains how to use Docker and docker-compose.yml.
+	•	However, nothing mentions running Drizzle migrations / schema push (npm run db:push), which is required to create tables in a fresh Postgres DB.
+
+What to do:
+	1.	Open README_DEPLOY.md in the project root.
+	2.	Add a short section explaining how to initialize the database schema after the containers are up. For example, append something like this (adjust headings style to match the existing file):
+
+### Initializing the database schema (Drizzle)
+
+On a fresh server, after you start the containers for the first time, you need to create the database tables.
+
+Run this once:
+
+```bash
+docker compose exec app npm run db:push
+
+This will apply the Drizzle schema to the Postgres database inside the db service. After that, the application can be used normally.
+
+3. Make sure this fits naturally into the existing README_DEPLOY structure (e.g. after the “docker compose up -d” step).
+
+────────────────────────
+FINAL CHECK
+────────────────────────
+
+Before you finish, inside this Replit workspace:
+
+1. Ensure TypeScript still builds:
+   - Run `npm run build` and fix any errors.
+
+2. Ensure the app still starts:
+   - Run `npm start` and confirm it boots without runtime errors.
+
+3. Ensure Vitest runs:
+   - Run `npm test` once to verify the test command works (you do not need to fix existing test failures if they are unrelated to these changes, but the runner must execute).
+
+Make no other changes beyond what is explicitly described above.

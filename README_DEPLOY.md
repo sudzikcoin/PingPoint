@@ -60,14 +60,24 @@ Fill in these values:
 docker compose up -d
 ```
 
-### 4. Check Status
+### 4. Initialize Database Schema
+
+On first deployment, create the database tables:
+
+```bash
+docker compose exec app npm run db:push
+```
+
+This applies the Drizzle schema to Postgres. Run this once on fresh deployments.
+
+### 5. Check Status
 
 ```bash
 docker compose ps
 docker compose logs -f app
 ```
 
-### 5. Access PingPoint
+### 6. Access PingPoint
 
 Open in browser: `http://YOUR_SERVER_IP:8080`
 
