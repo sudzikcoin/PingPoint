@@ -1,7 +1,7 @@
 import type { Express, Request, Response } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { createBrokerSession, getBrokerFromRequest, clearBrokerSession } from "./auth";
+import { createBrokerSession, getBrokerFromRequest, clearBrokerSession, getOrCreateTrustedDevice, getTrustedDevice } from "./auth";
 import { randomBytes } from "crypto";
 import { insertLoadSchema, insertStopSchema } from "@shared/schema";
 import { z } from "zod";
@@ -188,7 +188,10 @@ export async function registerRoutes(
       await storage.updateBroker(verificationToken.brokerId, { emailVerified: true });
 
       createBrokerSession(verificationToken.brokerId, res);
-      console.log(`[Verify] Session created for broker ${verificationToken.brokerId}, redirecting to /app/loads`);
+      
+      // Mark this device as trusted
+      await getOrCreateTrustedDevice(req, res, verificationToken.brokerId);
+      console.log(`[Verify] Session and trusted device created for broker ${verificationToken.brokerId}`);
       
       return res.json({ ok: true });
     } catch (error) {
@@ -217,6 +220,9 @@ export async function registerRoutes(
 
       createBrokerSession(verificationToken.brokerId, res);
       
+      // Mark this device as trusted
+      await getOrCreateTrustedDevice(req, res, verificationToken.brokerId);
+      
       return res.redirect('/app/loads');
     } catch (error) {
       console.error("Error in /api/brokers/verify:", error);
@@ -231,6 +237,77 @@ export async function registerRoutes(
       return res.json({ ok: true });
     } catch (error) {
       console.error("Error in /api/brokers/logout:", error);
+      return res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  // POST /api/brokers/login - Trusted device login flow
+  app.post("/api/brokers/login", strictRateLimit(10, 60000), async (req: Request, res: Response) => {
+    try {
+      const { email } = req.body;
+      
+      // Validate email
+      if (!email || typeof email !== 'string' || !email.includes('@')) {
+        return res.status(400).json({
+          code: "INVALID_EMAIL",
+          message: "Please enter a valid email address.",
+        });
+      }
+      
+      const emailNormalized = email.trim().toLowerCase();
+      const broker = await storage.getBrokerByEmail(emailNormalized);
+      
+      // Broker not found
+      if (!broker) {
+        return res.status(404).json({
+          code: "ACCOUNT_NOT_FOUND",
+          message: "We couldn't find a broker account for this email.",
+        });
+      }
+      
+      // Broker exists but email not verified
+      if (!broker.emailVerified) {
+        return res.status(403).json({
+          code: "EMAIL_NOT_VERIFIED",
+          message: "Please verify your email using the link we sent you.",
+        });
+      }
+      
+      // Check if this is a trusted device
+      const trustedDevice = await getTrustedDevice(req, broker.id);
+      
+      if (trustedDevice) {
+        // Trusted device - log in immediately
+        await storage.updateBrokerDeviceLastUsed(trustedDevice.id);
+        createBrokerSession(broker.id, res);
+        console.log(`[Login] Trusted device login for broker ${broker.email}`);
+        
+        return res.json({
+          code: "LOGIN_SUCCESS",
+          message: "Logged in successfully.",
+          redirect: "/app/loads",
+        });
+      }
+      
+      // Not a trusted device - send magic link
+      const token = randomBytes(32).toString('hex');
+      const expiresAt = new Date();
+      expiresAt.setDate(expiresAt.getDate() + 2);
+      
+      await storage.createVerificationToken(broker.id, token, expiresAt);
+      
+      const origin = getBaseUrl(req);
+      const verificationUrl = `${origin}/verify?token=${token}`;
+      console.log(`[Login] New device login attempt for ${broker.email}, sending magic link`);
+      
+      await sendVerificationEmail(broker.email, verificationUrl, broker.name);
+      
+      return res.json({
+        code: "MAGIC_LINK_SENT",
+        message: "We sent a login link to your email to confirm this device.",
+      });
+    } catch (error) {
+      console.error("Error in /api/brokers/login:", error);
       return res.status(500).json({ error: "Internal server error" });
     }
   });

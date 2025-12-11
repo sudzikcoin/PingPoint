@@ -8,6 +8,7 @@ import {
   rateConfirmationFiles,
   brokerFieldHints,
   activityLogs,
+  brokerDevices,
   type Broker,
   type InsertBroker,
   type Driver,
@@ -23,6 +24,7 @@ import {
   type BrokerFieldHint,
   type ActivityLog,
   type InsertActivityLog,
+  type BrokerDevice,
 } from "@shared/schema";
 import { db } from "./db";
 import { eq, and, desc, ilike, sql, lt, gte } from "drizzle-orm";
@@ -77,6 +79,11 @@ export interface IStorage {
   archiveLoad(loadId: string): Promise<Load | undefined>;
   archiveOldDeliveredLoads(daysOld: number): Promise<number>;
   getArchivedLoads(brokerId: string, limit: number, offset: number): Promise<{ loads: Load[]; total: number }>;
+
+  // Broker device operations
+  getBrokerDevice(brokerId: string, deviceId: string): Promise<BrokerDevice | undefined>;
+  createBrokerDevice(brokerId: string, deviceId: string, userAgent?: string): Promise<BrokerDevice>;
+  updateBrokerDeviceLastUsed(id: string): Promise<BrokerDevice | undefined>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -435,6 +442,39 @@ export class DatabaseStorage implements IStorage {
       loads: loadsList,
       total: countResult?.count || 0,
     };
+  }
+
+  // Broker device operations
+  async getBrokerDevice(brokerId: string, deviceId: string): Promise<BrokerDevice | undefined> {
+    const [device] = await db
+      .select()
+      .from(brokerDevices)
+      .where(and(
+        eq(brokerDevices.brokerId, brokerId),
+        eq(brokerDevices.deviceId, deviceId)
+      ));
+    return device || undefined;
+  }
+
+  async createBrokerDevice(brokerId: string, deviceId: string, userAgent?: string): Promise<BrokerDevice> {
+    const [device] = await db
+      .insert(brokerDevices)
+      .values({
+        brokerId,
+        deviceId,
+        userAgent: userAgent || null,
+      })
+      .returning();
+    return device;
+  }
+
+  async updateBrokerDeviceLastUsed(id: string): Promise<BrokerDevice | undefined> {
+    const [device] = await db
+      .update(brokerDevices)
+      .set({ lastUsedAt: new Date() })
+      .where(eq(brokerDevices.id, id))
+      .returning();
+    return device || undefined;
   }
 }
 

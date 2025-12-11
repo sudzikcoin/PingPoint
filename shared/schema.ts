@@ -20,6 +20,7 @@ export const brokersRelations = relations(brokers, ({ many }) => ({
   loads: many(loads),
   verificationTokens: many(verificationTokens),
   fieldHints: many(brokerFieldHints),
+  devices: many(brokerDevices),
 }));
 
 // Broker Field Hints - for typeahead suggestions
@@ -52,6 +53,23 @@ export const verificationTokens = pgTable("verification_tokens", {
 export const verificationTokensRelations = relations(verificationTokens, ({ one }) => ({
   broker: one(brokers, {
     fields: [verificationTokens.brokerId],
+    references: [brokers.id],
+  }),
+}));
+
+// Broker Trusted Devices model
+export const brokerDevices = pgTable("broker_devices", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  brokerId: uuid("broker_id").notNull().references(() => brokers.id),
+  deviceId: text("device_id").notNull(),
+  userAgent: text("user_agent"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`now()`),
+  lastUsedAt: timestamp("last_used_at", { withTimezone: true }).notNull().default(sql`now()`),
+});
+
+export const brokerDevicesRelations = relations(brokerDevices, ({ one }) => ({
+  broker: one(brokers, {
+    fields: [brokerDevices.brokerId],
     references: [brokers.id],
   }),
 }));
@@ -232,6 +250,7 @@ export type InsertBroker = z.infer<typeof insertBrokerSchema>;
 export type BrokerFieldHint = typeof brokerFieldHints.$inferSelect;
 export type InsertBrokerFieldHint = z.infer<typeof insertBrokerFieldHintSchema>;
 export type VerificationToken = typeof verificationTokens.$inferSelect;
+export type BrokerDevice = typeof brokerDevices.$inferSelect;
 export type Driver = typeof drivers.$inferSelect;
 export type InsertDriver = z.infer<typeof insertDriverSchema>;
 export type Load = typeof loads.$inferSelect;

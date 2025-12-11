@@ -1,0 +1,356 @@
+You are the Replit Backend Agent working on the **PingPoint** project already loaded in this workspace.
+
+Your goal in THIS run is to implement a **“trusted device” login flow for brokers**:
+
+- 1st time: broker confirms email via existing **magic link**.
+- Next times on the SAME device: broker вводит только email → жмёт “Log in” → сразу попадает в кабинет, **без нового письма**.
+- На другом устройстве / чужом браузере: всё ещё требуется magic link (подтверждение по почте).
+
+You MUST:
+
+- Reuse the existing magic-link verification flow as much as possible.
+- Keep current business flows intact (creating loads, driver app, public tracking).
+- Keep changes focused: auth, a new login endpoint, a small “trusted device” mechanism, и страница `/login`.
+
+────────────────────────
+HIGH-LEVEL BEHAVIOR (WHAT WE WANT)
+────────────────────────
+
+1. **First time (registration + verification)** – already mostly exists:
+   - Broker создаёт первый груз → мы создаём broker + workspace + load → отправляем письмо с magic link.
+   - Брокер кликает по ссылке:
+     - помечаем email как verified,
+     - создаём сессию (cookie),
+     - теперь он внутри `/app/loads`.
+
+2. **Subsequent logins on the SAME device**:
+   - Брокер идёт на `/login`.
+   - Вводит свой email и нажимает “Log in”.
+   - Если:
+     - email принадлежит верифицированному брокеру, И
+     - устройство считается “доверенным” (мы узнаём его по cookie),
+     - → сразу создаём сессию и перенаправляем в `/app/loads` (без письма).
+
+3. **Logins on a NEW / unknown device**:
+   - Брокер идёт на `/login`, вводит email, нажимает “Log in”.
+   - Если:
+     - email есть и verified, НО доверенного устройства нет,
+     - → мы НЕ логиним сразу, а:
+       - отправляем magic link на почту (ещё одно письмо),
+       - возвращаем ответ вроде `{ code: "MAGIC_LINK_SENT" }`.
+   - Брокер кликает ссылку → мы:
+     - создаём сессию,
+     - помечаем этот девайс как доверенный для этого брокера.
+
+So: **magic link — обязательно для первого входа и для новых устройств, но не нужен для повторного входа на уже доверенном устройстве.**
+
+────────────────────────
+GLOBAL CONSTRAINTS
+────────────────────────
+
+- Do NOT implement passwords. We are staying passwordless (email-based).
+- Do NOT break existing:
+  - Magic link verification endpoint.
+  - Broker console `/app/loads`.
+  - Driver app and public tracking.
+- Do NOT refactor large parts of the code. Add small, well-contained pieces.
+- Reuse existing auth/session helpers wherever possible (do not invent a second session system).
+
+You will work in phases.
+
+================================================
+PHASE 0 – UNDERSTAND CURRENT AUTH & MAGIC LINK
+================================================
+
+1. Inspect current auth-related files, likely:
+   - `server/auth.ts`
+   - `server/routes.ts` (or similar routes file)
+   - Any helper like `getCurrentBrokerFromSession(req)` or similar.
+   - The route that handles the **magic-link verification**, e.g. `/api/brokers/verify` or `/api/magic/verify`.
+     - It should:
+       - accept a token (probably from query),
+       - lookup token in `verificationTokens` (or similar),
+       - mark broker verified (set `emailVerifiedAt` or `isEmailVerified`),
+       - create a session/cookie,
+       - redirect to `/app/loads`.
+
+2. Identify:
+   - Where **broker email** and verification flag are stored (e.g. `brokers.email`, `brokers.emailVerifiedAt`).
+   - How **session** is represented:
+     - Is there a `session` cookie?
+     - Is there a JWT?
+     - Some `brokerId` in a cookie?
+   - The best existing function to use when we want to “log in” a broker from backend code (re-use it later).
+
+DO NOT change behavior yet; just understand.
+
+======================================================
+PHASE 1 – “Trusted device” model (server-side structure)
+======================================================
+
+We will add a **“trusted device”** concept tied to a broker.
+
+────────────────
+Task 1.1 – DB storage for trusted devices
+────────────────
+
+1. Check if there is already a concept like `devices` or `sessions` table in `shared/schema.ts`.
+
+2. If NO such table exists, create a minimal Drizzle model, e.g. `brokerDevices`:
+
+   - Fields (example, adjust to style of existing schema):
+
+     - `id` – primary key.
+     - `brokerId` – FK to brokers.
+     - `deviceId` – string (a random opaque token).
+     - `userAgent` – string (optional; best-effort).
+     - `createdAt` – timestamp default now.
+     - `lastUsedAt` – timestamp default now.
+     - Optional: `ipAddress` – if you already capture it (safe to omit for now).
+
+   - Add an index on `(brokerId, deviceId)`.
+
+3. If a device table already exists:
+   - Reuse it if it fits; otherwise, create a new minimal one as above.
+
+4. Add a migration to create this table.
+
+────────────────
+Task 1.2 – Device cookie
+────────────────
+
+We need a persistent cookie on the client to identify a trusted device.
+
+1. Choose a cookie name, e.g. `pp_device`.
+
+2. Implement a helper in a central auth or util file (e.g. `server/auth.ts`):
+
+   - `getOrCreateDeviceId(req: Request, res: Response, brokerId: string)`
+
+   Behavior:
+   - Try to read `pp_device` from `req.cookies`.
+   - If present:
+     - Look up in `brokerDevices` where `brokerId` and `deviceId` match.
+       - If found: update `lastUsedAt` and return the device.
+       - If not found: this cookie is stale or belongs to another broker; ignore it (treat as new device).
+   - If not present (or invalid):
+     - Generate a new `deviceId` (e.g. using a crypto-safe random or UUID).
+     - Insert new record in `brokerDevices` with this `brokerId` and `deviceId`.
+     - Set cookie `pp_device` on the response:
+       - HttpOnly: true
+       - SameSite: "lax" or "strict" (consistent with your session cookies)
+       - Secure: true when `NODE_ENV === "production"`
+       - A reasonably long maxAge (e.g. 180 days)
+     - Return the created device record.
+
+   NOTE:
+   - You don’t need to expose deviceId to JS on the frontend – let it be HttpOnly.
+
+3. We will call this helper in two places:
+   - After magic link verification (phase 2).
+   - After successful email-only login on a trusted device (phase 3).
+
+=====================================================
+PHASE 2 – Hook trusted device creation into magic link
+=====================================================
+
+When a broker verifies email via magic link, we want to:
+
+- Mark their email verified,
+- Create a session,
+- And mark THAT browser as a trusted device.
+
+1. Find the magic link verification route, e.g.:
+
+   ```ts
+   app.get("/api/brokers/verify", async (req, res) => { ... })
+
+or similar.
+	2.	After the token is validated and broker is marked verified, and after you set the broker session, do the following:
+	•	Call getOrCreateDeviceId(req, res, broker.id):
+
+await getOrCreateDeviceId(req, res, broker.id);
+
+
+	•	This ensures that:
+	•	The browser that clicked the magic link now has a pp_device cookie
+tied to this brokerId in the DB.
+
+	3.	Make sure:
+	•	This does NOT change the redirect behavior (still redirect to /app/loads or your current destination).
+	•	No extra responses are sent; just one redirect.
+
+===========================================================
+PHASE 3 – Email-only login endpoint using trusted device check
+
+We now implement a backend endpoint that:
+	•	Accepts email,
+	•	If the email is verified AND the device cookie is trusted for this broker, logs in immediately (no email),
+	•	Otherwise sends a magic link (or returns an error) and instructs frontend what to show.
+
+────────────────
+Task 3.1 – New login endpoint
+────────────────
+	1.	Add a route, e.g.:
+
+app.post("/api/brokers/login", async (req, res) => { ... });
+
+
+	2.	Behavior:
+	•	Parse JSON body: { email: string }.
+	•	Validate:
+	•	If no email or invalid format → return 400 with:
+
+{ "code": "INVALID_EMAIL", "message": "Please enter a valid email address." }
+
+
+	•	Normalize email (trim, lowercase).
+	•	Look up broker by email.
+
+	3.	If broker is NOT found:
+	•	For security/privacy, you can either:
+	•	Return 200 with a generic “If this email is registered, we sent a link” (and not send anything).
+	•	Or explicitly say ACCOUNT_NOT_FOUND.
+	•	For simplicity and debugging, you may return:
+
+{ "code": "ACCOUNT_NOT_FOUND", "message": "We couldn't find a broker account for this email." }
+
+
+	4.	If broker is found BUT NOT verified:
+	•	This means they never completed the magic link verification.
+	•	Return:
+
+{ "code": "EMAIL_NOT_VERIFIED", "message": "Please verify your email using the link we sent you." }
+
+
+	•	Optionally, trigger a re-send of the verification link if you already have that logic.
+
+	5.	If broker is found AND verified:
+	•	Try to detect if this is a trusted device:
+	•	Read pp_device from cookies.
+	•	Find a record in brokerDevices with brokerId and that deviceId.
+	•	If a matching trusted device exists:
+	•	Update its lastUsedAt.
+	•	Create a session for this broker (reusing the same logic used in magic link verification).
+	•	Return success:
+
+{ "code": "LOGIN_SUCCESS", "message": "Logged in successfully.", "redirect": "/app/loads" }
+
+
+	•	If NO trusted device:
+	•	Do NOT log in immediately.
+	•	Instead, reuse your existing “send magic link” logic:
+	•	Create a new verification/login token bound to this broker.
+	•	Send an email with magic link to this email.
+	•	Return:
+
+{ "code": "MAGIC_LINK_SENT", "message": "We sent a login link to your email to confirm this device." }
+
+
+	6.	Make sure to:
+	•	Use the same token table and email template (or very similar) as your current onboarding magic link.
+	•	Log server-side what is happening for debugging.
+
+────────────────
+Task 3.2 – Tests for login endpoint
+────────────────
+
+Add Vitest tests, e.g. server/tests/brokerLogin.test.ts:
+
+Scenarios:
+	1.	ACCOUNT_NOT_FOUND:
+	•	Call /api/brokers/login with an email that doesn’t exist.
+	•	Expect 404 or 200 with code: "ACCOUNT_NOT_FOUND" (reflect your chosen status code).
+	2.	EMAIL_NOT_VERIFIED:
+	•	Seed a broker with emailVerified = false.
+	•	Call /api/brokers/login.
+	•	Expect code: "EMAIL_NOT_VERIFIED".
+	3.	MAGIC_LINK_SENT (untrusted device):
+	•	Seed a verified broker.
+	•	Call /api/brokers/login without pp_device cookie.
+	•	Expect code: "MAGIC_LINK_SENT".
+	•	Assert that the email-sending stub was invoked once.
+	4.	LOGIN_SUCCESS (trusted device):
+	•	Seed a verified broker and an associated brokerDevices record with deviceId.
+	•	Simulate request with cookie pp_device=deviceId.
+	•	Call /api/brokers/login.
+	•	Expect code: "LOGIN_SUCCESS".
+	•	Assert that session cookie is set in the response (whatever your session mechanism is).
+
+================================================
+PHASE 4 – Frontend: /login page and wiring it up
+
+Now we add a simple login page and hook it to the new endpoint.
+
+────────────────
+Task 4.1 – New /login page
+────────────────
+	1.	In the frontend (React), add a page/route, e.g. client/src/app/login.tsx or whatever fits your routing:
+	•	Simple layout:
+	•	Title: “Broker Login”
+	•	One text input: Email
+	•	One button: Log in
+	•	Some small note like: “If this is a new device, we’ll send a login link to your email.”
+	2.	handleSubmit:
+	•	Prevent default.
+	•	If email is empty or invalid:
+	•	Show toast/callout: “Please enter a valid email”.
+	•	Stop.
+	•	Call POST /api/brokers/login with { email }.
+	•	Parse JSON.
+	3.	Client-side behavior based on code:
+	•	If code === "LOGIN_SUCCESS":
+	•	Show a short success toast: “Logged in”.
+	•	Redirect to response.redirect || "/app/loads".
+	•	If code === "MAGIC_LINK_SENT":
+	•	Show info toast: “We sent a login link to your email to confirm this device.”
+	•	Optionally show a text on the page: “Check your inbox and click the link to finish login.”
+	•	If code === "EMAIL_NOT_VERIFIED":
+	•	Show warning: “Please verify your email using the link we sent earlier.”
+	•	Optionally provide a button “Resend verification email” that hits your existing resend endpoint.
+	•	If code === "ACCOUNT_NOT_FOUND":
+	•	Show warning: “We couldn’t find a broker account for this email.”
+	•	Any other error:
+	•	Show generic error toast.
+	4.	Ensure that:
+	•	The login page matches your current visual style (dark / arcade) but remains simple.
+	•	It does NOT interfere with /app/loads/new – that flow stays as-is.
+
+────────────────
+Task 4.2 – Navigation links
+────────────────
+
+Optionally, add small navigation hints:
+	•	On broker console (/app/loads), maybe add a small “Log out” that clears session cookie.
+	•	On the landing or wherever appropriate, add a link “Broker Login” → /login.
+
+Implement logout in the simplest possible way consistent with your existing auth system (e.g. hitting /api/logout that clears the session cookie).
+
+================================================
+PHASE 5 – FINAL CHECKS
+
+Before finishing:
+	1.	TypeScript & Build
+	•	Run npm run check (or tsc) to ensure typing is correct.
+	•	Run npm run build to ensure project builds.
+	2.	Tests
+	•	Run npm test (or npx vitest) and ensure the tests (old + new) pass.
+	•	If existing tests need slight updates due to the new device table, adjust them minimally.
+	3.	Manual sanity tests (dev mode)
+	•	Scenario A: First-time broker
+	•	Create a new broker via existing New Load flow.
+	•	Click magic link from logs/dev email.
+	•	Check that:
+	•	You’re logged in,
+	•	pp_device cookie is set for that browser.
+	•	Scenario B: Same device, later login
+	•	Clear session cookie (but NOT all cookies; keep pp_device).
+	•	Visit /login, enter broker email, click Log in.
+	•	Expect immediate login (LOGIN_SUCCESS), no email sent.
+	•	Scenario C: Other device (simulate by removing pp_device cookie)
+	•	Clear pp_device cookie.
+	•	Visit /login, enter broker email, click Log in.
+	•	Expect MAGIC_LINK_SENT and a new magic link email.
+
+Only implement what is described above. Do NOT add unrelated features or refactor other parts of the system.
+
