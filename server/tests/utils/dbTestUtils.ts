@@ -1,5 +1,5 @@
 import { db } from "../../db";
-import { brokers, verificationTokens, drivers, loads, stops, trackingPings, brokerFieldHints } from "@shared/schema";
+import { brokers, verificationTokens, drivers, loads, stops, trackingPings, brokerFieldHints, brokerDevices } from "@shared/schema";
 import { randomUUID } from "crypto";
 
 export async function resetDatabase() {
@@ -8,6 +8,7 @@ export async function resetDatabase() {
   await db.delete(loads);
   await db.delete(verificationTokens);
   await db.delete(brokerFieldHints);
+  await db.delete(brokerDevices);
   await db.delete(drivers);
   await db.delete(brokers);
 }
