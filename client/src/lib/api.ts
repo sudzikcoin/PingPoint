@@ -79,6 +79,29 @@ export const api = {
       return res.json();
     },
 
+    login: async (email: string): Promise<{ code: string; message: string; redirect?: string }> => {
+      const res = await fetch('/api/brokers/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ email }),
+      });
+      
+      const data = await res.json();
+      
+      if (!res.ok) {
+        const error = new Error(data.message || 'Login failed') as Error & {
+          code?: string;
+          status?: number;
+        };
+        error.code = data.code;
+        error.status = res.status;
+        throw error;
+      }
+      
+      return data;
+    },
+
     getProfile: async (): Promise<BrokerProfile> => {
       const res = await fetch('/api/broker/profile', {
         credentials: 'include',

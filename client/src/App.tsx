@@ -14,6 +14,7 @@ import AppBilling from "@/pages/app-billing";
 import AppSettings from "@/pages/app-settings";
 import AppIntegrations from "@/pages/app-integrations";
 import VerifyPage from "@/pages/verify";
+import LoginPage from "@/pages/login";
 import LandingPage from "@/pages/landing";
 import { useEffect } from "react";
 import { ThemeProvider } from "@/context/theme-context";
@@ -24,8 +25,9 @@ function Router() {
       {/* Root Landing */}
       <Route path="/" component={LandingPage} />
 
-      {/* Verification */}
+      {/* Auth */}
       <Route path="/verify" component={VerifyPage} />
+      <Route path="/login" component={LoginPage} />
 
       {/* Driver Zone */}
       <Route path="/driver" component={DriverDashboard} />
