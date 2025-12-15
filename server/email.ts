@@ -1,9 +1,8 @@
 import { Resend } from "resend";
 
 const resendApiKey = process.env.RESEND_API_KEY;
-// Use Resend's test domain if no verified domain is configured
-// onboarding@resend.dev works without domain verification for testing
-const defaultFrom = process.env.MAIL_FROM || "PingPoint <onboarding@resend.dev>";
+// Use suverse.io verified domain for production emails
+const defaultFrom = process.env.MAIL_FROM || "PingPoint <info@suverse.io>";
 
 if (!resendApiKey) {
   console.warn("[Email] RESEND_API_KEY is not set; email sending will fallback to console logging.");
