@@ -1,0 +1,168 @@
+YOU ARE REPLIT BACKEND AGENT WORKING INSIDE THE EXISTING PINGPOINT PROJECT.
+HARD RULES:
+- Make the smallest, localized changes possible. Do NOT refactor unrelated code. Do NOT change existing flows, routes, DB fields, UI styling, or copy unless explicitly requested below.
+- Keep all existing features working exactly as-is (magic-link auth, loads CRUD, monthly free limit enforcement, billing page, banners, etc.).
+- If you must add new DB fields/models, make them backward-compatible (nullable or with safe defaults). Do NOT drop/rename existing columns.
+- After changes: the app must build and run; existing tests must still pass; add minimal new tests only for the new billing/solana pieces.
+
+GOAL:
+Add a new paid plan and mainnet Solana USDC payments without breaking anything:
+1) Add PRO plan: $99/month, 200 loads per cycle.
+2) Add DB models/tables for pending payments (payment intents) and subscription state (plan, cycle start/end).
+3) Add Solana Pay flow for USDC on SOLANA MAINNET (real chain): generate Solana Pay URL + QR, poll/verify payment on-chain, then upgrade broker to PRO and raise includedLoads from 3 to 200.
+4) Do NOT change the existing load-limit logic except to make it read includedLoads from the broker’s plan/subscription (FREE=3, PRO=200). All existing enforcement must remain server-authoritative.
+
+IMPORTANT NOTE:
+Mainnet payments are real money. Implementation must be safe: verify mint=USDC, recipient=merchant wallet, and amount matches exactly (99 USDC). Only then activate PRO.
+
+ENV / SECRETS (use existing patterns; do not hardcode secrets):
+- SOLANA_RPC_URL (default to https://api.mainnet-beta.solana.com if missing)
+- SOLANA_MERCHANT_WALLET (REQUIRED; merchant public key that receives USDC)
+- SOLANA_USDC_MINT (default to mainnet USDC mint: EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v)
+- BILLING_ENABLED (default "true")
+- Optional cosmetics: SOLANA_PAY_LABEL="PingPoint", SOLANA_PAY_MESSAGE="PingPoint Pro - 30 days / 200 loads"
+
+TECH STACK ASSUMPTIONS:
+- Existing backend is Express/TS (server/...), frontend is Next/React (app/...), DB via Prisma.
+- Keep the existing billing page UI and logic; only extend it to show PRO and Solana Pay.
+- Use @solana/web3.js and @solana/pay for reference scanning + transfer validation.
+
+STEP-BY-STEP TASKS
+
+A) DATABASE (Prisma) — BACKWARD COMPATIBLE
+1) Locate prisma schema (likely prisma/schema.prisma). Add the following models (names can be adjusted to fit existing naming conventions, but keep the intent):
+- BillingPlan: code (FREE/PRO), name, includedLoads, priceCents, intervalDays, active.
+- BrokerSubscription: brokerId (unique), planCode, status (ACTIVE/CANCELED), currentPeriodStart, currentPeriodEnd.
+- SolanaPaymentIntent: id (uuid), brokerId, planCode, amountBaseUnits (BigInt; USDC has 6 decimals so 99 USDC = 99000000), reference (string pubkey), status (PENDING/CONFIRMED/EXPIRED), signature (nullable), createdAt, confirmedAt (nullable), expiresAt.
+2) Update Broker model minimally:
+- Add field planCode (string) DEFAULT "FREE" OR do not add if subscription table alone is sufficient. Prefer using BrokerSubscription as source of truth, but if you add planCode it must default to FREE.
+3) Add seed/setup on startup (or migration default data) so FREE and PRO plans exist:
+- FREE: includedLoads=3, priceCents=0, intervalDays=30
+- PRO: includedLoads=200, priceCents=9900, intervalDays=30
+Do NOT require a separate manual seed command; ensure app can create missing plans lazily on server startup in a safe idempotent way.
+
+B) BACKEND — PLAN ENTITLEMENTS + SOLANA PAY
+1) Create a small billing service module (e.g., server/billing/service.ts) that exposes:
+- ensurePlansExist()
+- getBrokerEntitlements(brokerId): returns { planCode, includedLoads, periodStart, periodEnd }
+- activateProForBroker(brokerId): sets/creates subscription ACTIVE for 30 days from now with PRO and period end = now+30d
+2) Modify the existing load limit check to use includedLoads from getBrokerEntitlements(brokerId) instead of hardcoded 3.
+- This must remain server-side and authoritative.
+- Keep extra credits logic untouched.
+- Keep the existing error response shape/code (e.g., LOAD_LIMIT_REACHED with includedLoads), but includedLoads should now reflect the broker’s plan.
+3) Add/extend billing summary endpoint (if exists, extend; if not, add):
+GET /api/billing/summary
+Returns:
+{
+  planCode,
+  includedLoads,
+  loadsUsedThisCycle,
+  extraCredits,
+  cycleEndsAt,
+  remainingThisCycle,
+  limitReached: boolean
+}
+This endpoint will be used by frontend to display plan and to disable Create Load safely.
+
+C) SOLANA PAY MAINNET FLOW (USDC)
+Implement these endpoints (names can follow your existing routing style; keep consistent):
+
+1) POST /api/billing/solana/pro-intent
+- Auth required (broker must be logged in).
+- Creates a SolanaPaymentIntent:
+  - planCode="PRO"
+  - amountBaseUnits=99000000n
+  - reference = new random Keypair().publicKey (store base58 string)
+  - expiresAt = now + 30 minutes
+  - status="PENDING"
+- Build Solana Pay URL:
+  solana:<SOLANA_MERCHANT_WALLET>?amount=99&spl-token=<USDC_MINT>&reference=<reference>&label=<label>&message=<message>
+Use @solana/pay encodeURL to avoid mistakes; ensure it’s MAINNET and USDC mint is correct.
+- Return:
+{
+  intentId,
+  solanaPayUrl,
+  reference,
+  amount: "99",
+  token: "USDC",
+  expiresAt
+}
+
+2) GET /api/billing/solana/intents/:intentId
+- Auth required and must match brokerId owner.
+- If status is CONFIRMED/EXPIRED, return it.
+- If PENDING:
+  - If now > expiresAt: mark EXPIRED and return.
+  - Otherwise, attempt to find and validate payment:
+    - Use @solana/pay findReference(connection, new PublicKey(reference), {finality:"confirmed"}) to find signature.
+    - Then validateTransfer(connection, signature, { recipient: merchantWalletPubkey, amount: new BigNumber(99), splToken: USDC mint, reference: referencePubkey })
+  - If valid:
+    - Save signature
+    - Mark intent CONFIRMED, confirmedAt=now
+    - Call activateProForBroker(brokerId)
+    - Return updated status + plan info
+
+3) (Optional but helpful) GET /api/billing/solana/merchant
+Returns public info used by UI (merchant wallet, usdc mint, label/message) so UI does not hardcode. No secrets.
+
+Safety requirements:
+- Require SOLANA_MERCHANT_WALLET to be present; if missing, endpoints should return 500 with clear message for developer.
+- Do not “assume paid” on any error.
+- Only confirm when validateTransfer passes.
+- Use Connection(SOLANA_RPC_URL || default mainnet) and avoid devnet/testnet anywhere.
+
+D) FRONTEND — BILLING PAGE UI
+1) On /app/billing:
+- Keep current UI/styling.
+- Add a new section/card “PRO”:
+  - “$99 / month”
+  - “200 loads / cycle”
+  - Button: “PAY WITH USDC (SOLANA)”
+2) When button clicked:
+- Call POST /api/billing/solana/pro-intent
+- Show modal (or inline panel) with:
+  - QR code for solanaPayUrl
+  - Copyable solanaPayUrl
+  - Status text: “Waiting for payment…”
+- Poll GET /api/billing/solana/intents/:intentId every 3–5 seconds until CONFIRMED or EXPIRED.
+- On CONFIRMED:
+  - Show success (“Pro activated”)
+  - Refresh billing summary and update UI to show plan PRO and includedLoads=200.
+3) Also update Billing “Current Plan” display to show PRO when active.
+4) Do NOT implement Stripe now. Only show card payment as “Coming soon” if it already exists; don’t add new payment providers.
+
+E) DISABLE “CREATE LOAD” BUTTON WHEN LIMIT REACHED (SAFE)
+On /app/loads (main welcome page with Create Load button):
+- Use GET /api/billing/summary (or existing equivalent) to know limitReached.
+- If limitReached is true:
+  - Disable Create Load button (same style, but disabled)
+  - Show a small message under it: “FREE PLAN LIMIT REACHED (3 LOADS/MONTH). Upgrade or buy extra loads.”
+- This must be UI-only; server remains authoritative.
+
+F) TESTS
+- Add minimal tests to ensure:
+  - billing summary returns includedLoads=3 by default
+  - load creation is blocked at 3 loads for FREE (existing tests may already cover; don’t duplicate)
+  - pro-intent endpoint requires auth
+- Do NOT add heavy chain integration tests (mainnet) in CI; instead mock solana pay validation modules for unit tests.
+
+G) DOCUMENTATION
+Update README minimally:
+- Add section “PRO plan + Solana USDC payments (mainnet)”
+- List required env vars:
+  SOLANA_MERCHANT_WALLET, SOLANA_RPC_URL (optional), SOLANA_USDC_MINT (optional)
+- Explain flow: create intent → scan QR → polling confirms → plan upgrades.
+
+DELIVERABLE / ACCEPTANCE
+- App builds and runs.
+- FREE limit still works and is enforced server-side.
+- Billing page shows PRO plan and can generate a Solana Pay link/QR.
+- After a real mainnet USDC payment of exactly 99 USDC to merchant wallet via the Solana Pay link, broker plan becomes PRO and includedLoads becomes 200.
+- /app/loads Create Load button disables when limit is reached (based on billing summary).
+- No unrelated UI/logic changes.
+
+NOW EXECUTE:
+1) Inspect project structure, find existing billing/limit logic and reuse it.
+2) Implement steps A–G with minimal diff.
+3) Run typecheck/build/tests (or existing commands) and ensure no regressions.
+4) Summarize changes with file list and quick manual test checklist (login → billing → create intent → pay → confirm → create loads).

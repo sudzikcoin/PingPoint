@@ -255,6 +255,27 @@ export const stripePaymentsRelations = relations(stripePayments, ({ one }) => ({
   }),
 }));
 
+// Solana Payment Intents (for PRO plan USDC payments)
+export const solanaPaymentIntents = pgTable("solana_payment_intents", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  brokerId: uuid("broker_id").notNull().references(() => brokers.id),
+  planCode: text("plan_code").notNull().default("PRO"),
+  amountBaseUnits: text("amount_base_units").notNull(), // USDC has 6 decimals, store as string for BigInt
+  reference: text("reference").notNull().unique(), // Solana Pay reference pubkey (base58)
+  status: text("status").notNull().default("PENDING"), // PENDING, CONFIRMED, EXPIRED
+  signature: text("signature"), // Transaction signature when confirmed
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  confirmedAt: timestamp("confirmed_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`now()`),
+});
+
+export const solanaPaymentIntentsRelations = relations(solanaPaymentIntents, ({ one }) => ({
+  broker: one(brokers, {
+    fields: [solanaPaymentIntents.brokerId],
+    references: [brokers.id],
+  }),
+}));
+
 // Broker Usage tracking (separate from entitlements for demo/billing architecture)
 export const brokerUsage = pgTable("broker_usage", {
   id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -374,6 +395,7 @@ export type StripeWebhookEvent = typeof stripeWebhookEvents.$inferSelect;
 export type StripePayment = typeof stripePayments.$inferSelect;
 export type BrokerUsage = typeof brokerUsage.$inferSelect;
 export type StopGeofenceState = typeof stopGeofenceState.$inferSelect;
+export type SolanaPaymentIntent = typeof solanaPaymentIntents.$inferSelect;
 export type InsertActivityLog = {
   entityType: string;
   entityId: string;
