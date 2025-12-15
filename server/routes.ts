@@ -707,6 +707,11 @@ export async function registerRoutes(
         }
       }
 
+      // Track usage (non-blocking) - always track even if not enforcing
+      incrementLoadsCreated(broker.id).catch(err => 
+        console.error("Error tracking usage:", err)
+      );
+
       return res.status(201).json({
         id: load.id,
         loadNumber: load.loadNumber,
@@ -890,6 +895,10 @@ export async function registerRoutes(
         source: "DRIVER_APP",
       });
 
+      // Evaluate geofences for auto-arrive/depart (non-blocking)
+      evaluateGeofencesForActiveLoad(load.driverId, load.id, parseFloat(lat), parseFloat(lng))
+        .catch(err => console.error("Error evaluating geofences:", err));
+
       return res.json({ ok: true, pingId: ping.id });
     } catch (error) {
       console.error("Error in /api/driver/:token/ping:", error);
@@ -924,6 +933,22 @@ export async function registerRoutes(
   // Rate confirmation file upload
   // Serve uploads directory
   // Billing endpoints
+
+  // GET /api/broker/usage - Get broker usage summary (cycle tracking)
+  app.get("/api/broker/usage", async (req: Request, res: Response) => {
+    try {
+      const broker = await getBrokerFromRequest(req);
+      if (!broker) {
+        return res.status(401).json({ error: "Unauthorized" });
+      }
+
+      const usage = await getUsageSummary(broker.id);
+      return res.json(usage);
+    } catch (error) {
+      console.error("Error in GET /api/broker/usage:", error);
+      return res.status(500).json({ error: "Internal server error" });
+    }
+  });
 
   // GET /api/billing/summary - Get billing summary for current broker
   app.get("/api/billing/summary", async (req: Request, res: Response) => {
