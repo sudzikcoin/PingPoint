@@ -1,8 +1,9 @@
 import { db } from "../../db";
-import { brokers, verificationTokens, drivers, loads, stops, trackingPings, brokerFieldHints, brokerDevices, brokerEntitlements, brokerCredits, stripeWebhookEvents, stripePayments } from "@shared/schema";
+import { brokers, verificationTokens, drivers, loads, stops, trackingPings, brokerFieldHints, brokerDevices, brokerEntitlements, brokerCredits, stripeWebhookEvents, stripePayments, brokerUsage, stopGeofenceState } from "@shared/schema";
 import { randomUUID } from "crypto";
 
 export async function resetDatabase() {
+  await db.delete(stopGeofenceState);
   await db.delete(trackingPings);
   await db.delete(stops);
   await db.delete(stripePayments);
@@ -12,6 +13,7 @@ export async function resetDatabase() {
   await db.delete(brokerDevices);
   await db.delete(brokerEntitlements);
   await db.delete(brokerCredits);
+  await db.delete(brokerUsage);
   await db.delete(stripeWebhookEvents);
   await db.delete(drivers);
   await db.delete(brokers);
@@ -77,6 +79,9 @@ export async function createTestStop(options: {
   type: "PICKUP" | "DELIVERY";
   sequence: number;
   status?: string;
+  lat?: string;
+  lng?: string;
+  geofenceRadiusM?: number;
 }) {
   const [stop] = await db.insert(stops).values({
     loadId: options.loadId,
@@ -86,6 +91,9 @@ export async function createTestStop(options: {
     fullAddress: "123 Test St, Test City, TX 75001",
     city: "Test City",
     state: "TX",
+    lat: options.lat || null,
+    lng: options.lng || null,
+    geofenceRadiusM: options.geofenceRadiusM || 300,
     windowFrom: null,
     windowTo: null,
     arrivedAt: null,

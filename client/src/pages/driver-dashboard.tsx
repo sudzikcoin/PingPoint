@@ -1,9 +1,9 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { useLocation, useRoute } from "wouter";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
-import { Truck, ChevronRight, Navigation, Calendar, MapPin, Loader2, CheckCircle2, Circle } from "lucide-react";
+import { Truck, ChevronRight, Navigation, Calendar, MapPin, Loader2, CheckCircle2, Circle, Signal, SignalZero } from "lucide-react";
 import { format } from "date-fns";
 import { PillButton } from "@/components/ui/pill-button";
 import { ThemeToggle } from "@/components/ui/theme-toggle";
@@ -11,6 +11,8 @@ import { useTheme } from "@/context/theme-context";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
+
+const AUTO_PING_INTERVAL_MS = 2 * 60 * 1000; // 2 minutes
 
 interface Stop {
   id: string;
@@ -42,6 +44,9 @@ export default function DriverDashboard() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [sendingPing, setSendingPing] = useState(false);
+  const [autoPingEnabled, setAutoPingEnabled] = useState(false);
+  const [lastPingTime, setLastPingTime] = useState<Date | null>(null);
+  const autoPingIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
   const driverToken = tokenParams?.token;
 
@@ -70,6 +75,69 @@ export default function DriverDashboard() {
 
     fetchLoad();
   }, [driverToken]);
+
+  const sendSilentPing = useCallback(async () => {
+    if (!driverToken || !("geolocation" in navigator)) return;
+
+    try {
+      navigator.geolocation.getCurrentPosition(
+        async (position) => {
+          const { latitude, longitude, accuracy } = position.coords;
+          
+          const res = await fetch(`/api/driver/${driverToken}/ping`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ lat: latitude, lng: longitude, accuracy }),
+          });
+
+          if (res.ok) {
+            setLastPingTime(new Date());
+            const loadRes = await fetch(`/api/driver/${driverToken}`);
+            if (loadRes.ok) {
+              const data = await loadRes.json();
+              setLoad(data);
+            }
+          }
+        },
+        (err) => {
+          console.error("Auto-ping geolocation error:", err);
+        },
+        { enableHighAccuracy: true, timeout: 15000 }
+      );
+    } catch (err) {
+      console.error("Auto-ping error:", err);
+    }
+  }, [driverToken]);
+
+  useEffect(() => {
+    if (autoPingEnabled && driverToken && load) {
+      sendSilentPing();
+      
+      autoPingIntervalRef.current = setInterval(sendSilentPing, AUTO_PING_INTERVAL_MS);
+      
+      return () => {
+        if (autoPingIntervalRef.current) {
+          clearInterval(autoPingIntervalRef.current);
+          autoPingIntervalRef.current = null;
+        }
+      };
+    } else {
+      if (autoPingIntervalRef.current) {
+        clearInterval(autoPingIntervalRef.current);
+        autoPingIntervalRef.current = null;
+      }
+    }
+  }, [autoPingEnabled, driverToken, load, sendSilentPing]);
+
+  const toggleAutoPing = () => {
+    const newValue = !autoPingEnabled;
+    setAutoPingEnabled(newValue);
+    if (newValue) {
+      toast.success("Auto-tracking enabled (every 2 min)");
+    } else {
+      toast.info("Auto-tracking disabled");
+    }
+  };
 
   const sendLocationPing = async () => {
     if (!driverToken) return;
@@ -336,20 +404,58 @@ export default function DriverDashboard() {
               </div>
             )}
 
-            {/* Send Location Button */}
-            <Button
-              onClick={sendLocationPing}
-              disabled={sendingPing}
-              className={cn(
-                "w-full mb-4",
-                theme === "arcade90s"
-                  ? "bg-arc-primary text-black rounded-none shadow-arc-glow-yellow hover:bg-arc-primary/80"
-                  : "bg-brand-gold text-black hover:bg-brand-gold/80"
-              )}
-            >
-              <Navigation className="w-4 h-4 mr-2" />
-              {sendingPing ? "Sending..." : "Send My Location"}
-            </Button>
+            {/* Location Tracking Buttons */}
+            <div className="flex gap-2 mb-4">
+              <Button
+                onClick={sendLocationPing}
+                disabled={sendingPing}
+                className={cn(
+                  "flex-1",
+                  theme === "arcade90s"
+                    ? "bg-arc-primary text-black rounded-none shadow-arc-glow-yellow hover:bg-arc-primary/80"
+                    : "bg-brand-gold text-black hover:bg-brand-gold/80"
+                )}
+                data-testid="button-send-location"
+              >
+                <Navigation className="w-4 h-4 mr-2" />
+                {sendingPing ? "Sending..." : "Send Location"}
+              </Button>
+              <Button
+                onClick={toggleAutoPing}
+                variant={autoPingEnabled ? "default" : "outline"}
+                className={cn(
+                  "px-4",
+                  theme === "arcade90s"
+                    ? autoPingEnabled
+                      ? "bg-arc-secondary text-black rounded-none"
+                      : "bg-transparent border-arc-border text-arc-muted rounded-none hover:bg-arc-secondary/20"
+                    : autoPingEnabled
+                      ? "bg-emerald-600 text-white hover:bg-emerald-700"
+                      : "bg-transparent border-brand-border text-brand-muted hover:bg-brand-border/20"
+                )}
+                data-testid="button-toggle-auto-ping"
+              >
+                {autoPingEnabled ? <Signal className="w-4 h-4" /> : <SignalZero className="w-4 h-4" />}
+              </Button>
+            </div>
+
+            {/* Auto-ping status */}
+            {autoPingEnabled && (
+              <div className={cn(
+                "text-xs text-center mb-4 p-2 rounded",
+                theme === "arcade90s" 
+                  ? "bg-arc-secondary/10 text-arc-secondary border border-arc-secondary/30" 
+                  : "bg-emerald-500/10 text-emerald-400 border border-emerald-500/30"
+              )}>
+                <Signal className="w-3 h-3 inline mr-1" />
+                Auto-tracking active
+                {lastPingTime && (
+                  <span className="ml-2 opacity-70">
+                    (Last: {format(lastPingTime, "h:mm a")})
+                  </span>
+                )}
+              </div>
+            )}
           </CardContent>
         </Card>
 
