@@ -14,6 +14,7 @@ import { strictRateLimit } from "./middleware/rateLimit";
 import { checkAndConsumeLoadAllowance, rollbackLoadAllowance, getBillingSummary, FREE_INCLUDED_LOADS } from "./billing/entitlements";
 import { createCheckoutSession, verifyWebhookSignature, processStripeEvent } from "./billing/stripe";
 import { incrementLoadsCreated, getUsageSummary } from "./billing/usage";
+import { createProPaymentIntent, checkAndConfirmIntent, getMerchantInfo } from "./billing/solana";
 import { evaluateGeofencesForActiveLoad } from "./geofence";
 
 const uploadsDir = path.join(process.cwd(), "uploads", "rate-confirmations");
@@ -1047,6 +1048,73 @@ export async function registerRoutes(
         return res.status(503).json({ error: "Webhook processing unavailable" });
       }
       return res.status(400).json({ error: error.message || "Webhook error" });
+    }
+  });
+
+  // ==================== SOLANA PAY ENDPOINTS ====================
+
+  // GET /api/billing/solana/merchant - Get merchant info for Solana Pay
+  app.get("/api/billing/solana/merchant", async (_req: Request, res: Response) => {
+    try {
+      const info = getMerchantInfo();
+      return res.json(info);
+    } catch (error: any) {
+      console.error("Error in GET /api/billing/solana/merchant:", error);
+      return res.status(500).json({ error: "Failed to get merchant info" });
+    }
+  });
+
+  // POST /api/billing/solana/pro-intent - Create PRO plan payment intent
+  app.post("/api/billing/solana/pro-intent", async (req: Request, res: Response) => {
+    try {
+      const broker = await getBrokerFromRequest(req);
+      if (!broker) {
+        return res.status(401).json({ error: "Unauthorized" });
+      }
+
+      const merchantInfo = getMerchantInfo();
+      if (!merchantInfo.configured) {
+        return res.status(503).json({ 
+          error: "Solana payments not configured. Please set SOLANA_MERCHANT_WALLET environment variable.",
+          code: "SOLANA_NOT_CONFIGURED"
+        });
+      }
+
+      const intent = await createProPaymentIntent(broker.id);
+      return res.json(intent);
+    } catch (error: any) {
+      console.error("Error in POST /api/billing/solana/pro-intent:", error);
+      if (error.message?.includes("SOLANA_MERCHANT_WALLET")) {
+        return res.status(503).json({ 
+          error: "Solana payments not configured",
+          code: "SOLANA_NOT_CONFIGURED"
+        });
+      }
+      return res.status(500).json({ error: "Failed to create payment intent" });
+    }
+  });
+
+  // GET /api/billing/solana/intents/:intentId - Check payment intent status
+  app.get("/api/billing/solana/intents/:intentId", async (req: Request, res: Response) => {
+    try {
+      const broker = await getBrokerFromRequest(req);
+      if (!broker) {
+        return res.status(401).json({ error: "Unauthorized" });
+      }
+
+      const { intentId } = req.params;
+      if (!intentId) {
+        return res.status(400).json({ error: "Intent ID is required" });
+      }
+
+      const status = await checkAndConfirmIntent(intentId, broker.id);
+      return res.json(status);
+    } catch (error: any) {
+      console.error("Error in GET /api/billing/solana/intents:", error);
+      if (error.message?.includes("not found")) {
+        return res.status(404).json({ error: "Payment intent not found" });
+      }
+      return res.status(500).json({ error: "Failed to check payment status" });
     }
   });
 

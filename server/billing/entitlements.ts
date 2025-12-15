@@ -3,7 +3,8 @@ import { brokerEntitlements, brokerCredits } from "@shared/schema";
 import { eq, sql } from "drizzle-orm";
 
 export const FREE_INCLUDED_LOADS = 3;
-export const FREE_CYCLE_DAYS = 30;
+export const PRO_INCLUDED_LOADS = 200;
+export const CYCLE_DAYS = 30;
 
 export interface LoadAllowanceResult {
   allowed: boolean;
@@ -22,7 +23,7 @@ export interface EntitlementSummary {
 
 export async function ensureBrokerEntitlements(brokerId: string) {
   const now = new Date();
-  const cycleEnd = new Date(now.getTime() + FREE_CYCLE_DAYS * 24 * 60 * 60 * 1000);
+  const cycleEnd = new Date(now.getTime() + CYCLE_DAYS * 24 * 60 * 60 * 1000);
 
   const [existingEntitlement] = await db
     .select()
@@ -75,14 +76,15 @@ export async function resetCycleIfNeeded(brokerId: string) {
   const now = new Date();
 
   if (now > entitlement.cycleEndAt) {
-    const newCycleEnd = new Date(now.getTime() + FREE_CYCLE_DAYS * 24 * 60 * 60 * 1000);
-
+    const newCycleEnd = new Date(now.getTime() + CYCLE_DAYS * 24 * 60 * 60 * 1000);
+    
+    // When cycle expires, PRO users revert to FREE, FREE users stay FREE
     const [updated] = await db
       .update(brokerEntitlements)
       .set({
         cycleStartAt: now,
         cycleEndAt: newCycleEnd,
-        includedLoads: FREE_INCLUDED_LOADS,
+        includedLoads: FREE_INCLUDED_LOADS, // Always reset to FREE when cycle expires
         loadsUsed: 0,
         plan: "FREE",
         status: "active",
@@ -91,6 +93,7 @@ export async function resetCycleIfNeeded(brokerId: string) {
       .where(eq(brokerEntitlements.brokerId, brokerId))
       .returning();
 
+    console.log(`[Billing] Broker ${brokerId}: cycle expired, reset to FREE plan`);
     return updated;
   }
 
