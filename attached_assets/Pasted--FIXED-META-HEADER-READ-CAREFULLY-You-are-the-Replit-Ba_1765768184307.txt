@@ -1,0 +1,257 @@
+[FIXED META-HEADER — READ CAREFULLY]
+You are the Replit Backend Agent working inside the existing **PingPoint** codebase.
+NON-NEGOTIABLE: Make MINIMAL, LOCALIZED changes. Do NOT refactor unrelated files. Do NOT change existing schemas/flows unless explicitly instructed. Preserve existing magic-link auth, Broker Console, Driver app, Public tracking. If something is unclear, prefer adding small helper functions instead of restructuring.
+
+GOAL (THIS RUN)
+Implement “Stage 1–2 Billing” WITHOUT breaking what already works:
+A) Enforce load limits per broker:
+   - FREE: 3 loads per 30 days
+   - Allow “extra loads” via credits (one credit = one extra load)
+B) Add Stripe “one-time” purchases:
+   - $0.99 per extra load (credits)
+   - Stripe Checkout + Webhook to grant credits
+C) Minimal UI wiring:
+   - When limit reached, show a clear error (code) so frontend can display CTA
+   - Add a very small Billing UI entrypoint (e.g. /app/billing or a section in Settings) to buy credits
+NO Pro subscription yet in this run. NO Solana yet in this run. (We’ll do those next.)
+
+────────────────────────────────────────────────────────
+PHASE 0 — QUICK AUDIT (DO NOT CHANGE YET)
+────────────────────────────────────────────────────────
+1) Locate:
+   - Load creation endpoint (likely POST /api/loads).
+   - How “current broker” is determined (session/cookie helper).
+   - Existing DB layer (Drizzle) and schema file (shared/schema.ts).
+   - Existing frontend: New Load form submit + error handling and any existing Billing/Settings page.
+
+2) Confirm there is a reliable brokerId available server-side for load creation.
+   - If first-time broker creation is email-based in /api/loads, keep it.
+   - We must enforce limits once broker is identified.
+
+────────────────────────────────────────────────────────
+PHASE 1 — DATABASE: ENTITLEMENTS + CREDITS + STRIPE EVENT IDEMPOTENCY
+────────────────────────────────────────────────────────
+Add new tables in `shared/schema.ts` (Drizzle), with minimal fields.
+
+1) Create `brokerEntitlements` table (one row per broker):
+   - brokerId (PK or unique)
+   - plan (text) default 'FREE' (keep for future; only FREE used now)
+   - cycleStartAt (timestamp, not null)
+   - cycleEndAt (timestamp, not null)
+   - includedLoads (int, not null) default 3
+   - loadsUsed (int, not null) default 0
+   - status (text) default 'active'
+   - updatedAt (timestamp)
+
+2) Create `brokerCredits` table (one row per broker):
+   - brokerId (PK or unique)
+   - creditsBalance (int, not null) default 0
+   - updatedAt (timestamp)
+
+3) Create `stripeWebhookEvents` table for idempotency:
+   - id (PK)
+   - eventId (text, unique, not null)
+   - type (text)
+   - receivedAt (timestamp default now)
+
+4) (Optional but useful) Create `stripePayments` table:
+   - id (PK)
+   - brokerId
+   - checkoutSessionId
+   - paymentIntentId
+   - amount (int, cents)
+   - currency (text)
+   - status (text)
+   - createdAt
+
+5) Add indexes:
+   - unique on brokerEntitlements.brokerId
+   - unique on brokerCredits.brokerId
+   - unique on stripeWebhookEvents.eventId
+
+6) Run `npm run db:push` and ensure no errors.
+
+────────────────────────────────────────────────────────
+PHASE 2 — SERVER: ENTITLEMENT SERVICE + ENFORCEMENT IN /api/loads
+────────────────────────────────────────────────────────
+Implement a small service module, e.g. `server/billing/entitlements.ts` (or similar), no refactors elsewhere.
+
+1) Constants:
+   - FREE_INCLUDED_LOADS = 3
+   - FREE_CYCLE_DAYS = 30
+
+2) Implement functions:
+   a) `ensureBrokerEntitlements(brokerId: string): Promise<Entitlement>`
+      - If entitlements row doesn’t exist: create FREE row:
+        - cycleStartAt = now
+        - cycleEndAt = now + 30 days
+        - includedLoads = 3
+        - loadsUsed = 0
+        - status = 'active'
+      - Ensure brokerCredits row exists too (create with 0 if missing).
+
+   b) `resetCycleIfNeeded(brokerId: string): Promise<Entitlement>`
+      - Load entitlement.
+      - If now > cycleEndAt:
+        - set cycleStartAt=now
+        - cycleEndAt=now+30 days
+        - includedLoads=3
+        - loadsUsed=0
+        - plan='FREE' (for now)
+        - status='active'
+      - Return updated row.
+
+   c) `checkAndConsumeLoadAllowance(brokerId: string): Promise<{ allowed: boolean; usedCredit?: boolean; reason?: string }>`
+      Behavior:
+      - Ensure entitlements + credits exist.
+      - Reset cycle if expired.
+      - If loadsUsed < includedLoads:
+          - increment loadsUsed by 1 (atomic update)
+          - return allowed=true
+      - Else if creditsBalance > 0:
+          - decrement creditsBalance by 1 (atomic update)
+          - return allowed=true, usedCredit=true
+      - Else:
+          - return allowed=false, reason='LOAD_LIMIT_REACHED'
+
+IMPORTANT: Use atomic DB updates (UPDATE ... SET loadsUsed = loadsUsed + 1 WHERE ...) to avoid race conditions.
+If you can, wrap the “check and consume” in a transaction. If transactions are already used in the codebase, reuse that pattern.
+
+3) Integrate into the load creation endpoint:
+   - Find POST /api/loads handler.
+   - Determine brokerId (existing logic).
+   - BEFORE creating the load in DB:
+     - call `checkAndConsumeLoadAllowance(brokerId)`
+     - if not allowed:
+         - return HTTP 402 (Payment Required) with JSON:
+           { code: "LOAD_LIMIT_REACHED", message: "You’ve reached your monthly limit (3 loads). Buy extra loads or upgrade.", includedLoads: 3 }
+   - If allowed:
+     - proceed to create the load as usual.
+   - If load creation FAILS after we consumed allowance:
+     - We must “rollback” the counter best-effort:
+       - If we incremented loadsUsed, decrement it.
+       - If we used credit, increment creditsBalance back.
+     Implement this rollback in the catch block to avoid charging for failed creates.
+
+4) Add logging (server-side) ONLY around billing decisions, e.g.:
+   - brokerId, allowed, usedCredit, loadsUsed/includedLoads, creditsBalance.
+
+────────────────────────────────────────────────────────
+PHASE 3 — STRIPE: BUY EXTRA LOADS ($0.99 CREDIT) + WEBHOOK GRANTING
+────────────────────────────────────────────────────────
+Add Stripe Checkout for one-time purchases of credits.
+
+1) Dependencies:
+   - If `stripe` package is not installed, add it (minimal).
+   - Ensure webhook endpoint can access raw body.
+
+2) ENV (add to `.env.production.example` too):
+   - STRIPE_SECRET_KEY=...
+   - STRIPE_WEBHOOK_SECRET=...
+   - STRIPE_PRICE_EXTRA_LOAD=price_xxx   (Price ID for $0.99 credit)
+   - PINGPOINT_PUBLIC_URL=https://yourdomain.com (already exists)
+   - (Optional) STRIPE_CURRENCY=usd
+
+3) Create server config wrapper, e.g. `server/billing/stripe.ts`:
+   - Instantiate Stripe with `STRIPE_SECRET_KEY`.
+
+4) Endpoint: `POST /api/billing/stripe/checkout-credits`
+   - Auth: broker must be logged in (use existing broker session logic).
+   - Body: { quantity?: number }
+     - validate quantity: integer 1..500 (default 1)
+   - Create Stripe Checkout Session:
+     - mode: "payment"
+     - line_items: [{ price: STRIPE_PRICE_EXTRA_LOAD, quantity }]
+     - metadata: { brokerId, credits: String(quantity), kind: "extra_load_credits" }
+     - success_url: `${PINGPOINT_PUBLIC_URL}/app/billing/success?session_id={CHECKOUT_SESSION_ID}`
+     - cancel_url: `${PINGPOINT_PUBLIC_URL}/app/billing`
+   - Return JSON: { url: session.url }
+
+5) Webhook: `POST /api/billing/stripe/webhook`
+   - MUST use `express.raw({ type: 'application/json' })` for this route ONLY.
+   - Verify signature using STRIPE_WEBHOOK_SECRET.
+   - Idempotency: before processing, check `stripeWebhookEvents` by event.id; if exists, return 200 quickly.
+   - Handle at least:
+     a) `checkout.session.completed`
+        - Ensure it’s mode=payment and metadata.kind="extra_load_credits"
+        - Extract brokerId and credits quantity from metadata.
+        - Atomically upsert brokerCredits row and increment `creditsBalance += credits`.
+        - Optionally insert a stripePayments row with session/payment info.
+        - Record stripeWebhookEvents(eventId,type).
+     (You may also safely ignore other events.)
+   - Return 200.
+
+6) Add a small internal helper: `grantCredits(brokerId, credits, source)` used by webhook.
+
+7) Tests (Vitest) — keep minimal and stable:
+   - Unit-test `checkAndConsumeLoadAllowance` with:
+     - brand new broker -> allows 3 creates, 4th returns not allowed.
+     - with creditsBalance=2 -> after limit, allows 2 more, then blocks.
+   - For Stripe webhook: do NOT attempt real signature verification in unit tests.
+     - Instead, factor the “process event payload” logic into a pure function:
+       `processStripeEvent(event: Stripe.Event)` that assumes event is verified.
+     - Test idempotency by inserting stripeWebhookEvents first then ensure processing no-ops.
+
+────────────────────────────────────────────────────────
+PHASE 4 — FRONTEND: MINIMAL BILLING UI + BETTER ERROR UX
+────────────────────────────────────────────────────────
+We need the broker to be able to buy credits, and to understand when they hit a limit.
+
+1) Ensure frontend API helpers parse server error JSON messages (if not already).
+   - When /api/loads returns 402 with code LOAD_LIMIT_REACHED, surface message to user.
+
+2) Add a minimal UI entrypoint:
+   Option A (preferred minimal): Add `/app/billing` page with:
+     - Current plan: FREE
+     - Loads used / included (read from a new endpoint or compute in response)
+     - Credits balance
+     - A quantity selector (1..100) and a “Buy extra loads ($0.99 each)” button
+   Option B (even smaller): Add the same block inside Settings page.
+
+Choose whichever is simpler in the current codebase routing.
+
+3) Add endpoint: `GET /api/billing/summary`
+   - Auth: broker required
+   - Returns:
+     - plan, cycleEndAt, includedLoads, loadsUsed, creditsBalance
+   - Frontend uses it to display the numbers.
+
+4) On “Buy” button:
+   - Call `POST /api/billing/stripe/checkout-credits` with quantity
+   - Redirect browser to returned `url`.
+
+5) On limit reached during Create Load:
+   - Show toast/banner with the backend message.
+   - Include a small link/button “Buy extra loads” → navigate to `/app/billing`.
+
+Keep styling consistent (don’t redesign).
+
+────────────────────────────────────────────────────────
+PHASE 5 — FINAL SAFETY CHECKS (DO NOT SKIP)
+────────────────────────────────────────────────────────
+1) Build:
+   - `npm run build` must pass.
+
+2) Tests:
+   - `npm test` (or `npx vitest`) must pass.
+   - Ensure existing tests still pass.
+
+3) Manual flows:
+   A) Free limit:
+      - New broker: create 3 loads -> ok
+      - 4th load -> blocked with visible message + CTA to billing
+   B) Credits:
+      - Buy 2 credits via Stripe Checkout (in test mode)
+      - After webhook processed, creditsBalance increases by 2
+      - Create 2 more loads beyond free limit -> ok, credits decrease
+      - Next create -> blocked again
+
+4) Do NOT touch Pro subscription and do NOT implement Solana in this run.
+
+DELIVERABLES
+- DB changes in shared/schema.ts + migration via db:push
+- Entitlements/credits enforcement in POST /api/loads
+- Stripe checkout endpoint + verified webhook + idempotency table
+- Minimal billing UI + billing summary endpoint
+- Tests for entitlements and webhook processor
+- Update `.env.production.example` with Stripe env vars

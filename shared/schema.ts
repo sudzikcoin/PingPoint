@@ -191,6 +191,69 @@ export const rateConfirmationFilesRelations = relations(rateConfirmationFiles, (
   }),
 }));
 
+// Broker Entitlements (billing limits per cycle)
+export const brokerEntitlements = pgTable("broker_entitlements", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  brokerId: uuid("broker_id").notNull().references(() => brokers.id).unique(),
+  plan: text("plan").notNull().default("FREE"),
+  cycleStartAt: timestamp("cycle_start_at", { withTimezone: true }).notNull(),
+  cycleEndAt: timestamp("cycle_end_at", { withTimezone: true }).notNull(),
+  includedLoads: integer("included_loads").notNull().default(3),
+  loadsUsed: integer("loads_used").notNull().default(0),
+  status: text("status").notNull().default("active"),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().default(sql`now()`),
+});
+
+export const brokerEntitlementsRelations = relations(brokerEntitlements, ({ one }) => ({
+  broker: one(brokers, {
+    fields: [brokerEntitlements.brokerId],
+    references: [brokers.id],
+  }),
+}));
+
+// Broker Credits (extra load credits purchased)
+export const brokerCredits = pgTable("broker_credits", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  brokerId: uuid("broker_id").notNull().references(() => brokers.id).unique(),
+  creditsBalance: integer("credits_balance").notNull().default(0),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().default(sql`now()`),
+});
+
+export const brokerCreditsRelations = relations(brokerCredits, ({ one }) => ({
+  broker: one(brokers, {
+    fields: [brokerCredits.brokerId],
+    references: [brokers.id],
+  }),
+}));
+
+// Stripe Webhook Events (idempotency tracking)
+export const stripeWebhookEvents = pgTable("stripe_webhook_events", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  eventId: text("event_id").notNull().unique(),
+  type: text("type"),
+  receivedAt: timestamp("received_at", { withTimezone: true }).notNull().default(sql`now()`),
+});
+
+// Stripe Payments (payment records)
+export const stripePayments = pgTable("stripe_payments", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  brokerId: uuid("broker_id").notNull().references(() => brokers.id),
+  checkoutSessionId: text("checkout_session_id"),
+  paymentIntentId: text("payment_intent_id"),
+  amount: integer("amount").notNull(),
+  currency: text("currency").notNull().default("usd"),
+  status: text("status").notNull(),
+  creditsGranted: integer("credits_granted"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`now()`),
+});
+
+export const stripePaymentsRelations = relations(stripePayments, ({ one }) => ({
+  broker: one(brokers, {
+    fields: [stripePayments.brokerId],
+    references: [brokers.id],
+  }),
+}));
+
 // Activity Log / Events model
 export const activityLogs = pgTable("activity_logs", {
   id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -261,6 +324,10 @@ export type TrackingPing = typeof trackingPings.$inferSelect;
 export type InsertTrackingPing = z.infer<typeof insertTrackingPingSchema>;
 export type RateConfirmationFile = typeof rateConfirmationFiles.$inferSelect;
 export type ActivityLog = typeof activityLogs.$inferSelect;
+export type BrokerEntitlement = typeof brokerEntitlements.$inferSelect;
+export type BrokerCredit = typeof brokerCredits.$inferSelect;
+export type StripeWebhookEvent = typeof stripeWebhookEvents.$inferSelect;
+export type StripePayment = typeof stripePayments.$inferSelect;
 export type InsertActivityLog = {
   entityType: string;
   entityId: string;
