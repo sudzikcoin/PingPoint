@@ -16,6 +16,7 @@ export default function AppLoadNew() {
   const { theme } = useTheme();
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [limitReached, setLimitReached] = useState<{ message: string } | null>(null);
 
   // Form state with profile prefill
   const [brokerName, setBrokerName] = useState("");
@@ -119,6 +120,9 @@ export default function AppLoadNew() {
       // UI Feedback & Redirect
       toast.success(`Load ${newLoad.loadNumber} created!`);
       
+      // Clear limit flag on success
+      localStorage.removeItem("pp_loadLimitReached");
+      
       setLocation(`/app/loads`);
     
     } catch (error: any) {
@@ -137,6 +141,9 @@ export default function AppLoadNew() {
             onClick: () => setLocation("/app/billing"),
           },
         });
+        // Set banner + localStorage flag
+        setLimitReached({ message: error.message || "You've reached your monthly limit (3 loads). Upgrade or buy extra load credits." });
+        localStorage.setItem("pp_loadLimitReached", "true");
       } else {
         toast.error(error.message || "Failed to create load. Please try again.");
       }
@@ -190,6 +197,33 @@ export default function AppLoadNew() {
             </p>
           </div>
         </div>
+
+        {/* Limit Reached Banner */}
+        {limitReached && (
+          <div className={cn(
+            "p-4 rounded-lg border flex flex-col gap-2",
+            theme === "arcade90s"
+              ? "bg-red-900/30 border-red-500/50 text-red-300"
+              : "bg-red-900/20 border-red-500/30 text-red-400"
+          )}>
+            <div className={cn("font-bold text-sm uppercase tracking-wide", theme === "arcade90s" ? "arcade-pixel-font" : "")}>
+              Free Plan Limit Reached
+            </div>
+            <p className="text-sm">{limitReached.message}</p>
+            <Button
+              type="button"
+              onClick={() => setLocation("/app/billing")}
+              className={cn(
+                "w-fit mt-2",
+                theme === "arcade90s"
+                  ? "bg-arc-primary text-black rounded-none arcade-pixel-font text-xs"
+                  : "bg-brand-gold text-black"
+              )}
+            >
+              Go to Billing
+            </Button>
+          </div>
+        )}
 
         <form onSubmit={handleSubmit} className="space-y-8">
           {/* General Info */}

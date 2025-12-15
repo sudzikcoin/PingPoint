@@ -1,0 +1,40 @@
+You are working in the existing PingPoint repo. Make MINIMAL, LOCALIZED changes only. Do NOT refactor, do NOT rename routes, do NOT touch backend logic, DB, auth, or existing flows except where explicitly requested. Goal: show a clear UI warning when Free monthly load limit is reached, and disable "Create Load" button on /app/loads when the limit is already known to be reached. Use existing UI styling patterns (Tailwind) and existing routing/navigation utilities already used in the project.
+
+REQUIREMENTS
+A) On the New Load page (/app/loads/new):
+1) When creating a load fails with HTTP 402 and error code "LOAD_LIMIT_REACHED", show a visible on-page warning banner (not only console). The banner must include:
+   - Title like "Free plan limit reached"
+   - The server-provided message text (e.g., "You've reached your monthly limit (3 loads)...")
+   - A link/button "Go to Billing" that navigates to /app/billing (or the existing billing route used in the app if different).
+2) Also trigger the existing toast error (keep it), but the banner is mandatory.
+3) Persist a local flag so the loads list page can disable the Create button:
+   - localStorage key: "pp_loadLimitReached" value "true" when this error occurs.
+4) If a load is created successfully, clear that flag:
+   - removeItem("pp_loadLimitReached") or set to "false" (prefer removeItem).
+
+B) On the Loads list page (/app/loads):
+1) Disable the "Create Load" button if localStorage("pp_loadLimitReached")==="true".
+2) When disabled, show a small helper text near the button (or under it) like:
+   "Free plan limit reached (3 loads/month). Upgrade or buy extra loads."
+   Include a clickable link/button to /app/billing.
+3) Ensure the disabled button is visibly disabled (opacity + cursor-not-allowed) and cannot navigate to /app/loads/new.
+4) Keep the rest of the page unchanged.
+
+IMPLEMENTATION NOTES
+- Use only client-side changes.
+- Find the New Load page file. It is likely named something like:
+  client/src/pages/app-load-new.tsx (or similar). Modify that file.
+- Find the Loads list page file. It is likely named something like:
+  client/src/pages/app-loads.tsx or client/src/pages/app-loads-index.tsx (or similar). Modify that file.
+- Use the existing navigation method used in the codebase (e.g., wouter useLocation, next/router, or whatever is present). Do not introduce a new router dependency.
+- Error handling: the API error object may be {error, code, includedLoads}. The code "LOAD_LIMIT_REACHED" must be checked robustly (err?.code or err?.response?.data?.code depending on current client wrapper). Implement the check in a way consistent with the existing API helper used in the repo.
+
+TEST/VERIFY
+- Run the existing dev server and ensure:
+  1) When limit is reached, attempting to create a load shows the banner on /app/loads/new and sets localStorage flag.
+  2) Visiting /app/loads after that shows Create Load disabled and helper text + billing link.
+  3) If load creation succeeds later (e.g., with a different account), the flag clears and the button becomes enabled.
+
+DELIVERABLE
+- Commit only the minimal code changes needed in the two files.
+- Do not change other unrelated UI, do not modify styling globally, do not add new libraries.

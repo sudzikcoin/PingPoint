@@ -26,6 +26,13 @@ export default function AppLoads() {
   const [loading, setLoading] = useState(true);
   const [showVerificationBanner, setShowVerificationBanner] = useState(false);
   const [resendingEmail, setResendingEmail] = useState(false);
+  const [loadLimitReached, setLoadLimitReached] = useState(false);
+
+  // Check localStorage for limit flag on mount
+  useEffect(() => {
+    const flag = localStorage.getItem("pp_loadLimitReached");
+    setLoadLimitReached(flag === "true");
+  }, []);
 
   const handleResendVerification = useCallback(async () => {
     if (!broker) return;
@@ -219,18 +226,35 @@ export default function AppLoads() {
 
         {/* Actions Row */}
         <div className="flex flex-wrap items-center gap-4">
-          <Button 
-            onClick={() => setLocation("/app/loads/new")}
-            className={cn(
-              "h-12 px-6 text-sm font-bold uppercase tracking-wider transition-all hover:-translate-y-0.5 active:translate-y-0",
-              theme === "arcade90s" 
-                ? "bg-arc-primary text-black rounded-none border border-arc-primary shadow-arc-glow-yellow hover:bg-arc-primary/90 arcade-pixel-font" 
-                : "bg-brand-gold text-black hover:bg-brand-gold/90 rounded-full"
+          <div className="flex flex-col gap-1">
+            <Button 
+              onClick={() => !loadLimitReached && setLocation("/app/loads/new")}
+              disabled={loadLimitReached}
+              className={cn(
+                "h-12 px-6 text-sm font-bold uppercase tracking-wider transition-all",
+                loadLimitReached 
+                  ? "opacity-50 cursor-not-allowed"
+                  : "hover:-translate-y-0.5 active:translate-y-0",
+                theme === "arcade90s" 
+                  ? "bg-arc-primary text-black rounded-none border border-arc-primary shadow-arc-glow-yellow hover:bg-arc-primary/90 arcade-pixel-font" 
+                  : "bg-brand-gold text-black hover:bg-brand-gold/90 rounded-full"
+              )}
+            >
+              <Plus className="w-4 h-4 mr-2" />
+              Create Load
+            </Button>
+            {loadLimitReached && (
+              <div className={cn("text-xs", theme === "arcade90s" ? "text-red-400 arcade-pixel-font" : "text-red-400")}>
+                Free plan limit reached (3 loads/month).{" "}
+                <button 
+                  onClick={() => setLocation("/app/billing")}
+                  className="underline hover:text-red-300"
+                >
+                  Upgrade or buy extra loads
+                </button>
+              </div>
             )}
-          >
-            <Plus className="w-4 h-4 mr-2" />
-            Create Load
-          </Button>
+          </div>
           
           {/* TODO: Implement Rate Confirmation upload flow (file picker, validation, backend upload). */}
           <Button
