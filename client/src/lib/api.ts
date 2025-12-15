@@ -48,7 +48,18 @@ export const api = {
       });
       
       if (!res.ok) {
-        throw new Error('Failed to send verification');
+        let errorMessage = 'Failed to send verification email';
+        try {
+          const errorData = await res.json();
+          if (errorData.message) {
+            errorMessage = errorData.message;
+          } else if (errorData.error) {
+            errorMessage = errorData.error;
+          }
+        } catch {
+          // ignore JSON parse errors
+        }
+        throw new Error(errorMessage);
       }
       
       return res.json();

@@ -1,0 +1,81 @@
+YOU ARE WORKING INSIDE THE EXISTING PingPoint PROJECT.
+NON-NEGOTIABLE RULES:
+- Make the smallest, localized changes possible.
+- Do NOT rename files, routes, DB schema, or existing environment variable names unless explicitly instructed.
+- Do NOT change UI/UX except where needed to surface an existing error message.
+- Preserve all existing behavior unless it’s directly related to the tasks below.
+- After changes: run tests/build and prove the verification email flow works.
+
+GOAL:
+Resend must send verification emails FROM "PingPoint <info@suverse.io>" and be able to send to ANY recipient email address (not only sudzikgroup@gmail.com). If Resend is still in test mode, the API must clearly report the failure (no false “ok: true”).
+
+CONTEXT:
+- Domain suverse.io is already verified in Resend.
+- Replit has env vars: RESEND_API_KEY (secret), MAIL_FROM (config/secret), PINGPOINT_PUBLIC_URL (secret)
+- Current bug: server returns {"ok": true} even when Resend returns 403 and does not send.
+
+TASKS (IMPLEMENT IN THIS ORDER):
+
+1) ENSURE MAIL_FROM IS USED EVERYWHERE, AND FAIL FAST IF MISCONFIGURED
+- Open: server/email.ts
+- There is a defaultFrom fallback to "onboarding@resend.dev".
+- Change behavior:
+  - If process.env.MAIL_FROM is missing OR does not include "@suverse.io", then:
+    - Log a clear warning at startup/send time:
+      "[Email] MAIL_FROM is missing or not @suverse.io. Set MAIL_FROM='PingPoint <info@suverse.io>' to send production emails."
+    - Return false from sendTransactionalEmail (do NOT attempt sending with resend.dev fallback in production).
+  - In development (NODE_ENV !== "production"), you may keep the fallback, but still log the warning.
+- Make sure sendTransactionalEmail always uses:
+  from: process.env.MAIL_FROM (for production) and NOT resend.dev.
+- Keep existing function signatures unless absolutely necessary.
+
+2) DO NOT LIE ABOUT SUCCESS: PROPAGATE EMAIL SEND FAILURE TO API RESPONSES
+- Open: server/routes.ts
+- Find POST "/api/brokers/send-verification"
+- It currently calls sendBrokerVerificationEmail(...) but always responds { ok: true }.
+- Fix it:
+  - Capture boolean result: const sent = await sendBrokerVerificationEmail(...)
+  - If sent is false:
+    - Return HTTP 502 with JSON:
+      { ok: false, error: "EMAIL_SEND_FAILED", message: "Verification email could not be sent. Check RESEND_API_KEY and MAIL_FROM (PingPoint <info@suverse.io>) and ensure the key belongs to the Resend account where suverse.io is verified." }
+  - If sent is true:
+    - Return { ok: true }
+
+3) IMPROVE CLIENT ERROR SURFACING (MINIMAL UI CHANGE)
+- Open: client/src/lib/api.ts
+- In sendBrokerVerification (or the function calling /api/brokers/send-verification):
+  - If response is not ok, parse JSON safely and throw Error with `message` from server if present.
+  - This lets the UI show a meaningful error (or at least console log).
+- Do NOT redesign UI. Only improve error propagation.
+
+4) CONFIG CHECKLIST IN README (NO BIG REWRITE)
+- Open: README.md
+- Add a small section “Email (Resend) configuration” with:
+  - Required env:
+    - RESEND_API_KEY = API key from the SAME Resend account where suverse.io is verified
+    - MAIL_FROM = "PingPoint <info@suverse.io>"
+  - Note: If you still see Resend error “You can only send testing emails…”, your RESEND_API_KEY is from a Resend account where the domain is not verified OR MAIL_FROM is not set correctly.
+
+5) ADD A QUICK DIAGNOSTIC ENDPOINT (OPTIONAL BUT HELPFUL, KEEP IT SMALL)
+- Add GET /api/email/diagnostics that returns:
+  { mailFrom: process.env.MAIL_FROM ? "(set)" : "(missing)", mailFromValue: process.env.MAIL_FROM || null, hasResendKey: !!process.env.RESEND_API_KEY }
+- DO NOT expose the raw RESEND_API_KEY.
+- Register it in routes.ts under existing /api paths.
+- Purpose: quick debugging in production without leaking secrets.
+
+6) VERIFY WITH REAL TEST
+- Restart the app cleanly (avoid multiple servers).
+- Perform an end-to-end test:
+  - Call POST /api/brokers/send-verification with an email that is NOT sudzikgroup@gmail.com (e.g., agip31@gmail.com).
+  - Expected:
+    - If configuration is correct, it should send successfully.
+    - If configuration is wrong, API must return 502 with the JSON error (not ok:true).
+- Run existing tests (vitest) and ensure they still pass.
+- Summarize exactly what changed (file + key diff points).
+
+IMPORTANT NOTE ABOUT REPLIT ENV:
+- If MAIL_FROM is currently in “Configurations”, ensure it is available as process.env.MAIL_FROM at runtime. If not, instruct the user to move it into Secrets as well, but do not block the change.
+
+DELIVERABLE:
+- Code changes committed in the current workspace.
+- A short “How to test” section in your final message (commands + what to click).

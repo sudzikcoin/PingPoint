@@ -68,8 +68,8 @@ function getBaseUrl(req?: Request): string {
 }
 
 // Wrapper for broker verification email using real provider
-async function sendVerificationEmail(email: string, url: string, brokerName?: string): Promise<void> {
-  await sendBrokerVerificationEmail(email, url, brokerName);
+async function sendVerificationEmail(email: string, url: string, brokerName?: string): Promise<boolean> {
+  return await sendBrokerVerificationEmail(email, url, brokerName);
 }
 
 // Wrapper for driver SMS (TODO: integrate Twilio)
@@ -80,6 +80,17 @@ async function sendDriverSMS(phone: string, url: string): Promise<void> {
 export function registerHealthRoutes(app: Express) {
   app.get("/api/health", (_req: Request, res: Response) => {
     res.json({ status: "ok", timestamp: new Date().toISOString() });
+  });
+
+  // Email diagnostics endpoint (does not expose secrets)
+  app.get("/api/email/diagnostics", (_req: Request, res: Response) => {
+    const mailFrom = process.env.MAIL_FROM;
+    res.json({
+      mailFrom: mailFrom ? "(set)" : "(missing)",
+      mailFromValue: mailFrom || null,
+      hasResendKey: !!process.env.RESEND_API_KEY,
+      isProduction: process.env.NODE_ENV === "production",
+    });
   });
 }
 
@@ -149,7 +160,15 @@ export async function registerRoutes(
       const verificationUrl = `${origin}/verify?token=${token}`;
       console.log(`[PingPoint] Sending verification email to ${broker.email} with URL: ${verificationUrl}`);
 
-      await sendVerificationEmail(broker.email, verificationUrl, broker.name);
+      const sent = await sendVerificationEmail(broker.email, verificationUrl, broker.name);
+
+      if (!sent) {
+        return res.status(502).json({
+          ok: false,
+          error: "EMAIL_SEND_FAILED",
+          message: "Verification email could not be sent. Check RESEND_API_KEY and MAIL_FROM (PingPoint <info@suverse.io>) and ensure the key belongs to the Resend account where suverse.io is verified."
+        });
+      }
 
       return res.json({ ok: true });
     } catch (error) {

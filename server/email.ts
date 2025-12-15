@@ -1,8 +1,21 @@
 import { Resend } from "resend";
 
 const resendApiKey = process.env.RESEND_API_KEY;
-// Use suverse.io verified domain for production emails
-const defaultFrom = process.env.MAIL_FROM || "PingPoint <info@suverse.io>";
+const isProduction = process.env.NODE_ENV === "production";
+
+function validateMailFrom(): { valid: boolean; fromAddress: string } {
+  const mailFrom = process.env.MAIL_FROM;
+  
+  if (!mailFrom || !mailFrom.includes("@suverse.io")) {
+    console.warn("[Email] MAIL_FROM is missing or not @suverse.io. Set MAIL_FROM='PingPoint <info@suverse.io>' to send production emails.");
+    if (isProduction) {
+      return { valid: false, fromAddress: "" };
+    }
+    return { valid: true, fromAddress: mailFrom || "PingPoint <info@suverse.io>" };
+  }
+  
+  return { valid: true, fromAddress: mailFrom };
+}
 
 if (!resendApiKey) {
   console.warn("[Email] RESEND_API_KEY is not set; email sending will fallback to console logging.");
@@ -19,7 +32,14 @@ interface EmailParams {
 }
 
 export async function sendTransactionalEmail(params: EmailParams): Promise<boolean> {
-  const fromAddress = params.from || defaultFrom;
+  const mailConfig = validateMailFrom();
+  
+  if (!mailConfig.valid) {
+    console.error("[Email] Cannot send email: MAIL_FROM is not configured with @suverse.io domain in production.");
+    return false;
+  }
+  
+  const fromAddress = params.from || mailConfig.fromAddress;
   
   if (!resend) {
     console.log("[DEV EMAIL] Would send email:");
@@ -41,7 +61,7 @@ export async function sendTransactionalEmail(params: EmailParams): Promise<boole
     });
     
     if (result.error) {
-      console.error(`[Email] Resend API error:`, result.error);
+      console.error(`[Email] Resend API error:`, JSON.stringify(result.error));
       return false;
     }
     

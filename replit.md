@@ -63,6 +63,13 @@ Preferred communication style: Simple, everyday language.
 - Broker context derived from JWT payload
 - No password authentication (email-based verification flow)
 
+**Email (Resend) Configuration**:
+- Required environment variables:
+  - `RESEND_API_KEY` - API key from the SAME Resend account where suverse.io is verified
+  - `MAIL_FROM` - Must be set to `PingPoint <info@suverse.io>` for production emails
+- Diagnostic endpoint: `GET /api/email/diagnostics` - returns config status without exposing secrets
+- Note: If you see Resend error "You can only send testing emails...", your RESEND_API_KEY is from a Resend account where the domain is not verified OR MAIL_FROM is not set correctly.
+
 **Build Process**:
 - Custom esbuild configuration for server bundling
 - Vite for client-side builds

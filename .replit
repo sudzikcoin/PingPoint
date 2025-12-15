@@ -50,4 +50,4 @@ integrations = ["javascript_database:1.0.0"]
 [userenv]
 
 [userenv.shared]
-MAIL_FROM = "PingPoint <onboarding@resend.dev>"
+MAIL_FROM = "PingPoint <info@suverse.io>"
