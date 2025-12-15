@@ -13,6 +13,8 @@ import { sendBrokerVerificationEmail, sendDriverAppLink } from "./email";
 import { strictRateLimit } from "./middleware/rateLimit";
 import { checkAndConsumeLoadAllowance, rollbackLoadAllowance, getBillingSummary, FREE_INCLUDED_LOADS } from "./billing/entitlements";
 import { createCheckoutSession, verifyWebhookSignature, processStripeEvent } from "./billing/stripe";
+import { incrementLoadsCreated, getUsageSummary } from "./billing/usage";
+import { evaluateGeofencesForActiveLoad } from "./geofence";
 
 const uploadsDir = path.join(process.cwd(), "uploads", "rate-confirmations");
 if (!fs.existsSync(uploadsDir)) {

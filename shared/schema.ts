@@ -1,6 +1,6 @@
 import { sql } from "drizzle-orm";
 import { relations } from "drizzle-orm";
-import { pgTable, text, varchar, boolean, timestamp, decimal, integer, uuid } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, boolean, timestamp, decimal, integer, uuid, uniqueIndex } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
@@ -137,6 +137,7 @@ export const stops = pgTable("stops", {
   state: text("state").notNull(),
   lat: decimal("lat", { precision: 9, scale: 6 }),
   lng: decimal("lng", { precision: 9, scale: 6 }),
+  geofenceRadiusM: integer("geofence_radius_m").notNull().default(300),
   windowFrom: timestamp("window_from", { withTimezone: true }),
   windowTo: timestamp("window_to", { withTimezone: true }),
   arrivedAt: timestamp("arrived_at", { withTimezone: true }),
@@ -254,6 +255,49 @@ export const stripePaymentsRelations = relations(stripePayments, ({ one }) => ({
   }),
 }));
 
+// Broker Usage tracking (separate from entitlements for demo/billing architecture)
+export const brokerUsage = pgTable("broker_usage", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  brokerId: uuid("broker_id").notNull().references(() => brokers.id).unique(),
+  cycleStartAt: timestamp("cycle_start_at", { withTimezone: true }).notNull().default(sql`now()`),
+  cycleEndAt: timestamp("cycle_end_at", { withTimezone: true }).notNull(),
+  loadsCreated: integer("loads_created").notNull().default(0),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().default(sql`now()`),
+});
+
+export const brokerUsageRelations = relations(brokerUsage, ({ one }) => ({
+  broker: one(brokers, {
+    fields: [brokerUsage.brokerId],
+    references: [brokers.id],
+  }),
+}));
+
+// Stop Geofence State (anti-flap tracking for auto arrive/depart)
+export const stopGeofenceState = pgTable("stop_geofence_state", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  stopId: uuid("stop_id").notNull().references(() => stops.id),
+  driverId: uuid("driver_id").notNull().references(() => drivers.id),
+  lastStatus: text("last_status"), // "inside" | "outside"
+  insideStreak: integer("inside_streak").notNull().default(0),
+  outsideStreak: integer("outside_streak").notNull().default(0),
+  lastArriveAttemptAt: timestamp("last_arrive_attempt_at", { withTimezone: true }),
+  lastDepartAttemptAt: timestamp("last_depart_attempt_at", { withTimezone: true }),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().default(sql`now()`),
+}, (table) => [
+  uniqueIndex("stop_geofence_state_stop_driver_idx").on(table.stopId, table.driverId),
+]);
+
+export const stopGeofenceStateRelations = relations(stopGeofenceState, ({ one }) => ({
+  stop: one(stops, {
+    fields: [stopGeofenceState.stopId],
+    references: [stops.id],
+  }),
+  driver: one(drivers, {
+    fields: [stopGeofenceState.driverId],
+    references: [drivers.id],
+  }),
+}));
+
 // Activity Log / Events model
 export const activityLogs = pgTable("activity_logs", {
   id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -328,6 +372,8 @@ export type BrokerEntitlement = typeof brokerEntitlements.$inferSelect;
 export type BrokerCredit = typeof brokerCredits.$inferSelect;
 export type StripeWebhookEvent = typeof stripeWebhookEvents.$inferSelect;
 export type StripePayment = typeof stripePayments.$inferSelect;
+export type BrokerUsage = typeof brokerUsage.$inferSelect;
+export type StopGeofenceState = typeof stopGeofenceState.$inferSelect;
 export type InsertActivityLog = {
   entityType: string;
   entityId: string;

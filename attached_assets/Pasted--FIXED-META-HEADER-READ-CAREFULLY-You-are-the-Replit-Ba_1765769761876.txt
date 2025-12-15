@@ -1,0 +1,237 @@
+[FIXED META-HEADER — READ CAREFULLY]
+You are the Replit Backend Agent working inside the existing **PingPoint** codebase.
+NON-NEGOTIABLE: Make MINIMAL, LOCALIZED changes. Do NOT refactor unrelated files. Do NOT change existing schemas/flows unless explicitly instructed. Preserve existing magic-link auth, Broker Console, Driver app, Public tracking, and current UI styling. If something is unclear, add small helper functions instead of restructuring.
+
+GOAL (THIS RUN)
+Implement TWO things ONLY, safely, without breaking what already works:
+1) Add **Demo/Billing feature flags** + usage tracking architecture (billing OFF, unlimited ON for demo).
+2) Add **automatic Arrive/Depart** for Pickup/Delivery when the driver enters/leaves a geofence circle around stop coordinates.
+   - Buttons Arrive/Depart must remain and still work exactly as before.
+   - Auto logic should call the SAME backend endpoints used by the buttons.
+
+NO Stripe. NO Solana. NO big UI redesign. No new flows.
+
+────────────────────────────────────────────────────────
+PHASE 0 — QUICK AUDIT (DO NOT CHANGE YET)
+────────────────────────────────────────────────────────
+1) Locate:
+   - Stops model/table (pickup/delivery) in `shared/schema.ts`.
+   - Existing fields for stop status and any arrived/departed timestamps.
+   - Existing API endpoints for:
+     - manual "Arrive" and "Depart" actions (likely driver endpoints).
+     - driver location updates (watch position / ping).
+   - Driver UI page/component where Arrive/Depart buttons exist.
+   - How stop coordinates are currently stored (if stored).
+     - If only addresses exist and no lat/lng, find existing geocoding usage (if any).
+
+2) Confirm: which endpoint the Arrive/Depart buttons call today.
+   - We must not introduce a second status system.
+
+────────────────────────────────────────────────────────
+PHASE 1 — FEATURE FLAGS (DEMO MODE + BILLING ARCHITECTURE)
+────────────────────────────────────────────────────────
+Add small env-based feature flags server-side (and optionally shared to client).
+
+1) Add env vars (document in `.env.example` and `.env.production.example`):
+   - DEMO_MODE=true|false   (default false)
+   - BILLING_ENABLED=true|false (default false)
+   - ENFORCE_LIMITS=true|false (default false)
+
+2) Add a tiny config helper `server/config/flags.ts`:
+   - export booleans:
+     - `DEMO_MODE = process.env.DEMO_MODE === "true"`
+     - `BILLING_ENABLED = process.env.BILLING_ENABLED === "true"`
+     - `ENFORCE_LIMITS = process.env.ENFORCE_LIMITS === "true"`
+
+3) Add usage tracking architecture (minimal DB, no enforcement yet):
+   - Create table `brokerUsage` (or similarly named) in `shared/schema.ts`:
+     - brokerId (unique)
+     - cycleStartAt
+     - cycleEndAt
+     - loadsCreated (int default 0)
+     - updatedAt
+   - Minimal helpers in `server/billing/usage.ts`:
+     - `ensureUsageRow(brokerId)` => creates 30-day cycle if missing
+     - `rollCycleIfNeeded(brokerId)` => if now > cycleEndAt, reset counts and new cycle
+     - `incrementLoadsCreated(brokerId)` => increments loadsCreated atomically
+
+4) Integrate usage increment into load creation endpoint (POST /api/loads):
+   - After successful load creation (only after DB insert succeeds):
+     - call `incrementLoadsCreated(brokerId)`
+   - IMPORTANT: do NOT block anything. No limits now.
+   - If DEMO_MODE is true, keep behavior the same (unlimited) but still track usage.
+
+5) Add endpoint: `GET /api/broker/usage`
+   - Auth: broker required
+   - Returns: cycleStartAt, cycleEndAt, loadsCreated
+   - This is for internal debugging and later billing UI. No UI changes required now.
+
+6) Add minimal tests (Vitest) for usage:
+   - creates usage row on first call
+   - increments loadsCreated on load creation (you can test by calling increment function directly if API tests are heavy)
+   - cycle rolls after end date (can mock Date or set cycleEndAt in DB)
+
+────────────────────────────────────────────────────────
+PHASE 2 — GEOFENCE AUTO ARRIVE/DEPART (DATA MODEL)
+────────────────────────────────────────────────────────
+We need stop coordinates and geofence settings.
+
+1) In `shared/schema.ts`, ensure Stop/LoadStop table has:
+   - `lat` (double precision / real / numeric)
+   - `lng`
+   - `geofenceRadiusM` (int, default 300)
+   - `arrivedAt` (timestamp nullable)
+   - `departedAt` (timestamp nullable)
+
+If any of these already exist, reuse them. Only add missing columns.
+
+2) Add migration via `npm run db:push`.
+
+3) If stops currently only store addresses and not lat/lng:
+   - Add a small server-side helper that geocodes addresses ONCE on stop creation.
+   - Use a provider only if already present in the project. If not present, DO NOT add paid APIs now.
+   - If no provider exists, implement a safe fallback:
+     - keep lat/lng null
+     - auto arrive/depart will be disabled for that stop until coordinates exist
+   - Also add a debug log when stop has no lat/lng: “Geofence disabled – missing coordinates”.
+
+(We can add real geocoding later; do not block shipping.)
+
+────────────────────────────────────────────────────────
+PHASE 3 — GEOFENCE AUTO ARRIVE/DEPART (SERVER LOGIC)
+────────────────────────────────────────────────────────
+We will compute geofence transitions based on driver location pings.
+
+Key requirements:
+- Must NOT flap (rapid toggling). Use hysteresis and simple confirmation.
+- Must respect existing manual state: if arrived/departed already set, do not overwrite incorrectly.
+- Must trigger the SAME actions as button endpoints (reuse functions).
+
+Definitions:
+- inside radius => Arrive
+- outside radius + hysteresis => Depart (only after arrived)
+Use:
+- radius = stop.geofenceRadiusM (default 300m)
+- hysteresis = max(100m, radius * 0.33)
+
+Confirmation:
+- require N consecutive pings (N=2) meeting condition before triggering.
+- require a minimum time gap between arrive and depart triggers (e.g. 60 seconds).
+
+Implementation approach (minimal changes):
+
+1) Find the driver location update endpoint (e.g. POST /api/driver/location or similar).
+   - This endpoint receives driverToken + lat/lng + timestamp.
+   - After storing the location (existing behavior), call a new function:
+     - `evaluateGeofencesForActiveLoad(driverId, lat, lng, timestamp)`
+
+2) Implement `server/geofence.ts`:
+   - `haversineMeters(lat1,lng1,lat2,lng2)` utility.
+   - `evaluateGeofencesForActiveLoad(driverId, currentLat, currentLng, now)`:
+     - Fetch active loads/stops for this driver where:
+       - stop has lat/lng not null
+       - stop.departedAt is null (still relevant)
+     - Determine next relevant stop(s):
+       - Prefer pickup stop if not departed, else delivery stop.
+       - Keep it simple: evaluate both pickup and delivery stops but only trigger for those not arrived/departed appropriately.
+     - For each stop:
+       - compute distance
+       - decide inside/outside with hysteresis rules
+       - update state counters to avoid flapping (see Phase 4 DB)
+
+3) Reuse existing arrive/depart logic:
+   - If there are existing handler functions like `markStopArrived(stopId)` and `markStopDeparted(stopId)`:
+     - call them directly.
+   - If not, call the same DB update operations that button endpoints use.
+   - Do NOT create new divergent logic.
+
+4) Add server responses/logging:
+   - If a transition is triggered, log:
+     - driverId, stopId, type (ARRIVE/DEPART), distance, radius
+   - Never spam logs; only log on transition.
+
+────────────────────────────────────────────────────────
+PHASE 4 — ANTI-FLAP STATE (MINIMAL)
+────────────────────────────────────────────────────────
+We need to remember recent inside/outside status per stop+driver to avoid flapping.
+
+Implement the smallest DB-backed state:
+
+1) Add table `stopGeofenceState` (or similar):
+   - id
+   - stopId (unique, or unique together with driverId if needed)
+   - driverId
+   - lastStatus ("inside" | "outside")
+   - insideStreak (int default 0)
+   - outsideStreak (int default 0)
+   - lastArriveAttemptAt (timestamp nullable)
+   - lastDepartAttemptAt (timestamp nullable)
+   - updatedAt
+
+2) In `evaluateGeofences...`:
+   - Upsert state row.
+   - If inside:
+     - insideStreak += 1, outsideStreak = 0
+     - if stop.arrivedAt is null AND insideStreak >= 2 AND (now - lastArriveAttemptAt) > 60s:
+         - trigger ARRIVE (call existing arrive function)
+         - set lastArriveAttemptAt = now
+   - If outside beyond radius+hysteresis:
+     - outsideStreak += 1, insideStreak = 0
+     - if stop.arrivedAt is not null AND stop.departedAt is null AND outsideStreak >= 2 AND (now - stop.arrivedAt) > 60s AND (now - lastDepartAttemptAt) > 60s:
+         - trigger DEPART
+         - set lastDepartAttemptAt = now
+
+3) Ensure:
+   - Once departedAt exists, do nothing further.
+   - Manual button presses still work:
+     - If user manually arrives/departs, state can be reset or updated, but must not break manual state.
+   - If state table is missing row, create it.
+
+This state table avoids any client changes and works even if the driver app is in a webview.
+
+────────────────────────────────────────────────────────
+PHASE 5 — CLIENT: MINIMAL WIRING (NO DESIGN CHANGES)
+────────────────────────────────────────────────────────
+Goal: auto arrive/depart should happen without removing buttons or changing layout.
+
+1) Confirm driver app already sends periodic location updates.
+   - If it does: no client change needed besides ensuring it sends while driver is active.
+   - If it does NOT: add minimal `watchPosition` polling already present in code:
+     - Do NOT change UI.
+     - Just ensure that location pings are sent on an interval (e.g. every 15–30s) while a load is active.
+     - Must respect user permission prompts.
+
+2) Add small UI feedback (optional, minimal):
+   - When server triggers arrive/depart, the stop status already updates; UI should reflect it automatically.
+   - Do not add new screens.
+
+────────────────────────────────────────────────────────
+PHASE 6 — TESTS + SAFETY CHECKS
+────────────────────────────────────────────────────────
+1) Build:
+   - `npm run build` must pass.
+
+2) Tests:
+   - `npx vitest` must pass.
+   - Add tests for geofence logic at pure-function level:
+     - test haversine distance
+     - test inside/outside + hysteresis decisions
+     - test streak-based triggers (ARRIVE after 2 inside pings; DEPART after 2 outside pings)
+   - Mock DB calls as needed; keep tests small and stable.
+
+3) Manual dev verification checklist:
+   A) Create a load with stops that have lat/lng (if any exist).
+   B) Open driver link, allow location.
+   C) Simulate location near pickup:
+      - verify ARRIVE gets auto-triggered after 2 pings inside radius.
+      - move outside radius+hysteresis:
+      - verify DEPART auto-triggers after 2 pings and >60s since arrive.
+   D) Verify manual buttons still work exactly as before.
+
+DELIVERABLES
+- Feature flags + usage tracking (no enforcement)
+- Stop lat/lng + radius + arrivedAt/departedAt (if missing) and safe migration
+- Geofence auto arrive/depart triggered by driver location pings with anti-flap state
+- Minimal/no UI change (buttons remain)
+- Tests + build passing
+- Update env example files with new flags
