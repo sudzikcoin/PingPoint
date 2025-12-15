@@ -1,0 +1,54 @@
+[REPLIT AGENT — PINGPOINT — STRICT MODE]
+GOAL: Implement ONLY this UX change with minimal, localized edits. Do NOT refactor, rename routes, change business logic, billing logic, auth, or any existing UI styling beyond what’s required. Avoid touching server code unless absolutely necessary. Preserve current behavior everywhere.
+TASK: Add a visible “Back” arrow on broker pages (Billing, Integrations, Settings) that always returns to the main broker console “WELCOME …” screen at /app/loads. New Load already has a back arrow — do not change it unless it’s inconsistent. The back arrow should not appear on /app/loads itself.
+
+CONTEXT / ACCEPTANCE CRITERIA
+1) Pages that MUST have a back arrow:
+   - /app/billing
+   - /app/integrations
+   - /app/settings
+   (Also check if there are other broker “subpages” under /app/* that are not the main console. If they are similar detail pages, add the arrow too ONLY if it’s clearly the same pattern; otherwise limit to the 3 above.)
+2) Clicking the back arrow must ALWAYS navigate to /app/loads (not “history back”), so it reliably returns to the Welcome screen.
+3) The back arrow must be visible on mobile (top-left), not hidden by layout.
+4) The change must not break routing, styles, or any existing page functionality.
+5) Keep the current design language (dark UI, neon glow style). The arrow should look like an icon button (subtle border/hover), not a big primary CTA.
+6) Add accessibility: aria-label="Back to Loads" and a focus outline.
+
+IMPLEMENTATION STEPS (DO THIS)
+A) Locate the frontend routing system:
+   - If it’s React Router: use useNavigate() and navigate("/app/loads")
+   - If it’s Next.js App Router: use next/navigation useRouter() and router.push("/app/loads")
+   - If it’s something else: follow the project’s existing navigation pattern and keep it consistent.
+
+B) Create a single reusable component (do not duplicate code across pages):
+   - Name suggestion: BackToLoadsButton.tsx (or BackButton.tsx if there is already a naming convention)
+   - Place it in the existing shared UI folder (e.g. client/components/, src/components/, client/components/ui/, etc.). Use the project’s existing conventions.
+   - It should render an icon button with a left arrow (use existing icon lib if present; common: lucide-react ArrowLeft. If icons already exist in the project, reuse them).
+   - On click: navigate to "/app/loads".
+   - Styling:
+     - Positioned at top-left within the page header container (not fixed to viewport unless needed for visibility).
+     - Example Tailwind-ish intent (adapt to existing classes):
+       - rounded-md, border, bg-transparent, hover:bg-white/5, text-cyan/teal, subtle glow/shadow consistent with UI
+       - size ~ 36–40px square on mobile
+     - Must not shift the page title in a weird way; align with header (flex row gap).
+
+C) Insert this component into the three pages:
+   - Billing page header: add back button left of the title “BILLING”
+   - Integrations page header: add back button left of the title “INTEGRATIONS”
+   - Settings page header: add back button left of the title “SETTINGS”
+   - Ensure it appears above/near the page title area as shown in screenshots (same header block).
+
+D) Verify:
+   1) Open /app/loads → menu → Billing → back arrow returns to /app/loads
+   2) Open /app/loads → menu → Integrations → back arrow returns to /app/loads
+   3) Open /app/loads → menu → Settings → back arrow returns to /app/loads
+   4) Confirm /app/loads has NO back arrow added.
+   5) Confirm no console errors.
+
+E) Deliverables:
+   - Commit only the minimal changes.
+   - Reply with:
+     - Files changed list
+     - Brief explanation (1–2 sentences) of how navigation works and where the component is used.
+
+IMPORTANT: Do not modify Resend/email, auth, billing limits, or logout/login logic in this task. Only back arrow navigation.

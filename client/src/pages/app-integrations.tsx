@@ -4,6 +4,7 @@ import { Switch } from "@/components/ui/switch";
 import { useTheme } from "@/context/theme-context";
 import { cn } from "@/lib/utils";
 import { Webhook, Satellite, Radio } from "lucide-react";
+import { BackToLoadsButton } from "@/components/ui/back-to-loads-button";
 import { useState } from "react";
 import { toast } from "sonner";
 
@@ -23,13 +24,16 @@ export default function AppIntegrations() {
   return (
     <AppLayout>
       <div className="max-w-2xl mx-auto space-y-6">
-        <div>
-          <h1 className={cn("text-2xl font-bold mb-2", theme === "arcade90s" ? "arcade-title arcade-pixel-font" : "text-white")}>
-            Integrations
-          </h1>
-          <p className={cn("text-sm", theme === "arcade90s" ? "text-arc-muted font-mono" : "text-brand-muted")}>
-            Connect PingPoint to external systems and services
-          </p>
+        <div className="flex items-center gap-4">
+          <BackToLoadsButton />
+          <div>
+            <h1 className={cn("text-2xl font-bold", theme === "arcade90s" ? "arcade-title arcade-pixel-font" : "text-white")}>
+              Integrations
+            </h1>
+            <p className={cn("text-sm", theme === "arcade90s" ? "text-arc-muted font-mono" : "text-brand-muted")}>
+              Connect PingPoint to external systems and services
+            </p>
+          </div>
         </div>
 
         {/* Webhooks */}

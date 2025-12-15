@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { useTheme } from "@/context/theme-context";
 import { cn } from "@/lib/utils";
 import { CreditCard, Package, Loader2, Plus, Minus, CheckCircle } from "lucide-react";
+import { BackToLoadsButton } from "@/components/ui/back-to-loads-button";
 import { useState, useEffect } from "react";
 import { toast } from "sonner";
 import { useSearch } from "wouter";
@@ -87,13 +88,16 @@ export default function AppBilling() {
   return (
     <AppLayout>
       <div className="max-w-4xl mx-auto space-y-6">
-        <div>
-          <h1 className={cn("text-2xl font-bold mb-2", theme === "arcade90s" ? "arcade-title arcade-pixel-font" : "text-white")}>
-            Billing
-          </h1>
-          <p className={cn("text-sm", theme === "arcade90s" ? "text-arc-muted font-mono" : "text-brand-muted")}>
-            Manage your load credits and subscription
-          </p>
+        <div className="flex items-center gap-4">
+          <BackToLoadsButton />
+          <div>
+            <h1 className={cn("text-2xl font-bold", theme === "arcade90s" ? "arcade-title arcade-pixel-font" : "text-white")}>
+              Billing
+            </h1>
+            <p className={cn("text-sm", theme === "arcade90s" ? "text-arc-muted font-mono" : "text-brand-muted")}>
+              Manage your load credits and subscription
+            </p>
+          </div>
         </div>
 
         {loading ? (
