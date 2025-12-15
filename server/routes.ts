@@ -11,6 +11,8 @@ import fs from "fs";
 import express from "express";
 import { sendBrokerVerificationEmail, sendDriverAppLink } from "./email";
 import { strictRateLimit } from "./middleware/rateLimit";
+import { checkAndConsumeLoadAllowance, rollbackLoadAllowance, getBillingSummary, FREE_INCLUDED_LOADS } from "./billing/entitlements";
+import { createCheckoutSession, verifyWebhookSignature, processStripeEvent } from "./billing/stripe";
 
 const uploadsDir = path.join(process.cwd(), "uploads", "rate-confirmations");
 if (!fs.existsSync(uploadsDir)) {
@@ -481,6 +483,9 @@ export async function registerRoutes(
   // First-time brokers can create their first load; verification email is sent.
   // Subsequent loads require email verification.
   app.post("/api/loads", async (req: Request, res: Response) => {
+    let broker: any = null;
+    let allowanceResult: { allowed: boolean; usedCredit?: boolean } | null = null;
+    
     try {
       const { brokerEmail, brokerName, brokerPhone, timezone } = req.body;
       
@@ -493,7 +498,7 @@ export async function registerRoutes(
       }
       
       // Get broker from session or lookup/create by email
-      let broker = await getBrokerFromRequest(req);
+      broker = await getBrokerFromRequest(req);
       let needsVerificationEmail = false;
       
       if (!broker) {
@@ -578,6 +583,16 @@ export async function registerRoutes(
         if (!driver) {
           driver = await storage.createDriver({ phone: phoneNormalized });
         }
+      }
+
+      // Check billing limits before creating load
+      allowanceResult = await checkAndConsumeLoadAllowance(broker.id);
+      if (!allowanceResult.allowed) {
+        return res.status(402).json({
+          error: "You've reached your monthly limit (3 loads). Buy extra loads or upgrade.",
+          code: "LOAD_LIMIT_REACHED",
+          includedLoads: FREE_INCLUDED_LOADS,
+        });
       }
 
       // Generate tokens and load number
@@ -699,6 +714,12 @@ export async function registerRoutes(
       });
     } catch (error) {
       console.error("Error in /api/loads:", error);
+      // Rollback billing consumption if load creation failed after billing check
+      if (allowanceResult?.allowed) {
+        await rollbackLoadAllowance(broker!.id, allowanceResult.usedCredit || false).catch(err => 
+          console.error("Error rolling back billing:", err)
+        );
+      }
       return res.status(500).json({ error: "Internal server error" });
     }
   });
@@ -900,6 +921,89 @@ export async function registerRoutes(
 
   // Rate confirmation file upload
   // Serve uploads directory
+  // Billing endpoints
+
+  // GET /api/billing/summary - Get billing summary for current broker
+  app.get("/api/billing/summary", async (req: Request, res: Response) => {
+    try {
+      const broker = await getBrokerFromRequest(req);
+      if (!broker) {
+        return res.status(401).json({ error: "Unauthorized" });
+      }
+
+      const summary = await getBillingSummary(broker.id);
+      return res.json(summary);
+    } catch (error) {
+      console.error("Error in GET /api/billing/summary:", error);
+      return res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  // POST /api/billing/stripe/checkout-credits - Create Stripe checkout session for credits
+  app.post("/api/billing/stripe/checkout-credits", async (req: Request, res: Response) => {
+    try {
+      const broker = await getBrokerFromRequest(req);
+      if (!broker) {
+        return res.status(401).json({ error: "Unauthorized" });
+      }
+
+      const { quantity = 1 } = req.body;
+      const qty = Math.min(Math.max(parseInt(quantity, 10) || 1, 1), 500);
+
+      if (qty < 1) {
+        return res.status(400).json({ error: "Quantity must be at least 1" });
+      }
+
+      const origin = getBaseUrl(req);
+      const successUrl = `${origin}/app/billing?success=true&session_id={CHECKOUT_SESSION_ID}`;
+      const cancelUrl = `${origin}/app/billing`;
+
+      const checkoutUrl = await createCheckoutSession(broker.id, qty, successUrl, cancelUrl);
+
+      if (!checkoutUrl) {
+        return res.status(500).json({ error: "Failed to create checkout session" });
+      }
+
+      return res.json({ url: checkoutUrl });
+    } catch (error: any) {
+      console.error("Error in POST /api/billing/stripe/checkout-credits:", error);
+      // Return 503 for configuration issues so frontend knows payments aren't available
+      if (error.message?.includes("not configured")) {
+        return res.status(503).json({ 
+          error: "Payment processing is not available. Please try again later.",
+          code: "STRIPE_NOT_CONFIGURED"
+        });
+      }
+      return res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  // POST /api/billing/stripe/webhook - Stripe webhook handler
+  app.post("/api/billing/stripe/webhook", express.raw({ type: "application/json" }), async (req: Request, res: Response) => {
+    try {
+      const signature = req.headers["stripe-signature"] as string;
+
+      if (!signature) {
+        return res.status(400).json({ error: "Missing signature" });
+      }
+
+      // verifyWebhookSignature throws if Stripe is not configured - this prevents
+      // unauthenticated callers from minting credits by crafting fake events
+      const event = await verifyWebhookSignature(req.body, signature);
+      const result = await processStripeEvent(event);
+
+      console.log(`[Stripe Webhook] ${event.type}: ${result.message}`);
+      return res.json({ received: true, ...result });
+    } catch (error: any) {
+      console.error("Error in Stripe webhook:", error.message);
+      // Return 503 for configuration issues to indicate service unavailable
+      if (error.message?.includes("not configured")) {
+        return res.status(503).json({ error: "Webhook processing unavailable" });
+      }
+      return res.status(400).json({ error: error.message || "Webhook error" });
+    }
+  });
+
   app.use("/uploads", express.static(path.join(process.cwd(), "uploads")));
 
   // POST /api/loads/:loadId/rate-confirmation - Upload rate confirmation file

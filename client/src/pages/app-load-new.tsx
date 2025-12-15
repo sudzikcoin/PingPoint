@@ -129,8 +129,15 @@ export default function AppLoadNew() {
         toast.info(`Check your inbox at ${error.email || brokerEmail} for a verification link.`);
       } else if (error.code === 'BROKER_EMAIL_REQUIRED') {
         toast.error("Please enter a valid email address.");
+      } else if (error.code === 'LOAD_LIMIT_REACHED') {
+        toast.error("You've reached your monthly load limit.");
+        toast("Buy extra load credits to continue.", {
+          action: {
+            label: "Go to Billing",
+            onClick: () => setLocation("/app/billing"),
+          },
+        });
       } else {
-        // Show the specific error message from the backend
         toast.error(error.message || "Failed to create load. Please try again.");
       }
     } finally {

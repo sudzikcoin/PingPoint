@@ -123,7 +123,7 @@ describe("Verification Enforcement", () => {
       expect(mockSendEmail).toHaveBeenCalled();
     });
 
-    it("should return 401 for unauthenticated request without brokerEmail", async () => {
+    it("should return 400 for request without brokerEmail", async () => {
       const request = await getTestRequest();
       
       const response = await request
@@ -137,7 +137,8 @@ describe("Verification Enforcement", () => {
           rateAmount: 1500,
         });
       
-      expect(response.status).toBe(401);
+      expect(response.status).toBe(400);
+      expect(response.body.code).toBe("BROKER_EMAIL_REQUIRED");
     });
 
     it("should allow first load for existing unverified broker with no loads and send verification email", async () => {

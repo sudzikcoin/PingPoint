@@ -1,14 +1,18 @@
 import { db } from "../../db";
-import { brokers, verificationTokens, drivers, loads, stops, trackingPings, brokerFieldHints, brokerDevices } from "@shared/schema";
+import { brokers, verificationTokens, drivers, loads, stops, trackingPings, brokerFieldHints, brokerDevices, brokerEntitlements, brokerCredits, stripeWebhookEvents, stripePayments } from "@shared/schema";
 import { randomUUID } from "crypto";
 
 export async function resetDatabase() {
   await db.delete(trackingPings);
   await db.delete(stops);
+  await db.delete(stripePayments);
   await db.delete(loads);
   await db.delete(verificationTokens);
   await db.delete(brokerFieldHints);
   await db.delete(brokerDevices);
+  await db.delete(brokerEntitlements);
+  await db.delete(brokerCredits);
+  await db.delete(stripeWebhookEvents);
   await db.delete(drivers);
   await db.delete(brokers);
 }

@@ -78,7 +78,7 @@ Preferred communication style: Simple, everyday language.
 
 **ORM**: Drizzle ORM with PostgreSQL dialect
 
-**Database Schema** (8 core tables):
+**Database Schema** (12 tables):
 
 1. **brokers** - Broker accounts/workspaces
    - id (UUID), name, email (unique), emailVerified (boolean)
@@ -113,6 +113,20 @@ Preferred communication style: Simple, everyday language.
 
 8. **brokerFieldHints** - Typeahead suggestions
    - id, brokerId, fieldKey, value, usageCount, lastUsedAt
+
+9. **brokerEntitlements** - Billing entitlements (Stage 1-2)
+   - id (UUID), brokerId (FK), plan, cycleStartAt, cycleEndAt
+   - includedLoads, loadsUsed, status, createdAt, updatedAt
+
+10. **brokerCredits** - Extra load credits balance
+    - id (UUID), brokerId (FK), creditsBalance, createdAt, updatedAt
+
+11. **stripeWebhookEvents** - Webhook idempotency tracking
+    - id (UUID), eventId (unique), type, processedAt
+
+12. **stripePayments** - Payment records
+    - id (UUID), brokerId (FK), checkoutSessionId, paymentIntentId
+    - amount, currency, status, creditsGranted, createdAt
 
 **Relationships**:
 - Broker → Loads (1:N)
@@ -181,10 +195,15 @@ Preferred communication style: Simple, everyday language.
 - Meta images plugin for OpenGraph tag injection
 - TypeScript with strict mode enabled
 
-**Payment Integration** (Placeholder):
-- Billing page UI exists with Stripe/crypto payment options
-- No active Stripe SDK integration
-- TODO: Implement actual payment processing
+**Payment/Billing Integration** (Stage 1-2 Implemented):
+- FREE tier: 3 loads per 30-day cycle, auto-resets at cycle end
+- Extra load credits: $0.99 each via Stripe Checkout
+- Load limit enforcement in POST /api/loads (returns 402 when blocked)
+- Billing service: `server/billing/entitlements.ts` handles limits and credits
+- Stripe integration: `server/billing/stripe.ts` handles checkout and webhooks
+- Database tables: brokerEntitlements, brokerCredits, stripeWebhookEvents, stripePayments
+- Environment variables needed: STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET, STRIPE_PRICE_EXTRA_LOAD
+- Billing UI: `/app/billing` shows usage summary and credit purchase
 
 **Webhooks** (Placeholder):
 - Integrations page has webhook toggle UI
@@ -203,6 +222,7 @@ Preferred communication style: Simple, everyday language.
 - `driverLocationAndStatus.test.ts` - Location pings
 - `publicTracking.test.ts` - Public tracking API
 - `health.test.ts` - Health endpoint
+- `billingEntitlements.test.ts` - Billing system and load limits
 
 **Test Utilities** (server/tests/utils/):
 - `dbTestUtils.ts` - Database reset and test data factories
