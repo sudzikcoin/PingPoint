@@ -202,15 +202,29 @@ Preferred communication style: Simple, everyday language.
 - Meta images plugin for OpenGraph tag injection
 - TypeScript with strict mode enabled
 
-**Payment/Billing Integration** (Stage 1-2 Implemented):
+**Payment/Billing Integration** (Stage 1-2 + PRO Implemented):
 - FREE tier: 3 loads per 30-day cycle, auto-resets at cycle end
+- PRO tier: $99/month, 200 loads per 30-day cycle (via Solana Pay USDC)
 - Extra load credits: $0.99 each via Stripe Checkout
 - Load limit enforcement in POST /api/loads (returns 402 when blocked)
 - Billing service: `server/billing/entitlements.ts` handles limits and credits
 - Stripe integration: `server/billing/stripe.ts` handles checkout and webhooks
-- Database tables: brokerEntitlements, brokerCredits, stripeWebhookEvents, stripePayments
-- Environment variables needed: STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET, STRIPE_PRICE_EXTRA_LOAD
-- Billing UI: `/app/billing` shows usage summary and credit purchase
+- Solana Pay integration: `server/billing/solana.ts` handles PRO plan USDC payments
+- Database tables: brokerEntitlements, brokerCredits, stripeWebhookEvents, stripePayments, solanaPaymentIntents
+- Environment variables needed:
+  - Stripe: STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET, STRIPE_PRICE_EXTRA_LOAD
+  - Solana: SOLANA_MERCHANT_WALLET (required), SOLANA_RPC_URL (optional, defaults to mainnet), SOLANA_USDC_MINT (optional)
+- Billing UI: `/app/billing` shows usage summary, PRO upgrade with QR, and credit purchase
+
+**Solana Pay PRO Flow**:
+1. Broker clicks "Pay with USDC (Solana)" on billing page
+2. Backend creates payment intent with unique reference pubkey
+3. Frontend displays QR code with Solana Pay URL
+4. Broker scans with Solana wallet and pays 99 USDC
+5. Frontend polls `/api/billing/solana/intents/:id` every 4 seconds
+6. Backend uses `findReference` + `validateTransfer` to verify on-chain payment
+7. On confirmation, broker entitlements upgraded to PRO (200 loads, 30 days)
+8. PRO reverts to FREE when cycle expires (requires renewal)
 
 **Webhooks** (Placeholder):
 - Integrations page has webhook toggle UI
