@@ -1,0 +1,48 @@
+You are working in the existing PingPoint repo. Make MINIMAL, LOCALIZED changes. Do NOT change DB schema. Do NOT touch Resend/email. Do NOT restyle UI. Only implement login visibility + correct routing after logout.
+
+GOAL:
+1) Make broker login reachable from the UI:
+   - On Landing page, when user selects Broker/Dispatcher console, route to /login (NOT directly to /app/loads).
+2) In the in-app System Menu (on /app/loads), show:
+   - “LOGIN” when user is NOT authenticated (broker/session missing) -> navigates to /login
+   - “LOGOUT” when user IS authenticated -> logs out then navigates to /login
+3) After logout, redirect to /login (so user immediately sees the login screen).
+
+Implementation (keep existing arcade/90s styling and menu items intact):
+A) Landing route fix
+- Edit: client/src/pages/landing.tsx
+  Find the Broker/Dispatcher card click handler that currently routes into the app (commonly setLocation("/app/loads...") or similar).
+  Change ONLY that handler to:
+    setLocation("/login");
+  Do not modify any intro/splash/animation logic.
+
+B) Menu: Login/Logout conditional
+- Edit: client/src/pages/app-loads.tsx
+  Locate the System Menu dropdown (the menu opened by the top-right hamburger).
+  Keep existing items: Your Loads, Billing, Settings, Integrations.
+  Replace the bottom “SWITCH WORKSPACE / LOGOUT” action with conditional logic:
+    - If broker/session exists:
+        label: "LOGOUT"
+        onClick:
+          await api.brokers.logout(); // or the existing logout call used in this file/repo
+          setLocation("/login");
+    - Else:
+        label: "LOGIN"
+        onClick:
+          setLocation("/login");
+  Use the same button/component style classes already used for that bottom menu item. No UI redesign.
+
+C) Ensure logout API exists/works (ONLY if missing)
+- If api.brokers.logout() does not exist, implement it minimally in the existing client API layer to call the current backend logout endpoint (or create a minimal endpoint ONLY if the backend already has sessions/cookies wired).
+- Do NOT change auth model or add new providers. This is only wiring.
+
+Verification steps:
+1) Start dev server.
+2) Confirm: Landing -> click Broker/Dispatcher -> goes to /login.
+3) Confirm: On /app/loads menu:
+   - Logged out: shows LOGIN -> goes to /login.
+   - Logged in: shows LOGOUT -> after click, user is logged out and redirected to /login.
+
+Output:
+- Summarize exactly which files you changed and why (1–2 lines per file).
+- No extra features, no Resend changes, no payment work, no refactors.

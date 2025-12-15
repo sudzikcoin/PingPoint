@@ -188,20 +188,30 @@ export default function AppLoads() {
 
                 <DropdownMenuSeparator className={cn(theme === "arcade90s" ? "bg-arc-border" : "bg-brand-border")} />
                 
-                <DropdownMenuItem 
-                  onClick={async () => {
-                    try {
-                      await api.brokers.logout();
-                      setLocation("/");
-                    } catch (e) {
-                      toast.error("Failed to logout");
-                    }
-                  }}
-                  className={cn(theme === "arcade90s" ? "focus:bg-arc-secondary/20 focus:text-arc-secondary arcade-pixel-font text-xs cursor-pointer text-red-400" : "cursor-pointer text-red-400")}
-                >
-                  <X className="mr-2 h-4 w-4" />
-                  <span>Switch Workspace / Logout</span>
-                </DropdownMenuItem>
+                {broker ? (
+                  <DropdownMenuItem 
+                    onClick={async () => {
+                      try {
+                        await api.brokers.logout();
+                        setLocation("/login");
+                      } catch (e) {
+                        toast.error("Failed to logout");
+                      }
+                    }}
+                    className={cn(theme === "arcade90s" ? "focus:bg-arc-secondary/20 focus:text-arc-secondary arcade-pixel-font text-xs cursor-pointer text-red-400" : "cursor-pointer text-red-400")}
+                  >
+                    <X className="mr-2 h-4 w-4" />
+                    <span>Logout</span>
+                  </DropdownMenuItem>
+                ) : (
+                  <DropdownMenuItem 
+                    onClick={() => setLocation("/login")}
+                    className={cn(theme === "arcade90s" ? "focus:bg-arc-secondary/20 focus:text-arc-secondary arcade-pixel-font text-xs cursor-pointer" : "cursor-pointer")}
+                  >
+                    <X className="mr-2 h-4 w-4" />
+                    <span>Login</span>
+                  </DropdownMenuItem>
+                )}
               </DropdownMenuContent>
             </DropdownMenu>
           </div>

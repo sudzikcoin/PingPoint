@@ -111,7 +111,7 @@ function RoleSelectorView() {
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6 w-full">
           {/* Broker / Dispatcher Option */}
           <button
-            onClick={() => setLocation("/app/loads?role=dispatcher")}
+            onClick={() => setLocation("/login")}
             className="group relative overflow-hidden rounded-2xl border border-[#1f2633] bg-[#101522] p-8 transition-all hover:border-[#facc15]/50 hover:shadow-[0_0_30px_rgba(250,204,21,0.15)] active:scale-[0.98] text-left"
           >
             <div className="absolute top-0 right-0 p-4 opacity-20 group-hover:opacity-40 transition-opacity text-[#facc15]">
