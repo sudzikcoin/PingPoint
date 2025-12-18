@@ -1,5 +1,5 @@
 import { API_BASE_URL, API_TIMEOUT_MS } from './config';
-import { QueuedPing, getQueuedPings, removeFromQueue, addToQueue } from './storage';
+import { QueuedPing, getQueuedPings, removeFromQueue, addToQueue, getStoredToken } from './storage';
 
 export interface PingData {
   lat: number;
@@ -42,6 +42,7 @@ export async function sendPingWithRetry(token: string, data: PingData): Promise<
   
   if (!success) {
     await addToQueue({
+      token,
       lat: data.lat,
       lng: data.lng,
       accuracy: data.accuracy,
@@ -55,14 +56,29 @@ export async function sendPingWithRetry(token: string, data: PingData): Promise<
   return true;
 }
 
-export async function flushQueue(token: string): Promise<void> {
+export async function flushQueue(currentToken: string): Promise<void> {
   const queue = await getQueuedPings();
   if (queue.length === 0) return;
+
+  const matchingPings = queue.filter(p => p.token === currentToken);
+  if (matchingPings.length === 0) return;
 
   let successCount = 0;
   
   for (const ping of queue) {
-    const success = await sendPing(token, ping);
+    if (ping.token !== currentToken) {
+      successCount++;
+      continue;
+    }
+    
+    const success = await sendPing(ping.token, {
+      lat: ping.lat,
+      lng: ping.lng,
+      accuracy: ping.accuracy,
+      speed: ping.speed,
+      timestamp: ping.timestamp,
+    });
+    
     if (success) {
       successCount++;
     } else {

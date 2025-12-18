@@ -13,6 +13,10 @@ export async function getStoredToken(): Promise<string | null> {
 
 export async function setStoredToken(token: string): Promise<void> {
   try {
+    const oldToken = await getStoredToken();
+    if (oldToken && oldToken !== token) {
+      await clearQueue();
+    }
     await AsyncStorage.setItem(TOKEN_KEY, token);
   } catch (error) {
     console.error('Failed to store token');
@@ -28,6 +32,7 @@ export async function clearStoredToken(): Promise<void> {
 }
 
 export interface QueuedPing {
+  token: string;
   lat: number;
   lng: number;
   accuracy?: number;
