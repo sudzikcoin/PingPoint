@@ -231,6 +231,52 @@ Preferred communication style: Simple, everyday language.
 - TODO: Implement outbound webhook system for load status changes
 - Intended for TMS/AgentOS integration
 
+## Driver Mobile App (Expo/React Native)
+
+**Location**: `apps/driver-mobile/`
+
+**Purpose**: Native mobile app for drivers providing background GPS tracking with the existing web driver interface in a WebView.
+
+**Features**:
+- WebView wrapper for `/driver/<token>` web pages
+- Deep linking: `pingpoint://driver/<token>`
+- Background location tracking with Task Manager
+- Foreground service for Android (persistent notification)
+- Offline ping queue (stores up to 20 pings, flushes on reconnect)
+
+**Technical Stack**:
+- Expo SDK 52 with React Native
+- expo-location for GPS
+- expo-task-manager for background tasks
+- react-native-webview for driver interface
+- AsyncStorage for token and queue persistence
+
+**Tracking Configuration**:
+- Accuracy: Balanced (battery-efficient)
+- Update interval: 20 seconds
+- Distance filter: 75 meters
+- Throttle: Max 1 ping per 10 seconds
+
+**Environment Variables** (in apps/driver-mobile):
+- `EXPO_PUBLIC_WEB_BASE_URL` - Base URL for driver web interface
+- `EXPO_PUBLIC_API_BASE_URL` - Base URL for API endpoints
+
+**Development**:
+```bash
+cd apps/driver-mobile
+npm install
+npx expo start
+```
+
+**Building for Android**:
+```bash
+eas login
+eas build -p android --profile preview  # APK for testing
+eas build -p android --profile production  # AAB for Play Store
+```
+
+**Note**: The mobile app is a separate project. Changes to main repo should not affect it, and vice versa.
+
 ## Test Infrastructure
 
 **Framework**: Vitest with Supertest for API testing
