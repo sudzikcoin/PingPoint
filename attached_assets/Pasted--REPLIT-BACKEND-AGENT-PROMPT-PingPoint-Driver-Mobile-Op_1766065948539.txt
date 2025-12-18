@@ -1,0 +1,145 @@
+[REPLIT BACKEND AGENT PROMPT — PingPoint — Driver Mobile (Option B)]
+You are working inside the existing PingPoint Replit project (monorepo). NON-NEGOTIABLE:
+- Make minimal, localized changes.
+- Do NOT break existing Broker Console, Driver Web (/driver/:token), auth, billing, limits, or server routes.
+- Do NOT refactor existing code. Only add a new mobile app folder + tiny safe additions if absolutely needed.
+- Keep current driver web UI as fallback. Mobile app is a wrapper + background location sender.
+
+GOAL
+Create an Expo/React Native Driver app that:
+1) Shows the EXISTING driver web page in a WebView: `${WEB_BASE_URL}/driver/<token>`.
+2) Supports deep links so invite links can open the app:
+   - scheme: `pingpoint://driver/<token>`
+3) Runs BACKGROUND location tracking using Expo Task Manager and sends GPS pings to the EXISTING backend endpoint:
+   - `POST ${API_BASE_URL}/api/driver/<token>/ping`
+4) Works on Android for demo (Google Play internal testing). iOS setup can be included but Android is priority.
+5) No rewrite of driver UI. Arrive/Depart remains inside the web page. Server geofence logic remains as-is.
+
+STRUCTURE
+- Add new folder: `apps/driver-mobile`
+- Keep the rest of the repo unchanged (except small docs/scripts if needed)
+
+ENV / CONFIG
+- Mobile app must read:
+  - `EXPO_PUBLIC_WEB_BASE_URL`  (e.g. https://pp.suverse.io or your Replit URL)
+  - `EXPO_PUBLIC_API_BASE_URL`  (same as above unless API is separate)
+- Provide safe defaults for development:
+  - if env missing, fallback to `http://localhost:3000` for web and api when running locally
+- Do NOT hardcode replit URLs in code; only via env.
+
+IMPLEMENTATION STEPS
+
+1) CREATE EXPO PROJECT
+Inside `apps/driver-mobile`:
+- Initialize Expo SDK (use latest stable compatible with EAS):
+  - package name: `pingpoint-driver`
+  - app name: `PingPoint Driver`
+- Add dependencies:
+  - react-native-webview
+  - expo-location
+  - expo-task-manager
+  - expo-linking
+  - expo-constants
+  - expo-device (optional)
+  - expo-notifications (optional, not required now; do not add unless needed)
+- Ensure TypeScript enabled.
+
+2) DEEP LINKING
+- Configure `app.json` (or app.config.ts) with:
+  - scheme: "pingpoint"
+  - android.intentFilters for https links if you add universal link later (optional). For now, scheme is enough.
+- Implement linking so the app can open:
+  - `pingpoint://driver/<token>`
+- If no token present, show a simple screen:
+  - "Waiting for invite link" + instructions.
+
+3) APP UI (SIMPLE)
+Create `App.tsx` (or app router) that:
+- Parses token from deep link (and also supports query like pingpoint://driver/<token>?t=... if present).
+- Persists token to AsyncStorage so reopening the app restores last active token.
+- Renders a WebView that loads:
+  `${EXPO_PUBLIC_WEB_BASE_URL}/driver/${token}`
+- Add a small top bar (minimal) with:
+  - Back button (WebView back if possible)
+  - A status dot/text: "Tracking ON/OFF"
+  - A button: "Pause" / "Resume" tracking (controls background task)
+Keep UI minimal and consistent; do not redesign web page.
+
+4) BACKGROUND LOCATION TASK
+- Implement a Task Manager task name: "PINGPOINT_LOCATION_TASK"
+- Request permissions properly:
+  - Foreground location permission
+  - Background location permission (especially Android)
+- On Android, configure foreground service for background tracking using expo-location options so it keeps running.
+- When tracking is enabled:
+  - Start location updates with balanced accuracy:
+    - accuracy: LocationAccuracy.Balanced (or Highest for demo; prefer Balanced to reduce battery)
+    - timeInterval: 15000–30000 ms (choose 20000 ms default)
+    - distanceInterval: 50–100 meters (choose 75m default)
+  - In task handler, for each location update:
+    - Extract lat, lng, accuracy, speed (if available), timestamp
+    - POST to `${API_BASE_URL}/api/driver/${token}/ping` with JSON:
+      { lat, lng, accuracy, speed, timestamp }
+- Add a small in-memory throttle so you don’t spam if OS sends too frequently:
+  - Do not send more than 1 request per 10 seconds.
+
+5) API CALL (SAFE)
+- Use fetch with timeout (e.g. AbortController 10s).
+- Handle failures:
+  - If offline or request fails, store last N unsent points (e.g. 20) in AsyncStorage queue.
+  - Next successful send flushes queue oldest-first.
+Keep this minimal; do not build a complex sync engine.
+
+6) TOKEN SECURITY
+- Never log the full token in console logs in production builds.
+- Store token in AsyncStorage under key "pp_driver_token".
+
+7) EAS BUILD FOR ANDROID
+- Add `eas.json` at `apps/driver-mobile/eas.json` configured for:
+  - build profile "preview" (Android AAB)
+  - build profile "production" (Android AAB)
+- Update `app.json` android.package to something unique, e.g. "io.suverse.pingpoint.driver"
+- Add instructions in `apps/driver-mobile/README.md`:
+  - `npm i`
+  - `npx expo start`
+  - `eas login`
+  - `eas build -p android --profile preview`
+Explain what env vars to set.
+
+8) ROOT REPO SCRIPTS (OPTIONAL, SMALL)
+Optionally add root package.json scripts (ONLY if repo already uses workspaces; otherwise do not change root tooling):
+- "driver:install": cd apps/driver-mobile && npm i
+- "driver:start": cd apps/driver-mobile && npx expo start
+If monorepo tooling is absent, skip this to avoid breaking.
+
+9) BACKEND COMPAT CHECK (ONLY IF NEEDED)
+- Confirm server endpoint `POST /api/driver/:token/ping` accepts JSON body fields lat/lng/accuracy/speed/timestamp.
+- If it currently expects different names, add a backward-compatible parser:
+  - accept both old and new fields
+  - do NOT change response shape
+- Do not add new auth; driver token remains as in existing system.
+
+10) VERIFY
+- Run the app locally:
+  - Start backend/web (existing command)
+  - Set env for mobile:
+    EXPO_PUBLIC_WEB_BASE_URL = your local web URL
+    EXPO_PUBLIC_API_BASE_URL = your local API URL
+  - Simulate deep link (Expo dev tools) to set token and load driver web page.
+- Verify pings hit backend (see server logs or DB).
+- Verify no changes broke existing web app.
+
+DELIVERABLES
+- New folder `apps/driver-mobile` with working Expo project.
+- Deep linking works: pingpoint://driver/<token>
+- Background location task sends pings to existing endpoint.
+- Clear README with exact steps to build Android AAB for Google Play internal testing.
+- Minimal/no changes outside the new folder, except tiny safe compatibility changes if required.
+
+DO NOT:
+- Modify Resend/email.
+- Modify broker/billing pages.
+- Modify DB schema (unless absolutely needed for ping compatibility).
+- Add heavy new dependencies to the root project.
+
+Implement now.

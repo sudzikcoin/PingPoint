@@ -1,0 +1,60 @@
+{
+  "expo": {
+    "name": "PingPoint Driver",
+    "slug": "pingpoint-driver",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "scheme": "pingpoint",
+    "userInterfaceStyle": "dark",
+    "newArchEnabled": true,
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#1a1a2e"
+    },
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "io.suverse.pingpoint.driver",
+      "infoPlist": {
+        "NSLocationWhenInUseUsageDescription": "PingPoint needs your location to track deliveries and update customers in real-time.",
+        "NSLocationAlwaysAndWhenInUseUsageDescription": "PingPoint needs background location access to continuously track deliveries even when the app is closed.",
+        "NSLocationAlwaysUsageDescription": "PingPoint needs background location access to continuously track deliveries even when the app is closed.",
+        "UIBackgroundModes": ["location", "fetch"]
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#1a1a2e"
+      },
+      "package": "io.suverse.pingpoint.driver",
+      "permissions": [
+        "ACCESS_COARSE_LOCATION",
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_BACKGROUND_LOCATION",
+        "FOREGROUND_SERVICE",
+        "FOREGROUND_SERVICE_LOCATION"
+      ]
+    },
+    "plugins": [
+      "expo-router",
+      [
+        "expo-location",
+        {
+          "locationAlwaysAndWhenInUsePermission": "PingPoint needs background location access to continuously track deliveries.",
+          "isAndroidBackgroundLocationEnabled": true,
+          "isAndroidForegroundServiceEnabled": true
+        }
+      ]
+    ],
+    "extra": {
+      "router": {
+        "origin": false
+      },
+      "eas": {
+        "projectId": "your-project-id"
+      }
+    }
+  }
+}
