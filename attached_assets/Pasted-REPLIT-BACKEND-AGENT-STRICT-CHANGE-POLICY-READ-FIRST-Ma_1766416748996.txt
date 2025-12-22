@@ -1,0 +1,127 @@
+REPLIT BACKEND AGENT — STRICT CHANGE POLICY (READ FIRST)
+- Make the smallest possible, localized changes to add PWA “Add to Home Screen” support.
+- Do NOT change any existing DB schema, API contracts, auth flows, or routing logic unless required for PWA.
+- Do NOT remove or rename existing files. Prefer additive changes.
+- Keep current build/deploy flow working (Docker/compose if present).
+- After changes: the web app must be installable to home screen on iOS/Android with a custom icon.
+
+GOAL
+Enable PWA install (“Add to Home Screen”) for this repository, using the existing truck icon (yellow truck) if it exists in the repo. If the exact icon file is not present, create a placeholder icon set (simple SVG/PNG) so the feature still works, and leave a TODO note telling the developer where to drop the real icon to replace it.
+
+PROJECT CONTEXT (what you must do)
+1) Detect frontend stack:
+   - Look for Vite (vite.config.ts), React/Vue/Svelte, and where the frontend lives (likely /client).
+   - Identify the HTML entry (typically /client/index.html) and app entry (e.g., /client/src/main.tsx).
+2) Add robust PWA support via vite-plugin-pwa (preferred for correct offline precache + manifest + service worker).
+3) Ensure iOS-specific meta tags and apple-touch-icons are present so it looks correct when installed on iPhone home screen.
+4) Ensure the install works only over HTTPS (server already has TLS via nginx, that’s fine).
+
+IMPLEMENTATION REQUIREMENTS
+A) Add PWA plugin
+- In the frontend package.json (likely /client/package.json):
+  - Add dependency: vite-plugin-pwa
+  - If the frontend does not have its own package.json and uses root package.json for everything, add it there instead.
+- Update Vite config (likely /client/vite.config.ts or /vite.config.ts):
+  - Import { VitePWA } from "vite-plugin-pwa"
+  - Add plugin VitePWA({...}) with:
+    - registerType: "autoUpdate"
+    - includeAssets: ["favicon.ico", "apple-touch-icon.png", "icons/*.png"]
+    - manifest: with:
+      name: "PingPoint"
+      short_name: "PingPoint"
+      description: "Lightweight load-tracking for brokers and drivers"
+      start_url: "/"
+      scope: "/"
+      display: "standalone"
+      background_color: "#0B0F19"
+      theme_color: "#F5C400"   (yellow from the icon)
+      icons: provide PNG icons at sizes: 192x192, 512x512, and ideally maskable variants.
+      - Add at least:
+        icons/icon-192.png
+        icons/icon-512.png
+        icons/icon-192-maskable.png (purpose: "maskable")
+        icons/icon-512-maskable.png (purpose: "maskable")
+  - For Workbox default mode (generateSW), set:
+    workbox: {
+      navigateFallback: "/index.html",
+      globPatterns: ["**/*.{js,css,html,ico,png,svg,webmanifest,json,txt,woff2}"],
+    }
+  - Ensure it does NOT break existing base path; if project uses a base path, respect it.
+
+B) Add icons into the Vite public folder
+- Create folder: /client/public/icons  (or the correct Vite public folder you detect)
+- Find an existing source icon in the repo:
+  - Search for likely files in /attached_assets, /client/public, /docs, etc:
+    - icon.png, logo.png, truck.png, app-icon.png, favicon.png
+- If a suitable source icon exists:
+  - Use it as the base to generate required icon sizes.
+- If not found:
+  - Create a simple placeholder icon (SVG) and convert to PNG sizes (still fine for install).
+- Generate the required PNGs:
+  - icon-192.png, icon-512.png, icon-192-maskable.png, icon-512-maskable.png
+  - Also create /client/public/apple-touch-icon.png (180x180) for iOS.
+- Preferred generation method:
+  - Add a small Node script (e.g., /client/scripts/generate-icons.mjs) using “sharp”.
+  - Install sharp as a dev dependency ONLY if needed. If sharp causes build issues, fallback to shipping the icons as-is without auto-generation.
+  - If you cannot reliably install sharp in this environment, commit placeholder icons (simple SVG + pre-made PNGs created in code) and leave TODO.
+
+C) Add iOS + PWA meta tags to index.html
+- In the frontend index.html (likely /client/index.html), add:
+  - <link rel="manifest" href="/manifest.webmanifest">
+  - <meta name="theme-color" content="#F5C400">
+  - <meta name="apple-mobile-web-app-capable" content="yes">
+  - <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  - <meta name="apple-mobile-web-app-title" content="PingPoint">
+  - <link rel="apple-touch-icon" href="/apple-touch-icon.png">
+  - Optional but good:
+    <meta name="mobile-web-app-capable" content="yes">
+- Make sure you do not duplicate existing tags; update if present.
+
+D) Register service worker (only if needed)
+- vite-plugin-pwa can auto-inject registration if configured, but to be safe:
+  - In app entry (e.g., /client/src/main.tsx), add:
+    import { registerSW } from "virtual:pwa-register";
+    registerSW({ immediate: true });
+  - If this breaks SSR or non-browser contexts, wrap in:
+    if (typeof window !== "undefined") { ... }
+
+E) Ensure production build serves manifest + icons correctly
+- If Express serves static from a build folder, ensure:
+  - The build output includes manifest.webmanifest and icons under public root.
+  - Static middleware includes correct MIME types (usually fine).
+- Don’t change nginx yet. We only need app working behind existing reverse proxy.
+
+DELIVERABLES (FILES TO CREATE/MODIFY)
+- Vite config: add VitePWA plugin with manifest.
+- index.html: add PWA/iOS tags.
+- Public assets:
+  - /client/public/manifest.webmanifest (if plugin doesn’t generate, create it; otherwise let plugin generate but keep a committed manifest if easier)
+  - /client/public/apple-touch-icon.png
+  - /client/public/icons/icon-192.png
+  - /client/public/icons/icon-512.png
+  - /client/public/icons/icon-192-maskable.png
+  - /client/public/icons/icon-512-maskable.png
+- Optional:
+  - /client/scripts/generate-icons.mjs
+  - package.json devDependencies (vite-plugin-pwa, maybe sharp)
+
+ACCEPTANCE TESTS (RUN THESE AND CONFIRM)
+1) Frontend build passes:
+   - npm install && npm run build (in correct folder)
+2) App serves manifest:
+   - curl -I https://<your-domain>/manifest.webmanifest returns 200 and a webmanifest content-type
+3) App serves icons:
+   - curl -I https://<your-domain>/icons/icon-192.png returns 200
+4) Service worker registered:
+   - Open site in Chrome devtools → Application → Service Workers (registered)
+5) Add to Home Screen:
+   - iOS Safari: Share → “Add to Home Screen” shows PingPoint name and the truck icon.
+   - Android Chrome: “Install app” / “Add to Home screen” available.
+
+IMPORTANT NOTES
+- If the repo already contains a README_DEPLOY.md or deploy folder, do NOT rewrite deploy flow.
+- Keep all existing ports/paths. Only add PWA capability.
+- If you cannot find the real icon in the repo, use placeholder icons but leave a TODO: “Replace /client/public/icons/* with real truck icon exports.”
+
+NOW DO IT
+- Inspect the repo structure, identify the frontend root, apply the changes above, run tests, and summarize exactly which files you modified/created and how to verify “Add to Home Screen” works.
