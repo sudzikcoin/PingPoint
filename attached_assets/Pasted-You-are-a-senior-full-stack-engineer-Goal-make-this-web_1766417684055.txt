@@ -1,0 +1,74 @@
+You are a senior full-stack engineer. Goal: make this web app installable on iOS/Android home screen as a PWA and ensure the correct app icon is used when the user “Add to Home Screen”.
+
+Hard rules:
+- Make the smallest possible changes.
+- Do NOT break existing routes, APIs, auth, DB, or build/deploy flow.
+- If PWA files already exist, UPDATE them instead of creating duplicates.
+- Use the provided icon image as the source (use the file the user already added to the repo OR ask the user to add it into /public if missing).
+- Output: implement code changes only (no long explanations).
+
+Requirements:
+1) Add/Update Web App Manifest:
+- Create or update /public/manifest.webmanifest
+- Set:
+  - name: "PingPoint"
+  - short_name: "PingPoint"
+  - start_url: "/"
+  - scope: "/"
+  - display: "standalone"
+  - background_color: "#0B0B0C"
+  - theme_color: "#0B0B0C"
+  - icons: include at least these sizes with correct paths:
+    - 192x192
+    - 512x512
+    - 180x180 (iOS friendly even though manifest is for general)
+  - purpose: "any maskable" for 192 and 512 (generate maskable versions)
+
+2) iOS specific:
+- Create /public/apple-touch-icon.png (180x180)
+- Add <link rel="apple-touch-icon" href="/apple-touch-icon.png"> in the HTML head.
+- Add <meta name="apple-mobile-web-app-capable" content="yes">
+- Add <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+- Add <meta name="apple-mobile-web-app-title" content="PingPoint">
+
+3) Favicons:
+- Create /public/favicon-32x32.png and /public/favicon-16x16.png
+- Ensure the HTML head includes favicon links.
+
+4) Where to inject HEAD tags:
+- If this is Next.js App Router: edit app/layout.tsx (or the root layout) using next/metadata OR direct <link> in <head>.
+- If this is Vite/React: edit /index.html.
+- If unknown, detect the framework from package.json and implement accordingly.
+
+5) Icon generation:
+- Use the provided icon image (truck + pin, yellow on dark). If it is not already in repo, create /public/source-icon.png and add a note in code comments where the file should be placed.
+- Generate PNGs listed above (16, 32, 180, 192, 512) from the source icon.
+- Also generate maskable icons for 192 and 512 by adding safe padding (~10%) so Android maskable crops don’t cut the truck/pin.
+
+6) Service worker (only if already present):
+- If there is an existing service worker / PWA plugin (e.g., vite-plugin-pwa or next-pwa), keep it and just ensure manifest + icons are referenced.
+- If no SW exists, do NOT add a complex offline cache system. Minimal installability is enough.
+
+7) Cache busting / update notes:
+- Ensure the manifest is linked with a stable path: /manifest.webmanifest
+- After changes, the app should build successfully.
+
+Implementation checklist:
+- Search repo for existing manifest, icons, favicon, apple-touch-icon, PWA plugin, service worker, layout/head files.
+- Add/update files in /public:
+  - manifest.webmanifest
+  - apple-touch-icon.png
+  - favicon-16x16.png
+  - favicon-32x32.png
+  - icon-192.png
+  - icon-512.png
+  - icon-192-maskable.png
+  - icon-512-maskable.png
+- Update HEAD (Next.js layout or index.html) to include:
+  - <link rel="manifest" href="/manifest.webmanifest">
+  - <link rel="apple-touch-icon" href="/apple-touch-icon.png">
+  - favicon links
+  - theme-color meta
+- Verify by running build/test command used by the project.
+
+Now implement these changes in the repository.
