@@ -1,0 +1,90 @@
+You are a senior full-stack engineer working inside this Replit project. The user added the site to iOS Home Screen (Safari “Add to Home Screen”) and the icon DID NOT update — iOS is likely caching the old apple-touch-icon/manifest/favicon. Fix it by generating a NEW icon set and busting caches by changing filenames + updating all references.
+
+Hard rules:
+- Smallest possible changes, don’t break existing routes/APIs/build.
+- If PWA/manifest/head already exist — update, don’t duplicate.
+- Output: implement code changes only.
+
+Goal:
+- Make iOS Home Screen icon show the NEW custom truck+pin yellow icon.
+- Ensure Android/Chrome install also uses the new icons.
+- Prevent stale caching for manifest + icons (best effort).
+
+Step 1 — Detect framework and where to edit HEAD:
+- If Next.js (App Router): edit root app/layout.tsx (or equivalent) to add <link rel="manifest"> and icon links in <head> (or via metadata).
+- If Vite/React: edit /index.html.
+- If custom Express serving static: ensure /public assets are served and reachable.
+
+Step 2 — Source icon:
+- Find the source image file in the repo (look for something like /public/icon.png or attached asset).
+- If missing, create /public/pwa/source-icon.png placeholder and leave a clear TODO comment in code telling where to put the source icon.
+- Use this source to generate PNG outputs.
+
+Step 3 — Generate a NEW versioned icon set (IMPORTANT: filename must change):
+Create these files under /public/pwa/ (or the correct public root):
+- /public/pwa/pingpoint-ICONSET-v2-16.png (16x16)
+- /public/pwa/pingpoint-ICONSET-v2-32.png (32x32)
+- /public/pwa/pingpoint-ICONSET-v2-180.png (180x180)  (iOS apple-touch-icon)
+- /public/pwa/pingpoint-ICONSET-v2-192.png (192x192)
+- /public/pwa/pingpoint-ICONSET-v2-512.png (512x512)
+- /public/pwa/pingpoint-ICONSET-v2-192-maskable.png (192x192, padded ~10% for maskable)
+- /public/pwa/pingpoint-ICONSET-v2-512-maskable.png (512x512, padded ~10% for maskable)
+
+Also create these convenience paths (pointing to the v2 files):
+- /public/apple-touch-icon.png MUST be the v2 180x180 icon (copy file content)
+- /public/favicon-16x16.png and /public/favicon-32x32.png MUST be the v2 favicons (copy file content)
+(Keeping these stable paths helps browsers, but we will also add versioned links below to force iOS refresh.)
+
+Step 4 — Update Manifest (and make it versioned by content, not URL; iOS still caches, so we also change icon filenames):
+Create/Update /public/manifest.webmanifest with:
+{
+  "name": "PingPoint",
+  "short_name": "PingPoint",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#0B0B0C",
+  "theme_color": "#0B0B0C",
+  "icons": [
+    { "src": "/pwa/pingpoint-ICONSET-v2-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/pwa/pingpoint-ICONSET-v2-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/pwa/pingpoint-ICONSET-v2-192-maskable.png", "sizes": "192x192", "type": "image/png", "purpose": "maskable" },
+    { "src": "/pwa/pingpoint-ICONSET-v2-512-maskable.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
+
+Step 5 — Update HEAD tags (force iOS to use the new icon):
+Add/Update these tags in the main HTML head (Next layout or index.html):
+- <link rel="manifest" href="/manifest.webmanifest">
+- <meta name="theme-color" content="#0B0B0C">
+- <link rel="apple-touch-icon" href="/pwa/pingpoint-ICONSET-v2-180.png">
+- (optional but helpful) <link rel="apple-touch-icon-precomposed" href="/pwa/pingpoint-ICONSET-v2-180.png">
+- <meta name="apple-mobile-web-app-capable" content="yes">
+- <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+- <meta name="apple-mobile-web-app-title" content="PingPoint">
+- <link rel="icon" type="image/png" sizes="32x32" href="/pwa/pingpoint-ICONSET-v2-32.png">
+- <link rel="icon" type="image/png" sizes="16x16" href="/pwa/pingpoint-ICONSET-v2-16.png">
+
+Step 6 — Best-effort cache control (optional but recommended):
+If the app has an Express server:
+- For requests to /manifest.webmanifest and /pwa/* and /apple-touch-icon.png and /favicon-*.png, set headers:
+  Cache-Control: no-store, no-cache, must-revalidate, proxy-revalidate
+  Pragma: no-cache
+  Expires: 0
+Do this only if easy and doesn’t break static serving.
+
+Step 7 — Verify:
+- Build the project.
+- Ensure these URLs return 200:
+  /manifest.webmanifest
+  /pwa/pingpoint-ICONSET-v2-180.png
+  /pwa/pingpoint-ICONSET-v2-192.png
+  /pwa/pingpoint-ICONSET-v2-512.png
+- Confirm HTML head contains the new links.
+
+Step 8 — IMPORTANT for iOS testing (do not skip):
+- iOS will not update an existing Home Screen icon reliably.
+- The user must delete the old Home Screen shortcut and add it again after the new icon is live.
+But your job is to ensure the server now serves v2 icon links so the NEW add will show the correct icon.
+
+Now implement these changes in this repo.
