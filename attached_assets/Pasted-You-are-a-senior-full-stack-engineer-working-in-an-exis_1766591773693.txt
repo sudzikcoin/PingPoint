@@ -1,0 +1,109 @@
+You are a senior full-stack engineer working in an existing monorepo project (PingPoint / AgentOS Tracking Core) deployed via Docker Compose on a VPS behind Nginx (telematics.suverse.io -> 127.0.0.1:8080).
+
+PROBLEM SUMMARY (from prod logs):
+- In production, API requests fail because database tables do not exist (e.g. error: relation "brokers" does not exist; psql \dt shows no relations).
+- In Replit/dev it works, so production is missing migrations/schema initialization.
+- Production email/magic-link also does not work because prod env often uses placeholders; we must make env validation explicit.
+- Additionally, user wants Add-to-Home-Screen (PWA) to show a custom icon on iOS and wants the system to generate a NEW icon automatically (no user-provided image), and ensure iOS uses it (apple-touch-icon).
+
+GOALS:
+1) Make production self-healing: on container start, run DB migrations/schema creation automatically BEFORE serving traffic.
+2) Add strict env validation on boot: if required vars are placeholders/missing, log a clear error and disable email routes with a 500 and actionable message (do not silently succeed).
+3) Fix Docker healthcheck so container is HEALTHY when /api/health returns 200 JSON.
+4) Add PWA support for iOS Add to Home Screen:
+   - manifest.webmanifest with correct icons
+   - apple-touch-icon.png and required sizes
+   - meta tags: apple-mobile-web-app-capable, apple-mobile-web-app-status-bar-style, apple-mobile-web-app-title, theme-color
+   - Ensure icon cache-busting by using versioned filenames (e.g. icon-180-v2.png) and update manifest + HTML links accordingly.
+5) Generate a NEW app icon automatically (do NOT use user uploads):
+   - Create a simple vector design programmatically (black rounded-square background, yellow truck + location pin) and render PNGs.
+   - Use Node tooling in-repo to generate PNG files in the web/public folder (or equivalent static assets folder).
+   - Prefer using "sharp" for SVG->PNG rendering (add dependency if missing). If sharp install fails, fall back to generating only SVG + explain limitation, but DO YOUR BEST to produce PNGs because iOS needs PNG apple-touch-icon.
+6) Keep changes minimal and localized. Do not break existing routes, schemas, or UI flows.
+
+REPO DETECTION STEPS (DO THESE FIRST):
+- Identify where the server API lives (Express) and how DB is accessed (Drizzle is likely because drizzle.config.ts exists).
+- Identify where static frontend is served (Vite/React or Next). The HTML shown in prod includes <div id="root"> and /assets/* so likely Vite.
+- Find current health endpoints: /api/health exists and returns JSON.
+- Find current DB migration setup: any scripts like db:migrate, drizzle-kit, migrations folder, schema definitions.
+
+IMPLEMENTATION REQUIREMENTS:
+
+A) DATABASE MIGRATIONS ON STARTUP (CRITICAL)
+- Implement an idempotent "ensureDatabase()" step that runs at server startup.
+- If using Drizzle:
+  - Use drizzle-orm + drizzle-orm/pg + drizzle-orm/node-postgres (or existing driver) and drizzle-orm/migrator.
+  - Store migrations in a folder (e.g. server/migrations or drizzle/) and ensure they are included in the production build image.
+  - Run migrator with the correct migrations path on startup.
+- If using Prisma instead, run prisma migrate deploy on startup.
+- IMPORTANT: The log indicates NO relations exist, so you must ensure the schema is actually created in prod, not only in dev.
+
+B) ENV VALIDATION (EMAIL / MAGIC LINK)
+- Identify required vars for auth/email (e.g. RESEND_API_KEY or SMTP settings, MAIL_FROM, PUBLIC_URL/APP_URL/BASE_URL, JWT_SECRET, DATABASE_URL).
+- Add a small validation module that:
+  - Fails fast on missing DATABASE_URL/JWT_SECRET.
+  - Detects placeholder values (e.g. re_your_resend_api_key, no-reply@yourdomain.com) and logs warnings.
+  - For email routes: if email provider is not configured, respond with 500 JSON: { error: "Email provider not configured. Set RESEND_API_KEY and MAIL_FROM and redeploy." } and log once.
+
+C) DOCKER HEALTHCHECK FIX
+- Update docker-compose.yml healthcheck for app to use the correct endpoint:
+  - test should curl -fsS http://localhost:8080/api/health (or node equivalent) and exit 0 only on 200.
+- Ensure the container becomes healthy in under 60 seconds.
+
+D) PWA + ICONS (iOS HOME SCREEN)
+- Find the frontend public/static directory (commonly apps/web/public or client/public or public/ at root).
+- Add/Update:
+  - public/manifest.webmanifest
+  - public/icons/ (or public/ root) containing:
+    - icon-192-v2.png
+    - icon-512-v2.png
+    - apple-touch-icon-180-v2.png (minimum)
+    - optionally 120, 152, 167 as apple touch sizes
+  - favicon-32-v2.png and favicon.ico if easy
+- Update the HTML template (index.html for Vite) to include:
+  - <link rel="manifest" href="/manifest.webmanifest">
+  - <link rel="apple-touch-icon" href="/icons/apple-touch-icon-180-v2.png">
+  - <meta name="apple-mobile-web-app-capable" content="yes">
+  - <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  - <meta name="apple-mobile-web-app-title" content="PingPoint">
+  - <meta name="theme-color" content="#0B0B0C">
+- Cache bust: use versioned filenames as above and update manifest icons to match.
+
+E) ICON GENERATION (AUTOMATIC)
+- Add a script, e.g. scripts/generate-pwa-icons.mjs, that:
+  1) Builds an SVG string (rounded dark square background + stylized yellow truck + pin).
+  2) Uses sharp to render to PNGs at sizes [1024, 512, 192, 180, 167, 152, 120, 32, 16].
+  3) Writes them into the public/icons folder with versioned names (v2).
+- Add package.json script:
+  - "generate:pwa-icons": "node scripts/generate-pwa-icons.mjs"
+- Ensure it runs at least once during build:
+  - Either add to Dockerfile build step OR to a CI step; choose the simplest that works with current build system.
+  - Do NOT require user to manually supply an image.
+
+F) PRODUCTION DEPLOY RELIABILITY
+- Add a small "entrypoint" for the docker app container:
+  - Wait for DB readiness (retry 30s)
+  - Run ensureDatabase() / migrations
+  - Start server
+- If current Dockerfile starts node dist directly, switch to an entrypoint script (docker-entrypoint.sh) and keep existing behavior otherwise.
+
+DELIVERABLES:
+1) The exact code changes committed in-repo:
+   - new/updated files list
+   - updated docker-compose.yml healthcheck
+   - updated Dockerfile/entrypoint (if needed)
+   - updated server bootstrap with migrations + env validation
+   - PWA manifest + index.html changes
+   - generated icons produced by script and stored in repo (preferred) OR generated during build (acceptable).
+2) Provide a short RUNBOOK in README_DEPLOY.md:
+   - how to deploy on VPS after git pull: docker compose up -d --build
+   - how to verify DB tables exist: docker compose exec db psql ... \dt
+   - how to verify email config: printenv check
+   - iOS note: user must remove old home-screen shortcut and re-add to see new icon, because iOS caches icons.
+
+CONSTRAINTS:
+- Keep existing API endpoints and flows.
+- Don’t refactor unrelated code.
+- Make minimal changes, but ensure prod is fully working.
+
+NOW DO IT. Start by scanning the repo structure, identify server entrypoint, DB layer, public assets location, then implement changes accordingly.
