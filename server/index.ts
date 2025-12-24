@@ -1,7 +1,22 @@
 import { createApp, log } from "./app";
 import { serveStatic } from "./static";
+import { logEnvStatus } from "./config/env";
+import { ensureDatabase } from "./migrate";
 
 (async () => {
+  logEnvStatus();
+  
+  try {
+    await ensureDatabase();
+  } catch (err) {
+    console.error("[FATAL] Database initialization failed:", err);
+    if (process.env.NODE_ENV === "production") {
+      process.exit(1);
+    } else {
+      console.warn("[DB] Continuing despite migration error in development...");
+    }
+  }
+  
   const { app, httpServer } = await createApp();
 
   if (process.env.NODE_ENV === "production") {
