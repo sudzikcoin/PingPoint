@@ -55,6 +55,7 @@ export default function DriverDashboard() {
   const lastSendRef = useRef<number>(-SEND_INTERVAL_MS); // Allow first ping immediately
   const fallbackIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const stopTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const requestTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   const driverToken = tokenParams?.token;
 
@@ -160,60 +161,113 @@ export default function DriverDashboard() {
   // Start tracking with watchPosition
   const startTracking = useCallback(() => {
     if (!("geolocation" in navigator)) {
+      console.log("[Driver] geolocation not supported");
       setTrackingStatus('unavailable');
       setTrackingError("Geolocation not supported on this device");
       return;
     }
 
+    console.log("[Driver] geolocation request start");
     setTrackingStatus('requesting');
+    
+    // Clear any existing timeout
+    if (requestTimeoutRef.current) {
+      clearTimeout(requestTimeoutRef.current);
+    }
+    
+    // Set a 12-second timeout to prevent infinite "Requesting location access..." spinner
+    requestTimeoutRef.current = setTimeout(() => {
+      // Only trigger if we're still in 'requesting' state
+      setTrackingStatus((current) => {
+        if (current === 'requesting') {
+          console.log("[Driver] geolocation request timeout after 12s");
+          setTrackingError("Location request timed out. Please try again.");
+          return 'error';
+        }
+        return current;
+      });
+    }, 12000);
     
     // Try watchPosition first
     try {
       const watchId = navigator.geolocation.watchPosition(
         (position) => {
-          console.log("[Driver] geolocation success", { lat: position.coords.latitude, lng: position.coords.longitude });
+          // Clear the timeout since we got a response
+          if (requestTimeoutRef.current) {
+            clearTimeout(requestTimeoutRef.current);
+            requestTimeoutRef.current = null;
+          }
+          console.log("[Driver] geolocation success", { 
+            lat: position.coords.latitude, 
+            lng: position.coords.longitude,
+            accuracy: position.coords.accuracy,
+            ts: new Date().toISOString()
+          });
           setTrackingStatus('active');
           sendLocation(position);
         },
         (err) => {
-          console.error("[Driver] geolocation error code=" + err.code, err.message);
+          // Clear the timeout since we got a response
+          if (requestTimeoutRef.current) {
+            clearTimeout(requestTimeoutRef.current);
+            requestTimeoutRef.current = null;
+          }
+          console.error("[Driver] geolocation error", { code: err.code, message: err.message });
           if (err.code === err.PERMISSION_DENIED) {
             setTrackingStatus('denied');
             setTrackingError("Location permission denied");
           } else if (err.code === err.POSITION_UNAVAILABLE) {
+            setTrackingStatus('error');
             setTrackingError("Location unavailable");
           } else if (err.code === err.TIMEOUT) {
+            setTrackingStatus('error');
             setTrackingError("Location request timed out");
           }
         },
         {
           enableHighAccuracy: true,
-          timeout: 15000,
-          maximumAge: 30000,
+          timeout: 12000,
+          maximumAge: 0,
         }
       );
       
       watchIdRef.current = watchId;
     } catch (err) {
       // Fallback to getCurrentPosition with interval
-      console.log("watchPosition failed, using fallback");
+      console.log("[Driver] watchPosition failed, using getCurrentPosition fallback");
       
       const pollLocation = () => {
         navigator.geolocation.getCurrentPosition(
           (position) => {
+            if (requestTimeoutRef.current) {
+              clearTimeout(requestTimeoutRef.current);
+              requestTimeoutRef.current = null;
+            }
+            console.log("[Driver] geolocation success (fallback)", { 
+              lat: position.coords.latitude, 
+              lng: position.coords.longitude 
+            });
             setTrackingStatus('active');
             sendLocation(position);
           },
           (err) => {
+            if (requestTimeoutRef.current) {
+              clearTimeout(requestTimeoutRef.current);
+              requestTimeoutRef.current = null;
+            }
+            console.error("[Driver] geolocation error (fallback)", { code: err.code, message: err.message });
             if (err.code === err.PERMISSION_DENIED) {
               setTrackingStatus('denied');
               setTrackingError("Location permission denied");
               if (fallbackIntervalRef.current) {
                 clearInterval(fallbackIntervalRef.current);
               }
+            } else {
+              setTrackingStatus('error');
+              setTrackingError("Could not get location");
             }
           },
-          { enableHighAccuracy: true, timeout: 15000 }
+          { enableHighAccuracy: true, timeout: 12000, maximumAge: 0 }
         );
       };
       
@@ -222,34 +276,70 @@ export default function DriverDashboard() {
     }
   }, [sendLocation]);
 
-  // Request location permission and start tracking
+  // Request location permission and start tracking (user gesture triggered - critical for iOS Safari)
   const requestLocationPermission = useCallback(() => {
     if (!("geolocation" in navigator)) {
+      console.log("[Driver] geolocation not supported");
       setTrackingStatus('unavailable');
       setTrackingError("Geolocation not supported");
       return;
     }
 
+    console.log("[Driver] geolocation request start (user gesture)");
     setTrackingStatus('requesting');
+    
+    // Clear any existing timeout
+    if (requestTimeoutRef.current) {
+      clearTimeout(requestTimeoutRef.current);
+    }
+    
+    // Set a 12-second timeout
+    requestTimeoutRef.current = setTimeout(() => {
+      setTrackingStatus((current) => {
+        if (current === 'requesting') {
+          console.log("[Driver] geolocation request timeout after 12s (user gesture)");
+          setTrackingError("Location request timed out. Please try again.");
+          return 'error';
+        }
+        return current;
+      });
+    }, 12000);
     
     // This will trigger the permission prompt on iOS Safari
     navigator.geolocation.getCurrentPosition(
       (position) => {
+        // Clear timeout
+        if (requestTimeoutRef.current) {
+          clearTimeout(requestTimeoutRef.current);
+          requestTimeoutRef.current = null;
+        }
+        console.log("[Driver] geolocation success (user gesture)", { 
+          lat: position.coords.latitude, 
+          lng: position.coords.longitude,
+          accuracy: position.coords.accuracy,
+          ts: new Date().toISOString()
+        });
         // Permission granted, now start continuous tracking
         setTrackingStatus('active');
         sendLocation(position);
         startTracking();
       },
       (err) => {
+        // Clear timeout
+        if (requestTimeoutRef.current) {
+          clearTimeout(requestTimeoutRef.current);
+          requestTimeoutRef.current = null;
+        }
+        console.error("[Driver] geolocation error (user gesture)", { code: err.code, message: err.message });
         if (err.code === err.PERMISSION_DENIED) {
           setTrackingStatus('denied');
           setTrackingError("Location access denied. Please enable in Settings.");
         } else {
           setTrackingStatus('error');
-          setTrackingError("Could not get location");
+          setTrackingError("Could not get location. Please try again.");
         }
       },
-      { enableHighAccuracy: true, timeout: 15000 }
+      { enableHighAccuracy: true, timeout: 12000, maximumAge: 0 }
     );
   }, [sendLocation, startTracking]);
 
@@ -273,6 +363,10 @@ export default function DriverDashboard() {
       if (stopTimeoutRef.current) {
         clearTimeout(stopTimeoutRef.current);
         stopTimeoutRef.current = null;
+      }
+      if (requestTimeoutRef.current) {
+        clearTimeout(requestTimeoutRef.current);
+        requestTimeoutRef.current = null;
       }
     };
   }, [load, driverToken, trackingStatus, startTracking]);

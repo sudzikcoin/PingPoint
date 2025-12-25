@@ -900,19 +900,24 @@ export async function registerRoutes(
     try {
       const { token } = req.params;
       const { lat, lng, accuracy, speed, heading } = req.body;
+      const ua = req.headers['user-agent'] || 'unknown';
+      
+      console.log(`[TrackingPing] received hasToken=${!!token} lat=${lat} lng=${lng} ua=${ua.substring(0, 50)}`);
 
       if (typeof lat !== 'number' || typeof lng !== 'number') {
+        console.log(`[TrackingPing] rejected reason=invalid_coords lat=${lat} lng=${lng}`);
         return res.status(400).json({ error: "lat and lng are required numbers" });
       }
 
       const load = await storage.getLoadByToken(token, 'driver');
       if (!load || !load.driverId) {
+        console.log(`[TrackingPing] rejected reason=load_not_found token=${token}`);
         return res.status(404).json({ error: "Load not found" });
       }
 
       // Reject pings if tracking has ended (load delivered and 60s grace period passed)
       if (load.trackingEndedAt && new Date() >= new Date(load.trackingEndedAt)) {
-        console.log(`[TrackingPing] REJECTED load=${load.loadNumber} driver=${load.driverId} reason=tracking_ended`);
+        console.log(`[TrackingPing] rejected load=${load.loadNumber} driver=${load.driverId} reason=tracking_ended`);
         return res.status(409).json({ error: "Tracking ended", trackingEnded: true });
       }
 
@@ -927,7 +932,7 @@ export async function registerRoutes(
         source: "DRIVER_APP",
       });
 
-      console.log(`[TrackingPing] load=${load.loadNumber} driver=${load.driverId} lat=${lat} lng=${lng}`);
+      console.log(`[TrackingPing] stored load=${load.loadNumber} driver=${load.driverId} lat=${lat} lng=${lng}`);
 
       // Evaluate geofences for auto-arrive/depart (non-blocking)
       evaluateGeofencesForActiveLoad(load.driverId, load.id, parseFloat(lat.toString()), parseFloat(lng.toString()))
@@ -944,22 +949,28 @@ export async function registerRoutes(
   app.post("/api/driver/location", strictRateLimit(60, 60000), async (req: Request, res: Response) => {
     try {
       const { token, lat, lng, accuracy, speed, heading, timestamp } = req.body;
+      const ua = req.headers['user-agent'] || 'unknown';
+      
+      console.log(`[TrackingPing] received hasToken=${!!token} lat=${lat} lng=${lng} ua=${ua.substring(0, 50)}`);
 
       if (!token || typeof token !== 'string') {
+        console.log(`[TrackingPing] rejected reason=missing_token`);
         return res.status(400).json({ error: "token is required" });
       }
       if (typeof lat !== 'number' || typeof lng !== 'number') {
+        console.log(`[TrackingPing] rejected reason=invalid_coords lat=${lat} lng=${lng}`);
         return res.status(400).json({ error: "lat and lng are required numbers" });
       }
 
       const load = await storage.getLoadByToken(token, 'driver');
       if (!load || !load.driverId) {
+        console.log(`[TrackingPing] rejected reason=load_not_found token=${token}`);
         return res.status(404).json({ error: "Load not found" });
       }
 
       // Reject pings if tracking has ended (load delivered and 60s grace period passed)
       if (load.trackingEndedAt && new Date() >= new Date(load.trackingEndedAt)) {
-        console.log(`[TrackingPing] REJECTED load=${load.loadNumber} driver=${load.driverId} reason=tracking_ended`);
+        console.log(`[TrackingPing] rejected load=${load.loadNumber} driver=${load.driverId} reason=tracking_ended`);
         return res.status(409).json({ error: "Tracking ended", trackingEnded: true });
       }
 
@@ -974,7 +985,7 @@ export async function registerRoutes(
         source: "DRIVER_APP",
       });
 
-      console.log(`[TrackingPing] load=${load.loadNumber} driver=${load.driverId} lat=${lat} lng=${lng}`);
+      console.log(`[TrackingPing] stored load=${load.loadNumber} driver=${load.driverId} lat=${lat} lng=${lng}`);
 
       // Evaluate geofences for auto-arrive/depart (non-blocking)
       evaluateGeofencesForActiveLoad(load.driverId, load.id, parseFloat(lat.toString()), parseFloat(lng.toString()))
