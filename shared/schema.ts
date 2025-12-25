@@ -161,6 +161,8 @@ export const trackingPings = pgTable("tracking_pings", {
   lat: decimal("lat", { precision: 9, scale: 6 }).notNull(),
   lng: decimal("lng", { precision: 9, scale: 6 }).notNull(),
   accuracy: decimal("accuracy", { precision: 6, scale: 2 }),
+  speed: decimal("speed", { precision: 6, scale: 2 }),
+  heading: decimal("heading", { precision: 5, scale: 2 }),
   source: text("source").notNull(), // DRIVER_APP, MANUAL, ELD, etc.
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`now()`),
 });
@@ -367,6 +369,8 @@ export const insertTrackingPingSchema = createInsertSchema(trackingPings, {
   lat: z.string().or(z.number()),
   lng: z.string().or(z.number()),
   accuracy: z.string().or(z.number()).optional(),
+  speed: z.string().or(z.number()).nullish(),
+  heading: z.string().or(z.number()).nullish(),
 }).omit({
   id: true,
   createdAt: true,

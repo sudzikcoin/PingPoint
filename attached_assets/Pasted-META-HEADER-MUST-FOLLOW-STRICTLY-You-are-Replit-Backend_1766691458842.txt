@@ -1,0 +1,148 @@
+META-HEADER (MUST FOLLOW STRICTLY)
+You are Replit Backend Agent working inside an existing, deployed production codebase (PingPoint/AgentOS). The system previously worked in production; your job is to APPLY MINIMAL, LOCALIZED CHANGES ONLY to implement the requested feature. DO NOT refactor, DO NOT rename existing routes/models, DO NOT change auth flows, DO NOT change billing logic, DO NOT touch Resend/email verification (Resend is already configured and working). Preserve existing DB schema and data; only add additive migrations that are backwards-compatible. If you need to understand structure, inspect the repository first. After changes: ensure build passes and app runs. Provide a concise summary + list of files changed.
+
+GOAL (THIS SPRINT)
+Fix driver location tracking UX + backend so that:
+1) Driver no longer uses a manual “Send Location” button.
+2) Driver opens the driver link, is asked once to share location (browser permission), and then the app automatically sends geolocation updates every 60–120 seconds while the page is open (target: 60 seconds, configurable).
+3) Location updates are persisted in DB and available to public tracking page without manual refresh (polling).
+4) Do NOT touch Resend or email verification.
+
+SCOPE (DO EXACTLY THIS; NO EXTRA FEATURES)
+- Implement auto location sending for driver link + backend endpoint + DB persistence + public page live update via polling.
+- Do not implement geofencing, reverse geocoding (city/zip/state), Stripe, mobile store apps, etc. Those are later.
+- Keep existing Arrive/Depart functionality as-is; only add location streaming in parallel.
+
+IMPLEMENTATION PLAN (FOLLOW STEP BY STEP)
+
+A) REPO DISCOVERY (READ FIRST, THEN EDIT)
+1) Locate:
+   - Driver page (the UI shown when opening the “driver app link”).
+   - Public tracking page (the UI shown by “public tracking link”).
+   - Existing Express API routes for driver actions (arrive/depart) and tracking status.
+   - DB layer (Drizzle migrations are present: /migrations and drizzle meta files).
+2) Identify how tokens are passed:
+   - Driver link token (e.g., /driver/:token or ?token=...).
+   - Public tracking token (e.g., /track/:token).
+   Reuse the SAME token extraction logic already used for arrive/depart & public status.
+
+B) FRONTEND: DRIVER PAGE — REMOVE MANUAL BUTTON, ADD AUTO TRACKING
+1) Remove/disable the manual “Send Location” button in the driver UI.
+2) Replace with a 1-time “Enable Location Sharing” action that works on iOS Safari:
+   - On first load, try to start location tracking automatically.
+   - If permission prompt does not appear or permission is not yet granted, show a single primary button:
+     “Enable location sharing”
+   - On click, call geolocation API to trigger permission prompt.
+   - Once granted, switch UI state to:
+     - “Tracking: ON”
+     - “Last sent: <time>”
+     - show small status text for errors (permission denied / timeout / unsupported).
+   IMPORTANT: iOS Safari often requires a user gesture; do NOT rely only on auto-run without a button fallback.
+3) Tracking mechanism:
+   - Use navigator.geolocation.watchPosition (preferred) to receive updates.
+   - Throttle network sends to the server to once per SEND_INTERVAL_MS (default 60000 ms).
+   - Also send immediately upon first successful position acquisition.
+   - If watchPosition is unavailable, fallback to setInterval + getCurrentPosition with same interval.
+4) Networking:
+   - POST location updates to backend endpoint (you will add it): POST /api/driver/location
+   - Payload:
+     {
+       token: "<driverToken>",
+       lat: number,
+       lng: number,
+       accuracy?: number,
+       speed?: number|null,
+       heading?: number|null,
+       timestamp?: number (ms)
+     }
+   - Keep it same-origin; include credentials only if needed by existing setup (prefer no cookies; token-based).
+5) Add minimal client-side config:
+   - Allow SEND_INTERVAL_MS to be configured via existing env pattern if the project already supports client env.
+   - If not, hardcode 60000 and include a TODO comment.
+
+C) BACKEND: ADD ENDPOINT TO RECEIVE DRIVER LOCATION
+1) Add an Express route:
+   - POST /api/driver/location
+2) Behavior:
+   - Validate body: token, lat, lng; reject invalid types with 400.
+   - Use token to find the load/shipment (reusing existing DB lookup used for driver arrive/depart).
+     If token invalid or load not found -> 404.
+   - Update the load row with last known location fields (add columns via migration; see section D).
+   - Insert a row into a new history table location_updates (also via migration; see section D).
+   - Return { ok: true } quickly; keep it fast.
+3) Security:
+   - This endpoint must NOT require broker login; token itself authorizes the update.
+   - Rate limiting is optional; do NOT add dependencies. Keep it simple.
+
+D) DATABASE: ADD MIGRATION FOR LAST LOCATION + HISTORY
+Using existing Drizzle migration system in /migrations:
+1) Create a new migration file that:
+   - Adds columns to the existing loads/shipments table (use the real table name from the repo; do not guess):
+     last_location_lat DOUBLE PRECISION (nullable)
+     last_location_lng DOUBLE PRECISION (nullable)
+     last_location_accuracy DOUBLE PRECISION (nullable)
+     last_location_speed DOUBLE PRECISION (nullable)
+     last_location_heading DOUBLE PRECISION (nullable)
+     last_location_at TIMESTAMPTZ (nullable)
+   - Creates a new table location_updates:
+     id (uuid or serial/bigserial — follow existing style)
+     load_id (FK to loads/shipments id — follow existing id type)
+     lat DOUBLE PRECISION NOT NULL
+     lng DOUBLE PRECISION NOT NULL
+     accuracy DOUBLE PRECISION NULL
+     speed DOUBLE PRECISION NULL
+     heading DOUBLE PRECISION NULL
+     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+     source TEXT NULL (optional; set to 'driver')
+2) Update the Drizzle schema definitions accordingly (the TypeScript schema file used by server).
+3) Ensure migrations run in the same way they already do in this project (do not rework deployment). If there is a server/migrate.ts already, it must pick up the new migration automatically.
+
+E) PUBLIC TRACKING PAGE: LIVE UPDATES WITHOUT MANUAL REFRESH
+Current problem: public page updates only after refresh.
+Fix: add polling.
+1) Find the API the public page uses to get current status (likely /api/track/:token or similar).
+2) Extend that endpoint response (additive only) to include:
+   - lastLocation: { lat, lng, at } when available
+   - lastEvents: the last N driver events if already tracked (arrive/depart/delivered). If events are not stored, compute basic status from existing load fields; do not invent complex logic.
+   - optionally: lastLocationAgeSeconds
+3) In the public page UI:
+   - Poll this status endpoint every 5 seconds (setInterval in effect hook).
+   - Update the progress UI immediately when events change.
+   - Add simple textual status messages (no fancy design needed):
+     - “Driver arrived at pickup”
+     - “Driver departed pickup”
+     - “Driver arrived at delivery”
+     - “Delivered”
+     - When lastLocation updates: “Last location update: <time> (lat,lng)”
+   - Keep existing visuals (diamonds/bar); only add the text block under/near it.
+
+F) DO NOT BREAK EXISTING FLOWS
+- Arrive/Depart must keep working.
+- Broker dashboard must keep working.
+- Resend/email verification must remain untouched.
+- Existing API routes must not change signatures (only add fields to responses; do not remove).
+
+G) TESTING CHECKLIST (RUN THESE IN REPLIT)
+1) Start the app (whatever existing dev command is).
+2) Open a driver link in browser:
+   - You should see “Enable location sharing” if not yet allowed.
+   - After allowing, verify network calls to POST /api/driver/location occur ~every 60s.
+3) Verify DB is updated:
+   - loads table has last_location_* updated
+   - location_updates table gets rows
+4) Open public tracking link:
+   - Without refresh, you should see:
+     - status text changes when arrive/depart pressed
+     - “Last location update …” refreshes when new location is sent (polling works)
+5) Ensure build passes:
+   - npm run build (or existing build script)
+   - no TypeScript errors
+
+H) OUTPUT REQUIRED
+After implementing, output:
+1) Short summary of what you changed.
+2) List of files changed (paths).
+3) Any new env vars (if added) and defaults.
+4) Any commands needed to apply migration in production (using existing flow).
+
+NOW EXECUTE THESE CHANGES IN THIS REPLIT PROJECT.

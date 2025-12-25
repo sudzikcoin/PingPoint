@@ -1,18 +1,19 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useLocation, useRoute } from "wouter";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
-import { Truck, ChevronRight, Navigation, Calendar, MapPin, Loader2, CheckCircle2, Circle, Signal, SignalZero } from "lucide-react";
+import { Truck, Calendar, Loader2, CheckCircle2, Signal, SignalLow, SignalZero, AlertCircle, MapPin } from "lucide-react";
 import { format } from "date-fns";
-import { PillButton } from "@/components/ui/pill-button";
 import { ThemeToggle } from "@/components/ui/theme-toggle";
 import { useTheme } from "@/context/theme-context";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 
-const AUTO_PING_INTERVAL_MS = 2 * 60 * 1000; // 2 minutes
+// Location send interval: 60 seconds (configurable via env in future)
+const SEND_INTERVAL_MS = 60 * 1000;
+
+type TrackingStatus = 'idle' | 'requesting' | 'active' | 'denied' | 'unavailable' | 'error';
 
 interface Stop {
   id: string;
@@ -43,17 +44,22 @@ export default function DriverDashboard() {
   const [load, setLoad] = useState<LoadData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [sendingPing, setSendingPing] = useState(false);
-  const [autoPingEnabled, setAutoPingEnabled] = useState(false);
-  const [lastPingTime, setLastPingTime] = useState<Date | null>(null);
-  const autoPingIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  
+  // Tracking state
+  const [trackingStatus, setTrackingStatus] = useState<TrackingStatus>('idle');
+  const [lastSentTime, setLastSentTime] = useState<Date | null>(null);
+  const [trackingError, setTrackingError] = useState<string | null>(null);
+  
+  const watchIdRef = useRef<number | null>(null);
+  const lastSendRef = useRef<number>(-SEND_INTERVAL_MS); // Allow first ping immediately
+  const fallbackIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
   const driverToken = tokenParams?.token;
 
+  // Fetch load data
   useEffect(() => {
     const fetchLoad = async () => {
       if (!driverToken) {
-        // No token - show welcome screen
         setLoading(false);
         return;
       }
@@ -76,109 +82,163 @@ export default function DriverDashboard() {
     fetchLoad();
   }, [driverToken]);
 
-  const sendSilentPing = useCallback(async () => {
-    if (!driverToken || !("geolocation" in navigator)) return;
-
+  // Send location to server
+  const sendLocation = useCallback(async (position: GeolocationPosition) => {
+    if (!driverToken) return;
+    
+    const now = Date.now();
+    // Throttle to SEND_INTERVAL_MS
+    if (now - lastSendRef.current < SEND_INTERVAL_MS - 1000) {
+      return;
+    }
+    
+    const { latitude, longitude, accuracy, speed, heading } = position.coords;
+    
     try {
-      navigator.geolocation.getCurrentPosition(
-        async (position) => {
-          const { latitude, longitude, accuracy } = position.coords;
-          
-          const res = await fetch(`/api/driver/${driverToken}/ping`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ lat: latitude, lng: longitude, accuracy }),
-          });
+      const res = await fetch(`/api/driver/${driverToken}/ping`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          lat: latitude,
+          lng: longitude,
+          accuracy: accuracy || null,
+          speed: speed !== null ? speed : null,
+          heading: heading !== null ? heading : null,
+        }),
+      });
 
-          if (res.ok) {
-            setLastPingTime(new Date());
-            const loadRes = await fetch(`/api/driver/${driverToken}`);
-            if (loadRes.ok) {
-              const data = await loadRes.json();
-              setLoad(data);
-            }
-          }
-        },
-        (err) => {
-          console.error("Auto-ping geolocation error:", err);
-        },
-        { enableHighAccuracy: true, timeout: 15000 }
-      );
+      if (res.ok) {
+        lastSendRef.current = now;
+        setLastSentTime(new Date());
+        setTrackingError(null);
+        
+        // Refresh load data to get updated stop status
+        const loadRes = await fetch(`/api/driver/${driverToken}`);
+        if (loadRes.ok) {
+          const data = await loadRes.json();
+          setLoad(data);
+        }
+      }
     } catch (err) {
-      console.error("Auto-ping error:", err);
+      console.error("Error sending location:", err);
+      setTrackingError("Network error");
     }
   }, [driverToken]);
 
-  useEffect(() => {
-    if (autoPingEnabled && driverToken && load) {
-      sendSilentPing();
-      
-      autoPingIntervalRef.current = setInterval(sendSilentPing, AUTO_PING_INTERVAL_MS);
-      
-      return () => {
-        if (autoPingIntervalRef.current) {
-          clearInterval(autoPingIntervalRef.current);
-          autoPingIntervalRef.current = null;
-        }
-      };
-    } else {
-      if (autoPingIntervalRef.current) {
-        clearInterval(autoPingIntervalRef.current);
-        autoPingIntervalRef.current = null;
-      }
+  // Start tracking with watchPosition
+  const startTracking = useCallback(() => {
+    if (!("geolocation" in navigator)) {
+      setTrackingStatus('unavailable');
+      setTrackingError("Geolocation not supported on this device");
+      return;
     }
-  }, [autoPingEnabled, driverToken, load, sendSilentPing]);
 
-  const toggleAutoPing = () => {
-    const newValue = !autoPingEnabled;
-    setAutoPingEnabled(newValue);
-    if (newValue) {
-      toast.success("Auto-tracking enabled (every 2 min)");
-    } else {
-      toast.info("Auto-tracking disabled");
-    }
-  };
-
-  const sendLocationPing = async () => {
-    if (!driverToken) return;
-
-    setSendingPing(true);
+    setTrackingStatus('requesting');
+    
+    // Try watchPosition first
     try {
-      if ("geolocation" in navigator) {
+      const watchId = navigator.geolocation.watchPosition(
+        (position) => {
+          setTrackingStatus('active');
+          sendLocation(position);
+        },
+        (err) => {
+          console.error("Geolocation error:", err);
+          if (err.code === err.PERMISSION_DENIED) {
+            setTrackingStatus('denied');
+            setTrackingError("Location permission denied");
+          } else if (err.code === err.POSITION_UNAVAILABLE) {
+            setTrackingError("Location unavailable");
+          } else if (err.code === err.TIMEOUT) {
+            setTrackingError("Location request timed out");
+          }
+        },
+        {
+          enableHighAccuracy: true,
+          timeout: 15000,
+          maximumAge: 30000,
+        }
+      );
+      
+      watchIdRef.current = watchId;
+    } catch (err) {
+      // Fallback to getCurrentPosition with interval
+      console.log("watchPosition failed, using fallback");
+      
+      const pollLocation = () => {
         navigator.geolocation.getCurrentPosition(
-          async (position) => {
-            const { latitude, longitude, accuracy } = position.coords;
-            
-            const res = await fetch(`/api/driver/${driverToken}/ping`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ lat: latitude, lng: longitude, accuracy }),
-            });
-
-            if (res.ok) {
-              toast.success("Location sent successfully!");
-            } else {
-              toast.error("Failed to send location");
-            }
-            setSendingPing(false);
+          (position) => {
+            setTrackingStatus('active');
+            sendLocation(position);
           },
           (err) => {
-            console.error("Geolocation error:", err);
-            toast.error("Could not get your location. Please enable GPS.");
-            setSendingPing(false);
+            if (err.code === err.PERMISSION_DENIED) {
+              setTrackingStatus('denied');
+              setTrackingError("Location permission denied");
+              if (fallbackIntervalRef.current) {
+                clearInterval(fallbackIntervalRef.current);
+              }
+            }
           },
-          { enableHighAccuracy: true, timeout: 10000 }
+          { enableHighAccuracy: true, timeout: 15000 }
         );
-      } else {
-        toast.error("Geolocation not supported on this device");
-        setSendingPing(false);
-      }
-    } catch (err) {
-      console.error("Error sending ping:", err);
-      toast.error("Failed to send location");
-      setSendingPing(false);
+      };
+      
+      pollLocation();
+      fallbackIntervalRef.current = setInterval(pollLocation, SEND_INTERVAL_MS);
     }
-  };
+  }, [sendLocation]);
+
+  // Request location permission and start tracking
+  const requestLocationPermission = useCallback(() => {
+    if (!("geolocation" in navigator)) {
+      setTrackingStatus('unavailable');
+      setTrackingError("Geolocation not supported");
+      return;
+    }
+
+    setTrackingStatus('requesting');
+    
+    // This will trigger the permission prompt on iOS Safari
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        // Permission granted, now start continuous tracking
+        setTrackingStatus('active');
+        sendLocation(position);
+        startTracking();
+      },
+      (err) => {
+        if (err.code === err.PERMISSION_DENIED) {
+          setTrackingStatus('denied');
+          setTrackingError("Location access denied. Please enable in Settings.");
+        } else {
+          setTrackingStatus('error');
+          setTrackingError("Could not get location");
+        }
+      },
+      { enableHighAccuracy: true, timeout: 15000 }
+    );
+  }, [sendLocation, startTracking]);
+
+  // Auto-start tracking when load is available
+  useEffect(() => {
+    if (load && driverToken && trackingStatus === 'idle') {
+      // Try to start tracking automatically
+      startTracking();
+    }
+    
+    return () => {
+      // Cleanup
+      if (watchIdRef.current !== null) {
+        navigator.geolocation.clearWatch(watchIdRef.current);
+        watchIdRef.current = null;
+      }
+      if (fallbackIntervalRef.current) {
+        clearInterval(fallbackIntervalRef.current);
+        fallbackIntervalRef.current = null;
+      }
+    };
+  }, [load, driverToken, trackingStatus, startTracking]);
 
   const markArrived = async (stopId: string) => {
     if (!driverToken) return;
@@ -192,7 +252,6 @@ export default function DriverDashboard() {
 
       if (res.ok) {
         toast.success("Marked as arrived!");
-        // Refresh load data
         const loadRes = await fetch(`/api/driver/${driverToken}`);
         if (loadRes.ok) {
           const data = await loadRes.json();
@@ -219,7 +278,6 @@ export default function DriverDashboard() {
 
       if (res.ok) {
         toast.success("Marked as departed!");
-        // Refresh load data
         const loadRes = await fetch(`/api/driver/${driverToken}`);
         if (loadRes.ok) {
           const data = await loadRes.json();
@@ -231,6 +289,93 @@ export default function DriverDashboard() {
     } catch (err) {
       console.error("Error marking departed:", err);
       toast.error("Failed to update stop");
+    }
+  };
+
+  // Render tracking status indicator
+  const renderTrackingStatus = () => {
+    const baseClasses = "text-xs p-3 rounded-lg mb-4 flex items-center gap-2";
+    
+    switch (trackingStatus) {
+      case 'active':
+        return (
+          <div className={cn(
+            baseClasses,
+            theme === "arcade90s" 
+              ? "bg-arc-secondary/10 text-arc-secondary border border-arc-secondary/30" 
+              : "bg-emerald-500/10 text-emerald-400 border border-emerald-500/30"
+          )} data-testid="status-tracking-active">
+            <Signal className="w-4 h-4" />
+            <div className="flex-1">
+              <div className="font-medium">Tracking: ON</div>
+              {lastSentTime && (
+                <div className="opacity-70 text-[10px]">
+                  Last sent: {format(lastSentTime, "h:mm:ss a")}
+                </div>
+              )}
+            </div>
+          </div>
+        );
+      
+      case 'requesting':
+        return (
+          <div className={cn(
+            baseClasses,
+            theme === "arcade90s" 
+              ? "bg-arc-primary/10 text-arc-primary border border-arc-primary/30" 
+              : "bg-brand-gold/10 text-brand-gold border border-brand-gold/30"
+          )}>
+            <Loader2 className="w-4 h-4 animate-spin" />
+            <span>Requesting location access...</span>
+          </div>
+        );
+      
+      case 'denied':
+        return (
+          <div className={cn(
+            baseClasses,
+            theme === "arcade90s" 
+              ? "bg-red-500/10 text-red-400 border border-red-500/30" 
+              : "bg-red-500/10 text-red-400 border border-red-500/30"
+          )} data-testid="status-tracking-denied">
+            <AlertCircle className="w-4 h-4" />
+            <div className="flex-1">
+              <div className="font-medium">Location access denied</div>
+              <div className="opacity-70 text-[10px]">Enable location in your browser settings</div>
+            </div>
+          </div>
+        );
+      
+      case 'unavailable':
+        return (
+          <div className={cn(
+            baseClasses,
+            theme === "arcade90s" 
+              ? "bg-orange-500/10 text-orange-400 border border-orange-500/30" 
+              : "bg-orange-500/10 text-orange-400 border border-orange-500/30"
+          )}>
+            <SignalZero className="w-4 h-4" />
+            <span>Geolocation not available on this device</span>
+          </div>
+        );
+      
+      case 'idle':
+      default:
+        return (
+          <Button
+            onClick={requestLocationPermission}
+            className={cn(
+              "w-full mb-4",
+              theme === "arcade90s"
+                ? "bg-arc-primary text-black rounded-none shadow-arc-glow-yellow hover:bg-arc-primary/80"
+                : "bg-brand-gold text-black hover:bg-brand-gold/80"
+            )}
+            data-testid="button-enable-location"
+          >
+            <MapPin className="w-4 h-4 mr-2" />
+            Enable Location Sharing
+          </Button>
+        );
     }
   };
 
@@ -315,7 +460,6 @@ export default function DriverDashboard() {
   }
 
   const stops = load.stops || [];
-  const currentStop = stops.find(s => !s.arrivedAt) || stops[stops.length - 1];
   const firstStop = stops[0];
   const lastStop = stops[stops.length - 1];
 
@@ -404,56 +548,17 @@ export default function DriverDashboard() {
               </div>
             )}
 
-            {/* Location Tracking Buttons */}
-            <div className="flex gap-2 mb-4">
-              <Button
-                onClick={sendLocationPing}
-                disabled={sendingPing}
-                className={cn(
-                  "flex-1",
-                  theme === "arcade90s"
-                    ? "bg-arc-primary text-black rounded-none shadow-arc-glow-yellow hover:bg-arc-primary/80"
-                    : "bg-brand-gold text-black hover:bg-brand-gold/80"
-                )}
-                data-testid="button-send-location"
-              >
-                <Navigation className="w-4 h-4 mr-2" />
-                {sendingPing ? "Sending..." : "Send Location"}
-              </Button>
-              <Button
-                onClick={toggleAutoPing}
-                variant={autoPingEnabled ? "default" : "outline"}
-                className={cn(
-                  "px-4",
-                  theme === "arcade90s"
-                    ? autoPingEnabled
-                      ? "bg-arc-secondary text-black rounded-none"
-                      : "bg-transparent border-arc-border text-arc-muted rounded-none hover:bg-arc-secondary/20"
-                    : autoPingEnabled
-                      ? "bg-emerald-600 text-white hover:bg-emerald-700"
-                      : "bg-transparent border-brand-border text-brand-muted hover:bg-brand-border/20"
-                )}
-                data-testid="button-toggle-auto-ping"
-              >
-                {autoPingEnabled ? <Signal className="w-4 h-4" /> : <SignalZero className="w-4 h-4" />}
-              </Button>
-            </div>
-
-            {/* Auto-ping status */}
-            {autoPingEnabled && (
+            {/* Location Tracking Status */}
+            {renderTrackingStatus()}
+            
+            {/* Tracking error message */}
+            {trackingError && trackingStatus === 'active' && (
               <div className={cn(
-                "text-xs text-center mb-4 p-2 rounded",
-                theme === "arcade90s" 
-                  ? "bg-arc-secondary/10 text-arc-secondary border border-arc-secondary/30" 
-                  : "bg-emerald-500/10 text-emerald-400 border border-emerald-500/30"
+                "text-xs p-2 rounded mb-4 flex items-center gap-2",
+                "bg-orange-500/10 text-orange-400 border border-orange-500/30"
               )}>
-                <Signal className="w-3 h-3 inline mr-1" />
-                Auto-tracking active
-                {lastPingTime && (
-                  <span className="ml-2 opacity-70">
-                    (Last: {format(lastPingTime, "h:mm a")})
-                  </span>
-                )}
+                <AlertCircle className="w-3 h-3" />
+                <span>{trackingError}</span>
               </div>
             )}
           </CardContent>
@@ -490,6 +595,7 @@ export default function DriverDashboard() {
                         ? "bg-brand-card border-brand-gold shadow-lg"
                         : "bg-brand-card border-brand-border"
                 )}
+                data-testid={`card-stop-${stop.id}`}
               >
                 <CardContent className="p-4">
                   <div className="flex items-start gap-4">
@@ -557,6 +663,7 @@ export default function DriverDashboard() {
                                   ? "bg-arc-secondary text-black rounded-none"
                                   : "bg-brand-gold text-black"
                               )}
+                              data-testid={`button-arrive-${stop.id}`}
                             >
                               Arrive
                             </Button>
@@ -570,6 +677,7 @@ export default function DriverDashboard() {
                                   ? "bg-arc-primary text-black rounded-none"
                                   : "bg-emerald-500 text-white"
                               )}
+                              data-testid={`button-depart-${stop.id}`}
                             >
                               Depart
                             </Button>

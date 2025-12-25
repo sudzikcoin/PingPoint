@@ -1,12 +1,15 @@
 import { useRoute } from "wouter";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Map, Package, Truck, Clock, MapPin, Share2, Loader2 } from "lucide-react";
-import { format } from "date-fns";
+import { Map, Package, Truck, Clock, MapPin, Share2, Loader2, Signal } from "lucide-react";
+import { format, formatDistanceToNow } from "date-fns";
 import { PillButton } from "@/components/ui/pill-button";
 import { cn } from "@/lib/utils";
 import { useTheme } from "@/context/theme-context";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
+
+// Polling interval for live updates (5 seconds)
+const POLL_INTERVAL_MS = 5000;
 
 interface Stop {
   id: string;
@@ -43,32 +46,56 @@ export default function PublicTracking() {
   const [error, setError] = useState<string | null>(null);
 
   const token = params1?.token || params2?.token;
+  const pollIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
-  useEffect(() => {
-    const fetchTracking = async () => {
-      if (!token) {
+  const fetchTracking = useCallback(async (isPolling = false) => {
+    if (!token) {
+      if (!isPolling) {
         setError("Invalid tracking link");
         setLoading(false);
-        return;
       }
+      return;
+    }
 
-      try {
-        const res = await fetch(`/api/track/${token}`);
-        if (!res.ok) {
-          throw new Error("Load not found");
-        }
-        const trackingData = await res.json();
-        setData(trackingData);
-      } catch (err) {
-        console.error("Failed to fetch tracking data:", err);
+    try {
+      const res = await fetch(`/api/track/${token}`);
+      if (!res.ok) {
+        throw new Error("Load not found");
+      }
+      const trackingData = await res.json();
+      setData(trackingData);
+    } catch (err) {
+      console.error("Failed to fetch tracking data:", err);
+      if (!isPolling) {
         setError("Tracking link invalid or expired");
-      } finally {
+      }
+    } finally {
+      if (!isPolling) {
         setLoading(false);
       }
-    };
-
-    fetchTracking();
+    }
   }, [token]);
+
+  // Initial fetch
+  useEffect(() => {
+    fetchTracking(false);
+  }, [fetchTracking]);
+
+  // Polling for live updates
+  useEffect(() => {
+    if (!token || error) return;
+
+    pollIntervalRef.current = setInterval(() => {
+      fetchTracking(true);
+    }, POLL_INTERVAL_MS);
+
+    return () => {
+      if (pollIntervalRef.current) {
+        clearInterval(pollIntervalRef.current);
+        pollIntervalRef.current = null;
+      }
+    };
+  }, [token, error, fetchTracking]);
 
   if (loading) {
     return (
@@ -204,7 +231,7 @@ export default function PublicTracking() {
               <div>
                 <p className={cn("text-xs uppercase tracking-widest font-bold mb-2 transition-colors", theme === "arcade90s" ? "text-arc-muted arcade-pixel-font" : "text-brand-muted")}>Current Status</p>
                 <div className="flex items-center gap-4">
-                  <h1 className={cn("text-3xl font-bold tracking-tight transition-colors", theme === "arcade90s" ? "text-arc-text arcade-pixel-font" : "text-white")}>{data.status.replace("_", " ")}</h1>
+                  <h1 className={cn("text-3xl font-bold tracking-tight transition-colors", theme === "arcade90s" ? "text-arc-text arcade-pixel-font" : "text-white")} data-testid="text-load-status">{data.status.replace("_", " ")}</h1>
                   <div className={cn("h-3 w-3 rounded-full animate-pulse shadow-[0_0_15px_rgba(16,185,129,0.6)]",
                     theme === "arcade90s" ? "bg-arc-primary shadow-arc-glow-yellow rounded-none" : "bg-emerald-500"
                   )} />
@@ -215,6 +242,64 @@ export default function PublicTracking() {
                   </p>
                 )}
               </div>
+            </div>
+
+            {/* Live Status Updates */}
+            <div className={cn("p-4 border space-y-3 transition-all",
+              theme === "arcade90s" 
+                ? "bg-arc-bg/50 rounded-none border-arc-primary/30" 
+                : "bg-brand-dark-pill/50 rounded-2xl border-brand-border/50"
+            )}>
+              <div className="flex items-center gap-2">
+                <Signal className={cn("w-4 h-4", theme === "arcade90s" ? "text-arc-primary" : "text-brand-gold")} />
+                <span className={cn("text-xs uppercase tracking-widest font-bold", theme === "arcade90s" ? "text-arc-muted arcade-pixel-font" : "text-brand-muted")}>
+                  Live Updates
+                </span>
+              </div>
+              
+              {/* Driver Events */}
+              {stops.map((stop, idx) => {
+                if (stop.arrivedAt) {
+                  return (
+                    <div key={`arrived-${stop.id}`} className={cn("text-sm flex items-center gap-2", theme === "arcade90s" ? "text-arc-text font-mono text-xs" : "text-brand-text/90")} data-testid={`event-arrived-${idx}`}>
+                      <span className={cn("w-2 h-2 rounded-full", theme === "arcade90s" ? "bg-arc-secondary" : "bg-emerald-500")} />
+                      Driver arrived at {stop.type.toLowerCase()} ({stop.city}) - {format(new Date(stop.arrivedAt), "MMM d, h:mm a")}
+                    </div>
+                  );
+                }
+                return null;
+              })}
+              
+              {stops.map((stop, idx) => {
+                if (stop.departedAt) {
+                  return (
+                    <div key={`departed-${stop.id}`} className={cn("text-sm flex items-center gap-2", theme === "arcade90s" ? "text-arc-text font-mono text-xs" : "text-brand-text/90")} data-testid={`event-departed-${idx}`}>
+                      <span className={cn("w-2 h-2 rounded-full", theme === "arcade90s" ? "bg-arc-primary" : "bg-brand-gold")} />
+                      Driver departed {stop.type.toLowerCase()} ({stop.city}) - {format(new Date(stop.departedAt), "MMM d, h:mm a")}
+                    </div>
+                  );
+                }
+                return null;
+              })}
+              
+              {/* Last Location Update */}
+              {data.lastLocation && (
+                <div className={cn("text-sm flex items-center gap-2 pt-2 border-t", 
+                  theme === "arcade90s" ? "text-arc-secondary font-mono text-xs border-arc-border" : "text-brand-muted border-brand-border/30"
+                )} data-testid="text-last-location">
+                  <MapPin className="w-3 h-3" />
+                  Last location update: {formatDistanceToNow(new Date(data.lastLocation.timestamp), { addSuffix: true })}
+                  <span className="opacity-60">
+                    ({parseFloat(data.lastLocation.lat).toFixed(4)}, {parseFloat(data.lastLocation.lng).toFixed(4)})
+                  </span>
+                </div>
+              )}
+              
+              {!data.lastLocation && stops.every(s => !s.arrivedAt) && (
+                <div className={cn("text-sm italic", theme === "arcade90s" ? "text-arc-muted font-mono text-xs" : "text-brand-muted")}>
+                  Waiting for driver to begin tracking...
+                </div>
+              )}
             </div>
 
             {/* Progress Visual */}

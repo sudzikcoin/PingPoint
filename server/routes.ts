@@ -899,7 +899,11 @@ export async function registerRoutes(
   app.post("/api/driver/:token/ping", strictRateLimit(60, 60000), async (req: Request, res: Response) => {
     try {
       const { token } = req.params;
-      const { lat, lng, accuracy } = req.body;
+      const { lat, lng, accuracy, speed, heading } = req.body;
+
+      if (typeof lat !== 'number' || typeof lng !== 'number') {
+        return res.status(400).json({ error: "lat and lng are required numbers" });
+      }
 
       const load = await storage.getLoadByToken(token, 'driver');
       if (!load || !load.driverId) {
@@ -911,17 +915,58 @@ export async function registerRoutes(
         driverId: load.driverId,
         lat: lat.toString(),
         lng: lng.toString(),
-        accuracy: accuracy ? accuracy.toString() : null,
+        accuracy: accuracy != null ? accuracy.toString() : null,
+        speed: speed != null ? speed.toString() : null,
+        heading: heading != null ? heading.toString() : null,
         source: "DRIVER_APP",
       });
 
       // Evaluate geofences for auto-arrive/depart (non-blocking)
-      evaluateGeofencesForActiveLoad(load.driverId, load.id, parseFloat(lat), parseFloat(lng))
+      evaluateGeofencesForActiveLoad(load.driverId, load.id, parseFloat(lat.toString()), parseFloat(lng.toString()))
         .catch(err => console.error("Error evaluating geofences:", err));
 
       return res.json({ ok: true, pingId: ping.id });
     } catch (error) {
       console.error("Error in /api/driver/:token/ping:", error);
+      return res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  // POST /api/driver/location - Alternative endpoint for location updates (matches spec)
+  app.post("/api/driver/location", strictRateLimit(60, 60000), async (req: Request, res: Response) => {
+    try {
+      const { token, lat, lng, accuracy, speed, heading, timestamp } = req.body;
+
+      if (!token || typeof token !== 'string') {
+        return res.status(400).json({ error: "token is required" });
+      }
+      if (typeof lat !== 'number' || typeof lng !== 'number') {
+        return res.status(400).json({ error: "lat and lng are required numbers" });
+      }
+
+      const load = await storage.getLoadByToken(token, 'driver');
+      if (!load || !load.driverId) {
+        return res.status(404).json({ error: "Load not found" });
+      }
+
+      const ping = await storage.createTrackingPing({
+        loadId: load.id,
+        driverId: load.driverId,
+        lat: lat.toString(),
+        lng: lng.toString(),
+        accuracy: accuracy != null ? accuracy.toString() : null,
+        speed: speed != null ? speed.toString() : null,
+        heading: heading != null ? heading.toString() : null,
+        source: "DRIVER_APP",
+      });
+
+      // Evaluate geofences for auto-arrive/depart (non-blocking)
+      evaluateGeofencesForActiveLoad(load.driverId, load.id, parseFloat(lat.toString()), parseFloat(lng.toString()))
+        .catch(err => console.error("Error evaluating geofences:", err));
+
+      return res.json({ ok: true, pingId: ping.id });
+    } catch (error) {
+      console.error("Error in /api/driver/location:", error);
       return res.status(500).json({ error: "Internal server error" });
     }
   });

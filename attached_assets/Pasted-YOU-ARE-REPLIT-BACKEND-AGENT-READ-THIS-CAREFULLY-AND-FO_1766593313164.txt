@@ -1,0 +1,110 @@
+YOU ARE REPLIT BACKEND AGENT. READ THIS CAREFULLY AND FOLLOW EXACTLY.
+
+META / NON-NEGOTIABLE RULES
+- Make the smallest possible set of changes to get production working reliably.
+- Do NOT rename existing API routes, request/response shapes, or auth behavior unless absolutely required to fix production.
+- Do NOT delete tables/data. NO “drop schema”, NO wiping volumes.
+- Every change must be committed to the repo so that: one git push → on prod `docker compose up -d --build` works and stays healthy.
+- The root problem right now is: Postgres has NO tables (e.g. relation "brokers" does not exist). Fix must ensure DB schema is created automatically on deploy/start.
+
+GOAL
+After your changes:
+1) Fresh prod install (empty volume) → app boots, runs migrations, tables exist, API does not 500 due to missing relations.
+2) Existing prod with empty tables → same (tables created).
+3) Existing prod with tables/data → migrations run safely, data preserved.
+4) `docker compose ps` shows app HEALTHY (or at least running) and db HEALTHY.
+5) `/api/health` returns 200.
+6) Auth-protected endpoints may return 401 without token, but must NOT 500.
+
+WHAT YOU MUST DO (STEP BY STEP)
+A) Inspect the project to determine how DB schema SHOULD be managed:
+   - Check for Prisma: `prisma/schema.prisma`, `@prisma/client`, `prisma migrate`, `prisma db push`
+   - Check for Knex/TypeORM/Sequelize or raw SQL migrations folders.
+   - Search code for SQL queries / table names referenced (at minimum: brokers, loads, plus any other relations used).
+   - Determine the canonical approach already intended by the codebase. Prefer existing tooling over inventing a new one.
+
+B) Implement “AUTO MIGRATE ON START” in a production-safe, idempotent way:
+   - Create an entrypoint script for the app container that:
+     1) Waits for Postgres to accept connections.
+     2) Applies migrations (preferred: Prisma `migrate deploy` or equivalent).
+     3) Starts the app.
+   - This must run on every container start, but be safe (no destructive resets).
+   - Ensure logs clearly show: “DB ready”, “migrations applied”, “starting server”.
+
+C) Ensure migrations actually exist in the repo:
+   - If Prisma is present:
+     - Ensure `prisma/schema.prisma` contains models for all tables the app uses (brokers is mandatory).
+     - Ensure a migrations folder exists (`prisma/migrations/...`).
+     - If migrations are missing but schema exists, create an initial migration properly (WITHOUT wiping data).
+       - In production we should use `prisma migrate deploy`.
+       - For dev generation you may create migration using `prisma migrate dev --name init` during build step ONLY if safe in Replit environment; otherwise generate migration files deterministically from schema.
+     - Add npm scripts:
+       - "migrate:deploy": "prisma migrate deploy"
+       - "migrate:status": "prisma migrate status"
+   - If Prisma is NOT present but another migration system exists, wire that system similarly.
+   - If there is NO migration system at all, you MUST create a minimal SQL migration mechanism:
+     - Create `migrations/001_init.sql` that creates required tables (brokers and all other required relations detected in code) with sane types/constraints.
+     - Add a tiny Node migration runner `scripts/migrate.js` that runs SQL files in order and stores applied versions in a table like `schema_migrations`.
+     - The runner must be idempotent and safe.
+
+D) Fix Docker / Compose so prod uses the correct DB user and URL consistently:
+   - In `docker-compose.yml`:
+     - Remove obsolete `version:` key (optional but nice).
+     - db service must set: POSTGRES_DB, POSTGRES_USER, POSTGRES_PASSWORD (already likely).
+     - app service must use DATABASE_URL that matches db credentials and host `db:5432`.
+     - Keep volumes (do not remove).
+     - Keep healthcheck for db; if missing, add `pg_isready -U $POSTGRES_USER -d $POSTGRES_DB`.
+   - Ensure app container has access to the migration tool and can run it.
+   - Ensure app listens on the expected port (8080 based on current setup) and that healthcheck (if used) hits the correct endpoint.
+
+E) Fix health / container status:
+   - If app is marked “unhealthy”, implement a Docker HEALTHCHECK that returns 200 (e.g. `/api/health`).
+   - Ensure `/api/health` exists and returns JSON `{ ok: true }` (or current expected shape), status 200.
+
+F) Provide a deterministic “prod runbook” inside the repo:
+   - Add `README_PROD.md` with exact commands:
+     - `docker compose up -d --build`
+     - how to view logs
+     - how to verify tables exist
+     - how to rollback (non-destructive)
+   - Add `scripts/prod-check.sh` that prints:
+     - compose ps
+     - app health
+     - db tables count (or at least that brokers exists)
+
+IMPLEMENTATION DETAILS (REQUIRED)
+1) Add an entrypoint script, e.g. `scripts/entrypoint.sh`:
+   - `set -e`
+   - wait loop:
+     - use `node -e` with pg client OR `pg_isready` if installed in app image
+   - run migrations:
+     - Prisma: `npx prisma migrate deploy`
+     - Or: `node scripts/migrate.js`
+   - then start server (existing start command).
+2) Update Dockerfile to use that entrypoint:
+   - Copy scripts/
+   - `RUN chmod +x scripts/entrypoint.sh`
+   - `ENTRYPOINT ["./scripts/entrypoint.sh"]`
+3) Ensure build output is consistent (dist/index.cjs exists if used).
+4) Do NOT hardcode secrets. Use env vars.
+
+ACCEPTANCE TESTS YOU MUST RUN IN REPLIT (AND FIX UNTIL PASS)
+- `docker compose build`
+- `docker compose up -d`
+- `docker compose ps` (db healthy; app running; ideally healthy)
+- `docker compose exec -T db psql -U $POSTGRES_USER -d $POSTGRES_DB -c "select 1;"`
+- `docker compose exec -T db psql -U $POSTGRES_USER -d $POSTGRES_DB -c "select table_schema,table_name from information_schema.tables where table_type='BASE TABLE' order by 1,2;"`
+- Confirm brokers table exists (schema may vary):
+  - `select table_schema, table_name from information_schema.tables where table_name='brokers';`
+- `curl -i http://127.0.0.1:8080/api/health` returns 200
+- `curl -i http://127.0.0.1:8080/api/brokers/me` returns 401 (ok) but NOT 500
+- Any endpoint that previously 500’d because of missing brokers must now either work or return a proper auth/validation error, but not “relation does not exist”.
+
+OUTPUT REQUIREMENTS
+When done, print:
+1) A concise summary of what you changed (files + why).
+2) The exact prod commands to run after git push.
+3) How to verify DB schema exists on prod (one psql command).
+4) A note explicitly confirming: “No destructive DB operations were added.”
+
+NOW EXECUTE. Do all code changes in the repo, commit-ready. Do not ask me questions unless you are blocked by missing critical info; otherwise make reasonable choices and proceed.
