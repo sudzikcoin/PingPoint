@@ -1,12 +1,35 @@
 import { useRoute } from "wouter";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Map, Package, Truck, Clock, MapPin, Share2, Loader2, Signal } from "lucide-react";
+import { Map, Package, Truck, Clock, MapPin, Share2, Loader2, Signal, ChevronDown, ChevronUp } from "lucide-react";
 import { format, formatDistanceToNow } from "date-fns";
 import { PillButton } from "@/components/ui/pill-button";
 import { cn } from "@/lib/utils";
 import { useTheme } from "@/context/theme-context";
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { MapContainer, TileLayer, Marker, Popup, useMap } from "react-leaflet";
+import L from "leaflet";
+import "leaflet/dist/leaflet.css";
+
+// Custom marker icon for driver location
+const driverIcon = new L.Icon({
+  iconUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png",
+  iconRetinaUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png",
+  shadowUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png",
+  iconSize: [25, 41],
+  iconAnchor: [12, 41],
+  popupAnchor: [1, -34],
+  shadowSize: [41, 41]
+});
+
+// Component to update map center when location changes
+function MapUpdater({ lat, lng }: { lat: number; lng: number }) {
+  const map = useMap();
+  useEffect(() => {
+    map.setView([lat, lng], map.getZoom());
+  }, [lat, lng, map]);
+  return null;
+}
 
 // Polling interval for live updates (5 seconds)
 const POLL_INTERVAL_MS = 5000;
@@ -194,40 +217,63 @@ export default function PublicTracking() {
         <div className={cn("lg:col-span-2 relative order-2 lg:order-1 min-h-[300px] border-r transition-colors",
           theme === "arcade90s" ? "bg-arc-bg border-arc-border" : "bg-brand-bg border-brand-border"
         )}>
-          <div className={cn("absolute inset-0 flex items-center justify-center bg-cover bg-center opacity-10 grayscale transition-opacity", 
-             theme === "arcade90s" ? "bg-[radial-gradient(#22d3ee_1px,transparent_1px)] [background-size:20px_20px] opacity-20" : "bg-[url('https://images.unsplash.com/photo-1524661135-423995f22d0b?q=80&w=2074&auto=format&fit=crop')]"
-          )}></div>
-          <div className="absolute inset-0 flex items-center justify-center">
-            <div className={cn("backdrop-blur-md p-8 rounded-3xl border flex flex-col items-center gap-4 text-center max-w-sm mx-4 shadow-2xl transition-all",
-              theme === "arcade90s" 
-                ? "bg-arc-panel/90 border-arc-secondary/50 rounded-none shadow-arc-glow-cyan" 
-                : "bg-brand-card/90 border-brand-border"
-            )}>
-              <div className={cn("h-16 w-16 flex items-center justify-center shadow-pill-dark relative transition-all",
-                theme === "arcade90s" 
-                  ? "rounded-none border-2 border-arc-primary bg-arc-bg text-arc-primary shadow-arc-glow-yellow" 
-                  : "rounded-full bg-brand-dark-pill border border-brand-border text-brand-gold"
-              )}>
-                <div className={cn("absolute inset-0 animate-ping",
-                  theme === "arcade90s" ? "bg-arc-primary/20 rounded-none" : "rounded-full bg-brand-gold/10"
-                )} />
-                <Map className="h-8 w-8" />
+          {data.lastLocation ? (
+            <MapContainer
+              center={[parseFloat(data.lastLocation.lat), parseFloat(data.lastLocation.lng)]}
+              zoom={13}
+              className="h-full w-full z-0"
+              style={{ minHeight: "300px" }}
+              data-testid="map-driver-location"
+            >
+              <TileLayer
+                attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+                url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+              />
+              <Marker
+                position={[parseFloat(data.lastLocation.lat), parseFloat(data.lastLocation.lng)]}
+                icon={driverIcon}
+              >
+                <Popup>
+                  <div className="text-sm">
+                    <strong>Driver Location</strong><br />
+                    Last update: {format(new Date(data.lastLocation.timestamp), "MMM d, h:mm a")}<br />
+                    <span className="text-xs text-gray-500">
+                      {parseFloat(data.lastLocation.lat).toFixed(5)}, {parseFloat(data.lastLocation.lng).toFixed(5)}
+                    </span>
+                  </div>
+                </Popup>
+              </Marker>
+              <MapUpdater lat={parseFloat(data.lastLocation.lat)} lng={parseFloat(data.lastLocation.lng)} />
+            </MapContainer>
+          ) : (
+            <>
+              <div className={cn("absolute inset-0 flex items-center justify-center bg-cover bg-center opacity-10 grayscale transition-opacity", 
+                 theme === "arcade90s" ? "bg-[radial-gradient(#22d3ee_1px,transparent_1px)] [background-size:20px_20px] opacity-20" : "bg-[url('https://images.unsplash.com/photo-1524661135-423995f22d0b?q=80&w=2074&auto=format&fit=crop')]"
+              )}></div>
+              <div className="absolute inset-0 flex items-center justify-center">
+                <div className={cn("backdrop-blur-md p-8 rounded-3xl border flex flex-col items-center gap-4 text-center max-w-sm mx-4 shadow-2xl transition-all",
+                  theme === "arcade90s" 
+                    ? "bg-arc-panel/90 border-arc-secondary/50 rounded-none shadow-arc-glow-cyan" 
+                    : "bg-brand-card/90 border-brand-border"
+                )}>
+                  <div className={cn("h-16 w-16 flex items-center justify-center shadow-pill-dark relative transition-all",
+                    theme === "arcade90s" 
+                      ? "rounded-none border-2 border-arc-primary bg-arc-bg text-arc-primary shadow-arc-glow-yellow" 
+                      : "rounded-full bg-brand-dark-pill border border-brand-border text-brand-gold"
+                  )}>
+                    <div className={cn("absolute inset-0 animate-ping",
+                      theme === "arcade90s" ? "bg-arc-primary/20 rounded-none" : "rounded-full bg-brand-gold/10"
+                    )} />
+                    <Map className="h-8 w-8" />
+                  </div>
+                  <div>
+                    <h3 className={cn("text-xl font-bold transition-colors", theme === "arcade90s" ? "text-arc-primary arcade-pixel-font tracking-wide" : "text-white")}>Waiting for Driver</h3>
+                    <p className={cn("text-sm mt-2 leading-relaxed", theme === "arcade90s" ? "text-arc-muted font-mono text-xs" : "text-brand-muted")}>Map will appear once the driver starts sending location updates.</p>
+                  </div>
+                </div>
               </div>
-              <div>
-                <h3 className={cn("text-xl font-bold transition-colors", theme === "arcade90s" ? "text-arc-primary arcade-pixel-font tracking-wide" : "text-white")}>Live Tracking Active</h3>
-                <p className={cn("text-sm mt-2 leading-relaxed", theme === "arcade90s" ? "text-arc-muted font-mono text-xs" : "text-brand-muted")}>Vehicle location is updated every 15 minutes via secure GPS link.</p>
-              </div>
-              {data.lastLocation && (
-                 <div className={cn("mt-2 px-4 py-1.5 text-xs font-bold tracking-wide uppercase transition-all",
-                   theme === "arcade90s"
-                     ? "bg-arc-secondary/10 border border-arc-secondary text-arc-secondary arcade-pixel-font text-[10px] shadow-arc-glow-cyan"
-                     : "rounded-full bg-brand-gold/10 border border-brand-gold/20 text-brand-gold"
-                 )}>
-                   Last ping: {format(new Date(data.lastLocation.timestamp), "MMM d, HH:mm")}
-                 </div>
-              )}
-            </div>
-          </div>
+            </>
+          )}
         </div>
 
         {/* Sidebar Info (1/3 width) */}

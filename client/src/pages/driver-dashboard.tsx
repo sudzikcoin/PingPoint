@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { useLocation, useRoute } from "wouter";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Truck, Calendar, Loader2, CheckCircle2, Signal, SignalLow, SignalZero, AlertCircle, MapPin } from "lucide-react";
+import { Truck, Calendar, Loader2, CheckCircle2, Signal, SignalLow, SignalZero, AlertCircle, MapPin, ChevronDown, ChevronUp, AlertTriangle } from "lucide-react";
 import { format } from "date-fns";
 import { ThemeToggle } from "@/components/ui/theme-toggle";
 import { useTheme } from "@/context/theme-context";
@@ -12,8 +12,15 @@ import { toast } from "sonner";
 
 // Location send interval: 60 seconds (configurable via env in future)
 const SEND_INTERVAL_MS = 60 * 1000;
+// Low accuracy threshold (5000 meters - likely IP-based)
+const LOW_ACCURACY_THRESHOLD = 5000;
 
 type TrackingStatus = 'idle' | 'requesting' | 'active' | 'denied' | 'unavailable' | 'error' | 'stopping' | 'stopped';
+
+interface DebugLogEntry {
+  ts: string;
+  msg: string;
+}
 
 interface Stop {
   id: string;
@@ -50,12 +57,26 @@ export default function DriverDashboard() {
   const [lastSentTime, setLastSentTime] = useState<Date | null>(null);
   const [trackingError, setTrackingError] = useState<string | null>(null);
   const [trackingEndsAt, setTrackingEndsAt] = useState<Date | null>(null);
+  const [lastCoords, setLastCoords] = useState<{ lat: number; lng: number; accuracy: number } | null>(null);
+  const [lowAccuracyWarning, setLowAccuracyWarning] = useState(false);
+  const [debugLogs, setDebugLogs] = useState<DebugLogEntry[]>([]);
+  const [debugPanelOpen, setDebugPanelOpen] = useState(false);
   
   const watchIdRef = useRef<number | null>(null);
   const lastSendRef = useRef<number>(-SEND_INTERVAL_MS); // Allow first ping immediately
   const fallbackIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const stopTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const requestTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  
+  // Add debug log entry (visible on-screen for mobile debugging)
+  const addDebugLog = useCallback((msg: string) => {
+    const entry: DebugLogEntry = {
+      ts: new Date().toLocaleTimeString(),
+      msg
+    };
+    console.log(`[DriverGeo] ${msg}`);
+    setDebugLogs(prev => [...prev.slice(-9), entry]); // Keep last 10
+  }, []);
 
   const driverToken = tokenParams?.token;
 
@@ -114,19 +135,31 @@ export default function DriverDashboard() {
     const now = Date.now();
     // Throttle to SEND_INTERVAL_MS
     if (now - lastSendRef.current < SEND_INTERVAL_MS - 1000) {
+      addDebugLog(`throttled (wait ${Math.round((SEND_INTERVAL_MS - (now - lastSendRef.current)) / 1000)}s)`);
       return;
     }
     
     const { latitude, longitude, accuracy, speed, heading } = position.coords;
     
-    // CRITICAL: Validate coordinates before sending - never send invalid or fallback coords
+    // Update last coords for display
+    setLastCoords({ lat: latitude, lng: longitude, accuracy: accuracy || 0 });
+    
+    // Check for low accuracy (IP-based location)
+    if (accuracy && accuracy > LOW_ACCURACY_THRESHOLD) {
+      setLowAccuracyWarning(true);
+      addDebugLog(`WARNING: Low accuracy ${Math.round(accuracy)}m (may be IP-based)`);
+    } else {
+      setLowAccuracyWarning(false);
+    }
+    
+    // CRITICAL: Validate coordinates before sending - never send invalid coords
     if (!Number.isFinite(latitude) || !Number.isFinite(longitude) || 
         Math.abs(latitude) > 90 || Math.abs(longitude) > 180) {
-      console.log("[DriverGeo] ping skipped reason=invalid_coords", { lat: latitude, lng: longitude });
+      addDebugLog(`ping skipped: invalid coords lat=${latitude} lng=${longitude}`);
       return;
     }
     
-    console.log("[DriverGeo] ping sending", { lat: latitude, lng: longitude, accuracy });
+    addDebugLog(`ping sending lat=${latitude.toFixed(5)} lng=${longitude.toFixed(5)} acc=${accuracy ? Math.round(accuracy) : '?'}m`);
     
     try {
       const res = await fetch(`/api/driver/${driverToken}/ping`, {
@@ -142,7 +175,7 @@ export default function DriverDashboard() {
       });
 
       if (res.ok) {
-        console.log("[DriverGeo] ping sent OK", { lat: latitude, lng: longitude, status: res.status });
+        addDebugLog(`ping sent OK (${res.status})`);
         lastSendRef.current = now;
         setLastSentTime(new Date());
         setTrackingError(null);
@@ -156,45 +189,40 @@ export default function DriverDashboard() {
       } else if (res.status === 409) {
         // Tracking has ended (load delivered)
         const data = await res.json();
-        console.log("[DriverGeo] ping rejected reason=tracking_ended");
+        addDebugLog(`ping rejected: tracking_ended`);
         if (data.trackingEnded) {
           stopTracking();
         }
       } else {
-        console.log("[DriverGeo] ping failed", { status: res.status });
+        addDebugLog(`ping failed status=${res.status}`);
       }
     } catch (err) {
-      console.error("[DriverGeo] ping error:", err);
+      addDebugLog(`ping error: ${err instanceof Error ? err.message : 'network'}`);
       setTrackingError("Network error");
     }
-  }, [driverToken, trackingStatus, stopTracking]);
+  }, [driverToken, trackingStatus, stopTracking, addDebugLog]);
 
   // Start tracking with watchPosition (called after user gesture grants permission)
   const startTracking = useCallback(() => {
     if (!("geolocation" in navigator)) {
-      console.log("[DriverGeo] geolocation not supported");
+      addDebugLog("geolocation API not available");
       setTrackingStatus('unavailable');
       setTrackingError("Geolocation not supported on this device");
       return;
     }
 
-    console.log("[DriverGeo] starting watchPosition for continuous tracking");
+    addDebugLog("starting watchPosition for continuous tracking");
     
     // Try watchPosition for continuous updates
     try {
       const watchId = navigator.geolocation.watchPosition(
         (position) => {
-          console.log("[DriverGeo] watchPosition update", { 
-            lat: position.coords.latitude, 
-            lng: position.coords.longitude,
-            accuracy: position.coords.accuracy
-          });
+          addDebugLog(`watchPosition update lat=${position.coords.latitude.toFixed(5)} acc=${Math.round(position.coords.accuracy || 0)}m`);
           setTrackingStatus('active');
           sendLocation(position);
         },
         (err) => {
-          console.error("[DriverGeo] watchPosition error", { code: err.code, message: err.message });
-          // Don't change status for watch errors after tracking started
+          addDebugLog(`watchPosition error code=${err.code} msg=${err.message}`);
           if (err.code === err.PERMISSION_DENIED) {
             setTrackingStatus('denied');
             setTrackingError("Location permission denied");
@@ -209,21 +237,17 @@ export default function DriverDashboard() {
       
       watchIdRef.current = watchId;
     } catch (err) {
-      // Fallback to getCurrentPosition with interval
-      console.log("[DriverGeo] watchPosition not available, using getCurrentPosition polling");
+      addDebugLog("watchPosition not available, using polling fallback");
       
       const pollLocation = () => {
         navigator.geolocation.getCurrentPosition(
           (position) => {
-            console.log("[DriverGeo] getCurrentPosition update", { 
-              lat: position.coords.latitude, 
-              lng: position.coords.longitude 
-            });
+            addDebugLog(`poll update lat=${position.coords.latitude.toFixed(5)}`);
             setTrackingStatus('active');
             sendLocation(position);
           },
           (err) => {
-            console.error("[DriverGeo] getCurrentPosition error", { code: err.code, message: err.message });
+            addDebugLog(`poll error code=${err.code}`);
             if (err.code === err.PERMISSION_DENIED) {
               setTrackingStatus('denied');
               setTrackingError("Location permission denied");
@@ -239,18 +263,18 @@ export default function DriverDashboard() {
       pollLocation();
       fallbackIntervalRef.current = setInterval(pollLocation, SEND_INTERVAL_MS);
     }
-  }, [sendLocation]);
+  }, [sendLocation, addDebugLog]);
 
   // Request location permission and start tracking (user gesture triggered - CRITICAL for iOS Safari)
   const requestLocationPermission = useCallback(() => {
     if (!("geolocation" in navigator)) {
-      console.log("[DriverGeo] geolocation API not available");
+      addDebugLog("geolocation API not available");
       setTrackingStatus('unavailable');
       setTrackingError("Geolocation not supported on this device");
       return;
     }
 
-    console.log("[DriverGeo] request click - user gesture triggered");
+    addDebugLog("button clicked - requesting location permission");
     setTrackingStatus('requesting');
     
     // Clear any existing timeout
@@ -262,7 +286,7 @@ export default function DriverDashboard() {
     requestTimeoutRef.current = setTimeout(() => {
       setTrackingStatus((current) => {
         if (current === 'requesting') {
-          console.log("[DriverGeo] getCurrentPosition timeout after 20s");
+          addDebugLog("timeout after 20s - retrying");
           setTrackingError("Location request timed out. Please try again.");
           return 'error';
         }
@@ -271,7 +295,7 @@ export default function DriverDashboard() {
     }, 20000);
     
     // First attempt with high accuracy (GPS)
-    console.log("[DriverGeo] getCurrentPosition attempt enableHighAccuracy=true");
+    addDebugLog("getCurrentPosition (high accuracy)");
     navigator.geolocation.getCurrentPosition(
       (position) => {
         // Clear timeout
@@ -279,34 +303,25 @@ export default function DriverDashboard() {
           clearTimeout(requestTimeoutRef.current);
           requestTimeoutRef.current = null;
         }
-        console.log("[DriverGeo] getCurrentPosition success", { 
-          lat: position.coords.latitude, 
-          lng: position.coords.longitude,
-          accuracy: position.coords.accuracy,
-          ts: new Date().toISOString()
-        });
+        addDebugLog(`success lat=${position.coords.latitude.toFixed(5)} lng=${position.coords.longitude.toFixed(5)} acc=${Math.round(position.coords.accuracy || 0)}m`);
         // Permission granted, now start continuous tracking
         setTrackingStatus('active');
         sendLocation(position);
         startTracking();
       },
       (err) => {
-        console.error("[DriverGeo] getCurrentPosition error", { code: err.code, message: err.message });
+        addDebugLog(`error code=${err.code} msg=${err.message}`);
         
         // If timeout or position unavailable, retry with low accuracy
         if (err.code === err.TIMEOUT || err.code === err.POSITION_UNAVAILABLE) {
-          console.log("[DriverGeo] retrying with enableHighAccuracy=false");
+          addDebugLog("retrying with low accuracy fallback");
           navigator.geolocation.getCurrentPosition(
             (position) => {
               if (requestTimeoutRef.current) {
                 clearTimeout(requestTimeoutRef.current);
                 requestTimeoutRef.current = null;
               }
-              console.log("[DriverGeo] getCurrentPosition success (low accuracy)", { 
-                lat: position.coords.latitude, 
-                lng: position.coords.longitude,
-                accuracy: position.coords.accuracy
-              });
+              addDebugLog(`success (low acc) lat=${position.coords.latitude.toFixed(5)} acc=${Math.round(position.coords.accuracy || 0)}m`);
               setTrackingStatus('active');
               sendLocation(position);
               startTracking();
@@ -316,7 +331,7 @@ export default function DriverDashboard() {
                 clearTimeout(requestTimeoutRef.current);
                 requestTimeoutRef.current = null;
               }
-              console.error("[DriverGeo] getCurrentPosition retry failed", { code: retryErr.code, message: retryErr.message });
+              addDebugLog(`retry failed code=${retryErr.code}`);
               if (retryErr.code === retryErr.PERMISSION_DENIED) {
                 setTrackingStatus('denied');
                 setTrackingError("Location access denied. Please enable in Settings.");
@@ -332,6 +347,7 @@ export default function DriverDashboard() {
             clearTimeout(requestTimeoutRef.current);
             requestTimeoutRef.current = null;
           }
+          addDebugLog("permission denied by user");
           setTrackingStatus('denied');
           setTrackingError("Location access denied. Please enable in Settings.");
         } else {
@@ -339,20 +355,21 @@ export default function DriverDashboard() {
             clearTimeout(requestTimeoutRef.current);
             requestTimeoutRef.current = null;
           }
+          addDebugLog(`unexpected error code=${err.code}`);
           setTrackingStatus('error');
           setTrackingError("Could not get location. Please try again.");
         }
       },
       { enableHighAccuracy: true, timeout: 20000, maximumAge: 0 }
     );
-  }, [sendLocation, startTracking]);
+  }, [sendLocation, startTracking, addDebugLog]);
 
   // iOS Safari requires user gesture to request location - do NOT auto-start
   // Instead, stay in 'idle' state and show "Enable Location" button
   useEffect(() => {
     // Log when load is ready but waiting for user gesture
     if (load && driverToken && trackingStatus === 'idle') {
-      console.log("[DriverGeo] state=idle, waiting for user gesture to enable location");
+      addDebugLog("state=idle, waiting for user gesture");
     }
     
     return () => {
@@ -374,7 +391,7 @@ export default function DriverDashboard() {
         requestTimeoutRef.current = null;
       }
     };
-  }, [load, driverToken, trackingStatus, startTracking]);
+  }, [load, driverToken, trackingStatus, startTracking, addDebugLog]);
 
   const markArrived = async (stopId: string) => {
     if (!driverToken) return;
@@ -451,21 +468,40 @@ export default function DriverDashboard() {
     switch (trackingStatus) {
       case 'active':
         return (
-          <div className={cn(
-            baseClasses,
-            theme === "arcade90s" 
-              ? "bg-arc-secondary/10 text-arc-secondary border border-arc-secondary/30" 
-              : "bg-emerald-500/10 text-emerald-400 border border-emerald-500/30"
-          )} data-testid="status-tracking-active">
-            <Signal className="w-4 h-4" />
-            <div className="flex-1">
-              <div className="font-medium">Tracking: ON</div>
-              {lastSentTime && (
-                <div className="opacity-70 text-[10px]">
-                  Last sent: {format(lastSentTime, "h:mm:ss a")}
-                </div>
-              )}
+          <div className="space-y-2 mb-4">
+            <div className={cn(
+              baseClasses,
+              "mb-0",
+              theme === "arcade90s" 
+                ? "bg-arc-secondary/10 text-arc-secondary border border-arc-secondary/30" 
+                : "bg-emerald-500/10 text-emerald-400 border border-emerald-500/30"
+            )} data-testid="status-tracking-active">
+              <Signal className="w-4 h-4" />
+              <div className="flex-1">
+                <div className="font-medium">Tracking: ON</div>
+                {lastSentTime && (
+                  <div className="opacity-70 text-[10px]">
+                    Last sent: {format(lastSentTime, "h:mm:ss a")}
+                  </div>
+                )}
+                {lastCoords && (
+                  <div className="opacity-70 text-[10px]">
+                    {lastCoords.lat.toFixed(5)}, {lastCoords.lng.toFixed(5)} (±{Math.round(lastCoords.accuracy)}m)
+                  </div>
+                )}
+              </div>
             </div>
+            {lowAccuracyWarning && (
+              <div className={cn(
+                "text-xs p-2 rounded-lg flex items-center gap-2",
+                theme === "arcade90s" 
+                  ? "bg-yellow-500/10 text-yellow-400 border border-yellow-500/30" 
+                  : "bg-yellow-500/10 text-yellow-400 border border-yellow-500/30"
+              )} data-testid="warning-low-accuracy">
+                <AlertTriangle className="w-4 h-4 flex-shrink-0" />
+                <span className="text-[10px]">Low accuracy (IP-based). Desktop browsers may show wrong location.</span>
+              </div>
+            )}
           </div>
         );
       
@@ -930,6 +966,46 @@ export default function DriverDashboard() {
               </Card>
             );
           })}
+        </div>
+        
+        {/* Debug Panel (collapsible) */}
+        <div className={cn(
+          "mt-6 border rounded-lg overflow-hidden",
+          theme === "arcade90s" 
+            ? "border-arc-border bg-arc-bg/50" 
+            : "border-brand-border bg-brand-dark-pill/50"
+        )}>
+          <button
+            onClick={() => setDebugPanelOpen(!debugPanelOpen)}
+            className={cn(
+              "w-full p-2 text-xs flex items-center justify-between",
+              theme === "arcade90s" 
+                ? "text-arc-muted hover:bg-arc-bg" 
+                : "text-brand-muted hover:bg-brand-dark-pill"
+            )}
+            data-testid="button-toggle-debug"
+          >
+            <span>Debug Log ({debugLogs.length} entries)</span>
+            {debugPanelOpen ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+          </button>
+          {debugPanelOpen && (
+            <div className={cn(
+              "p-2 border-t text-[10px] font-mono max-h-40 overflow-y-auto",
+              theme === "arcade90s" 
+                ? "border-arc-border text-arc-muted bg-black/30" 
+                : "border-brand-border text-brand-muted bg-black/30"
+            )} data-testid="panel-debug-logs">
+              {debugLogs.length === 0 ? (
+                <div className="opacity-50">No logs yet. Tap "Enable Location" to start.</div>
+              ) : (
+                debugLogs.map((log, i) => (
+                  <div key={i} className="py-0.5">
+                    <span className="opacity-50">[{log.ts}]</span> {log.msg}
+                  </div>
+                ))
+              )}
+            </div>
+          )}
         </div>
       </main>
     </div>
