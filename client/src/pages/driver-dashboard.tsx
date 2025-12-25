@@ -13,7 +13,7 @@ import { toast } from "sonner";
 // Location send interval: 60 seconds (configurable via env in future)
 const SEND_INTERVAL_MS = 60 * 1000;
 
-type TrackingStatus = 'idle' | 'requesting' | 'active' | 'denied' | 'unavailable' | 'error';
+type TrackingStatus = 'idle' | 'requesting' | 'active' | 'denied' | 'unavailable' | 'error' | 'stopping' | 'stopped';
 
 interface Stop {
   id: string;
@@ -49,10 +49,12 @@ export default function DriverDashboard() {
   const [trackingStatus, setTrackingStatus] = useState<TrackingStatus>('idle');
   const [lastSentTime, setLastSentTime] = useState<Date | null>(null);
   const [trackingError, setTrackingError] = useState<string | null>(null);
+  const [trackingEndsAt, setTrackingEndsAt] = useState<Date | null>(null);
   
   const watchIdRef = useRef<number | null>(null);
   const lastSendRef = useRef<number>(-SEND_INTERVAL_MS); // Allow first ping immediately
   const fallbackIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const stopTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   const driverToken = tokenParams?.token;
 
@@ -82,9 +84,31 @@ export default function DriverDashboard() {
     fetchLoad();
   }, [driverToken]);
 
+  // Stop tracking and cleanup
+  const stopTracking = useCallback(() => {
+    if (watchIdRef.current !== null) {
+      navigator.geolocation.clearWatch(watchIdRef.current);
+      watchIdRef.current = null;
+    }
+    if (fallbackIntervalRef.current) {
+      clearInterval(fallbackIntervalRef.current);
+      fallbackIntervalRef.current = null;
+    }
+    if (stopTimeoutRef.current) {
+      clearTimeout(stopTimeoutRef.current);
+      stopTimeoutRef.current = null;
+    }
+    setTrackingStatus('stopped');
+  }, []);
+
   // Send location to server
   const sendLocation = useCallback(async (position: GeolocationPosition) => {
     if (!driverToken) return;
+    
+    // Don't send if tracking is stopping or stopped
+    if (trackingStatus === 'stopping' || trackingStatus === 'stopped') {
+      return;
+    }
     
     const now = Date.now();
     // Throttle to SEND_INTERVAL_MS
@@ -118,12 +142,18 @@ export default function DriverDashboard() {
           const data = await loadRes.json();
           setLoad(data);
         }
+      } else if (res.status === 409) {
+        // Tracking has ended (load delivered)
+        const data = await res.json();
+        if (data.trackingEnded) {
+          stopTracking();
+        }
       }
     } catch (err) {
       console.error("Error sending location:", err);
       setTrackingError("Network error");
     }
-  }, [driverToken]);
+  }, [driverToken, trackingStatus, stopTracking]);
 
   // Start tracking with watchPosition
   const startTracking = useCallback(() => {
@@ -237,6 +267,10 @@ export default function DriverDashboard() {
         clearInterval(fallbackIntervalRef.current);
         fallbackIntervalRef.current = null;
       }
+      if (stopTimeoutRef.current) {
+        clearTimeout(stopTimeoutRef.current);
+        stopTimeoutRef.current = null;
+      }
     };
   }, [load, driverToken, trackingStatus, startTracking]);
 
@@ -266,7 +300,7 @@ export default function DriverDashboard() {
     }
   };
 
-  const markDeparted = async (stopId: string) => {
+  const markDeparted = async (stopId: string, stopType: string) => {
     if (!driverToken) return;
 
     try {
@@ -277,11 +311,27 @@ export default function DriverDashboard() {
       });
 
       if (res.ok) {
-        toast.success("Marked as departed!");
+        const data = await res.json();
+        
+        // Check if this was a delivery depart that triggered load completion
+        if (data.loadDelivered && data.trackingEndsAt) {
+          toast.success("Delivery completed! Tracking will stop in 1 minute.");
+          setTrackingStatus('stopping');
+          setTrackingEndsAt(new Date(data.trackingEndsAt));
+          
+          // Schedule tracking stop after 60 seconds
+          stopTimeoutRef.current = setTimeout(() => {
+            stopTracking();
+          }, 60000);
+        } else {
+          toast.success("Marked as departed!");
+        }
+        
+        // Refresh load data
         const loadRes = await fetch(`/api/driver/${driverToken}`);
         if (loadRes.ok) {
-          const data = await loadRes.json();
-          setLoad(data);
+          const loadData = await loadRes.json();
+          setLoad(loadData);
         }
       } else {
         toast.error("Failed to update stop");
@@ -356,6 +406,38 @@ export default function DriverDashboard() {
           )}>
             <SignalZero className="w-4 h-4" />
             <span>Geolocation not available on this device</span>
+          </div>
+        );
+      
+      case 'stopping':
+        return (
+          <div className={cn(
+            baseClasses,
+            theme === "arcade90s" 
+              ? "bg-arc-primary/10 text-arc-primary border border-arc-primary/30" 
+              : "bg-brand-gold/10 text-brand-gold border border-brand-gold/30"
+          )} data-testid="status-tracking-stopping">
+            <CheckCircle2 className="w-4 h-4" />
+            <div className="flex-1">
+              <div className="font-medium">Delivery completed</div>
+              <div className="opacity-70 text-[10px]">Tracking will stop in ~1 minute</div>
+            </div>
+          </div>
+        );
+      
+      case 'stopped':
+        return (
+          <div className={cn(
+            baseClasses,
+            theme === "arcade90s" 
+              ? "bg-arc-muted/10 text-arc-muted border border-arc-muted/30" 
+              : "bg-gray-500/10 text-gray-400 border border-gray-500/30"
+          )} data-testid="status-tracking-stopped">
+            <CheckCircle2 className="w-4 h-4" />
+            <div className="flex-1">
+              <div className="font-medium">Tracking stopped</div>
+              <div className="opacity-70 text-[10px]">Load delivered successfully</div>
+            </div>
           </div>
         );
       
@@ -671,7 +753,7 @@ export default function DriverDashboard() {
                           {isArrived && (
                             <Button
                               size="sm"
-                              onClick={() => markDeparted(stop.id)}
+                              onClick={() => markDeparted(stop.id, stop.type)}
                               className={cn(
                                 theme === "arcade90s"
                                   ? "bg-arc-primary text-black rounded-none"

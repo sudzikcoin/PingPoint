@@ -57,6 +57,7 @@ export interface IStorage {
   // Stop operations
   createStops(stopsData: InsertStop[]): Promise<Stop[]>;
   getStopsByLoad(loadId: string): Promise<Stop[]>;
+  getStopById(id: string): Promise<Stop | undefined>;
   updateStop(id: string, data: Partial<Stop>): Promise<Stop | undefined>;
 
   // Tracking ping operations
@@ -239,6 +240,11 @@ export class DatabaseStorage implements IStorage {
       .from(stops)
       .where(eq(stops.loadId, loadId))
       .orderBy(stops.sequence);
+  }
+
+  async getStopById(id: string): Promise<Stop | undefined> {
+    const [stop] = await db.select().from(stops).where(eq(stops.id, id));
+    return stop || undefined;
   }
 
   async updateStop(id: string, data: Partial<Stop>): Promise<Stop | undefined> {

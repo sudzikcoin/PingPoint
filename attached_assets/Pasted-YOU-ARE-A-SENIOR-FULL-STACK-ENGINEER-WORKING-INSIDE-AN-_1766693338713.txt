@@ -1,0 +1,113 @@
+YOU ARE A SENIOR FULL-STACK ENGINEER WORKING INSIDE AN EXISTING REPLIT PROJECT (CLIENT + EXPRESS SERVER + DRIZZLE). APPLY MINIMAL, LOCALIZED CHANGES. DO NOT BREAK EXISTING FLOWS (AUTH, RESEND EMAIL VERIFICATION, ROLES). RESEND IS ALREADY WORKING — DO NOT MODIFY RESEND INTEGRATION OR EMAIL FLOWS.
+
+GOAL (Driver tracking):
+- Remove the manual “Send Location” behavior as a user action that posts location.
+- When driver opens the driver link, the app requests geolocation permission and starts automatically sending location pings every 60–120 seconds (configurable).
+- If permission is not granted or fails, show a small CTA button “Enable location” to trigger the permission prompt (this is not “Send location”; it only requests permission).
+- After the driver clicks “Depart” on the DELIVERY stop, tracking must stop automatically after 60 seconds.
+- When DELIVERY depart happens, mark the load as DELIVERED so Broker UI shows “Delivered” status.
+
+PROJECT CONSTRAINTS:
+- Keep endpoints and tokens compatible (driver token, tracking token).
+- Keep DB migrations safe and incremental (Drizzle).
+- Keep public tracking page updates working.
+- Do not add heavy new dependencies.
+
+IMPLEMENTATION STEPS:
+
+1) FIND CURRENT DRIVER TRACKING UI
+- Locate the driver page that opens via /driver/:driverToken (or similar route).
+- Find where the “Send Location” button exists and where geolocation is requested.
+- Identify existing tracking ping endpoint (likely /api/track/ping or similar) and how it stores tracking_pings.
+
+2) CLIENT: REPLACE “SEND LOCATION” WITH AUTO TRACKING
+- Remove/disable the “Send Location” button as an action to submit location.
+- On driver page mount, attempt to request geolocation permission and start an interval to send location.
+- Use navigator.geolocation.getCurrentPosition (not watchPosition) inside the interval to avoid iOS background quirks; request high accuracy, short timeout, and maximumAge 0/10s.
+- Interval: default 90 seconds (1.5 min). Allow env override via VITE_DRIVER_PING_INTERVAL_MS or similar (fallback 90000).
+- After permission is granted and first position acquired, show a small status text like “Live tracking active” and last sent time.
+- If permission is denied or request fails, show a non-blocking banner “Location access is required for tracking” + button “Enable location” that calls a function to re-request location (by calling getCurrentPosition). Do NOT reintroduce “send location” logic.
+
+Client pseudo behavior:
+- startTracking():
+  - set state trackingActive = true
+  - run sendPingOnce() immediately
+  - set interval = setInterval(sendPingOnce, intervalMs)
+- sendPingOnce():
+  - if trackingStopped flag -> return
+  - geolocation.getCurrentPosition(success, error, options)
+  - on success: POST to server endpoint with { lat, lng, accuracy?, ts } and driverToken or derived auth header
+  - on error: set status message (permission denied / timeout / unavailable)
+- stopTracking(afterMs):
+  - schedule clearInterval after afterMs (60000 for delivery depart)
+  - immediately set UI to “Delivery completed — tracking will stop in 1 minute”
+  - after stop: trackingActive=false, show “Tracking stopped”
+
+3) SERVER: SUPPORT AUTO PINGS + STOP AFTER DELIVERED
+A) Ensure there is an endpoint to accept driver location pings tied to driverToken/load.
+- If endpoint exists (e.g., POST /api/track/ping), keep it.
+- If it doesn’t exist, add:
+  POST /api/driver/location
+  Body: { lat: number, lng: number, accuracy?: number, ts?: string }
+  Auth: driverToken in URL (preferred) or header; DO NOT use broker auth for driver.
+  Behavior:
+  - Resolve driver by driverToken and loadId currently assigned.
+  - Insert into tracking_pings with loadId, driverId/token, lat, lng, createdAt.
+  - Update loads.lastLocation (or similar) if such field exists; otherwise store latest in a lightweight loads_last_location table or reuse existing column if present.
+
+B) HARD STOP AFTER DELIVERY DEPART
+- In the existing “stop status update” endpoint (looks like PATCH /api/driver/:driverToken/stop/:stopId) that handles arrive/depart:
+  - Detect when the stop.type is DELIVERY and the action is depart (or the handler sets departedAt for a DELIVERY stop).
+  - When DELIVERY departedAt is set for the first time:
+    1) Update load.status = 'DELIVERED'
+    2) Set load.deliveredAt = now()
+    3) Set load.trackingEndedAt = now() + 60 seconds (or store endedAt=now and client waits 60s; choose endedAt=now+60s for server-side truth)
+- Then, in the location ping endpoint, if load.status == 'DELIVERED' OR (trackingEndedAt exists AND now() >= trackingEndedAt), reject new pings with HTTP 409 and message “Tracking ended”.
+
+DB MIGRATION (Drizzle):
+- Check current schema for loads table.
+- If loads does not have deliveredAt and trackingEndedAt columns, add them via a new Drizzle migration:
+  - deliveredAt timestamp nullable
+  - trackingEndedAt timestamp nullable
+- Keep migration minimal. Run migration in dev automatically as project already does.
+
+4) BROKER UI: SHOW DELIVERED
+- Find broker loads list/table UI.
+- It currently shows statuses like PLANNED etc.
+- Ensure when load.status becomes DELIVERED, broker UI shows badge “DELIVERED” and load details reflect final state.
+- Do not break free plan limiter logic.
+- If there is a “status label” map, add DELIVERED mapping.
+
+5) PUBLIC TRACKING PAGE: KEEP LIVE UPDATES + FINAL STATE
+- Ensure public tracking endpoint returns status 'DELIVERED' when load delivered.
+- Add a final message “Delivered” in live updates if your UI supports it.
+- If public page already auto-updates, keep it. If it polls, ensure it will reflect delivered status without manual refresh.
+
+6) TEST PLAN (ADD A SHORT CHECKLIST IN README OR NOTES)
+Implement and verify on Replit:
+- Start dev server.
+- Create a load as broker.
+- Open driver link in iOS Safari / mobile browser.
+- Confirm permission prompt appears; after allow, the UI shows “Live tracking active”.
+- Confirm server logs show periodic POSTs every ~60–120 seconds.
+- Click ARRIVE pickup, DEPART pickup, ARRIVE delivery, DEPART delivery:
+  - Public tracking page updates automatically.
+  - Broker loads list shows DELIVERED within 1 refresh/poll.
+- After DEPART delivery:
+  - Wait 70 seconds and confirm no more location POST requests are sent (client interval cleared).
+  - Confirm server rejects any additional pings with 409 “Tracking ended”.
+  - Confirm load.status == DELIVERED in API response and DB.
+
+DELIVERABLES:
+- Code changes implementing the above.
+- Minimal migration (if needed).
+- Update any env sample: VITE_DRIVER_PING_INTERVAL_MS (optional).
+- Keep all existing flows working (Resend email verification, auth/roles, load creation, public link rendering).
+
+DO NOT:
+- Remove existing endpoints unless replaced transparently.
+- Change Resend configuration.
+- Introduce a new auth system.
+- Add heavy background services.
+
+NOW APPLY THE CHANGES.

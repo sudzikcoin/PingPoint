@@ -910,6 +910,11 @@ export async function registerRoutes(
         return res.status(404).json({ error: "Load not found" });
       }
 
+      // Reject pings if tracking has ended (load delivered and 60s grace period passed)
+      if (load.trackingEndedAt && new Date() >= new Date(load.trackingEndedAt)) {
+        return res.status(409).json({ error: "Tracking ended", trackingEnded: true });
+      }
+
       const ping = await storage.createTrackingPing({
         loadId: load.id,
         driverId: load.driverId,
@@ -949,6 +954,11 @@ export async function registerRoutes(
         return res.status(404).json({ error: "Load not found" });
       }
 
+      // Reject pings if tracking has ended (load delivered and 60s grace period passed)
+      if (load.trackingEndedAt && new Date() >= new Date(load.trackingEndedAt)) {
+        return res.status(409).json({ error: "Tracking ended", trackingEnded: true });
+      }
+
       const ping = await storage.createTrackingPing({
         loadId: load.id,
         driverId: load.driverId,
@@ -982,11 +992,36 @@ export async function registerRoutes(
         return res.status(404).json({ error: "Load not found" });
       }
 
+      // Get the stop to check its type
+      const existingStop = await storage.getStopById(stopId);
+      if (!existingStop) {
+        return res.status(404).json({ error: "Stop not found" });
+      }
+
       const updateData: any = {};
       if (arrivedAt) updateData.arrivedAt = new Date(arrivedAt);
       if (departedAt) updateData.departedAt = new Date(departedAt);
 
       const stop = await storage.updateStop(stopId, updateData);
+
+      // If this is a DELIVERY stop and we're setting departedAt, mark load as DELIVERED
+      if (existingStop.type === 'DELIVERY' && departedAt && !existingStop.departedAt) {
+        const now = new Date();
+        const trackingEndTime = new Date(now.getTime() + 60000); // 60 seconds from now
+        
+        await storage.updateLoad(load.id, {
+          status: 'DELIVERED',
+          deliveredAt: now,
+          trackingEndedAt: trackingEndTime,
+        });
+
+        return res.json({ 
+          ok: true, 
+          stop, 
+          loadDelivered: true,
+          trackingEndsAt: trackingEndTime.toISOString()
+        });
+      }
 
       return res.json({ ok: true, stop });
     } catch (error) {
