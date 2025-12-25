@@ -912,6 +912,7 @@ export async function registerRoutes(
 
       // Reject pings if tracking has ended (load delivered and 60s grace period passed)
       if (load.trackingEndedAt && new Date() >= new Date(load.trackingEndedAt)) {
+        console.log(`[TrackingPing] REJECTED load=${load.loadNumber} driver=${load.driverId} reason=tracking_ended`);
         return res.status(409).json({ error: "Tracking ended", trackingEnded: true });
       }
 
@@ -925,6 +926,8 @@ export async function registerRoutes(
         heading: heading != null ? heading.toString() : null,
         source: "DRIVER_APP",
       });
+
+      console.log(`[TrackingPing] load=${load.loadNumber} driver=${load.driverId} lat=${lat} lng=${lng}`);
 
       // Evaluate geofences for auto-arrive/depart (non-blocking)
       evaluateGeofencesForActiveLoad(load.driverId, load.id, parseFloat(lat.toString()), parseFloat(lng.toString()))
@@ -956,6 +959,7 @@ export async function registerRoutes(
 
       // Reject pings if tracking has ended (load delivered and 60s grace period passed)
       if (load.trackingEndedAt && new Date() >= new Date(load.trackingEndedAt)) {
+        console.log(`[TrackingPing] REJECTED load=${load.loadNumber} driver=${load.driverId} reason=tracking_ended`);
         return res.status(409).json({ error: "Tracking ended", trackingEnded: true });
       }
 
@@ -969,6 +973,8 @@ export async function registerRoutes(
         heading: heading != null ? heading.toString() : null,
         source: "DRIVER_APP",
       });
+
+      console.log(`[TrackingPing] load=${load.loadNumber} driver=${load.driverId} lat=${lat} lng=${lng}`);
 
       // Evaluate geofences for auto-arrive/depart (non-blocking)
       evaluateGeofencesForActiveLoad(load.driverId, load.id, parseFloat(lat.toString()), parseFloat(lng.toString()))

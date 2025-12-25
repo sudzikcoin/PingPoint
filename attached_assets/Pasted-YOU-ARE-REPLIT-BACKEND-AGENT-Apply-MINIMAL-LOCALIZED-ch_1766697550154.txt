@@ -1,0 +1,71 @@
+YOU ARE REPLIT BACKEND AGENT. Apply MINIMAL, LOCALIZED changes only. Do NOT rewrite unrelated files. Do NOT change Resend integration (it is already configured and working). Preserve existing DB schema and flows whenever possible; only add fields/migrations if absolutely required. After changes, run the app and ensure no TypeScript/build errors.
+
+GOAL
+1) Remove any manual "Send location" button/action from the Driver UI.
+2) When driver opens the tracking link, the app must request browser geolocation permission and, once granted, automatically send driver GPS to backend every 60–120 seconds (configurable; default 60s) WITHOUT additional clicks.
+3) When driver taps "DEPART" on the final DELIVERY stop:
+   - Broker side should immediately show load as DELIVERED.
+   - Tracking must stop automatically after 60 seconds (no more location pings accepted/stored; driver UI stops timers).
+4) Fix the UI state "Requesting location access..." so it disappears when permission is granted and the first coordinate is received; show a clear error message if permission denied or GPS unavailable/timeout.
+5) Add lightweight debug logs (server + client) to confirm pings are happening and why they fail (error codes/messages), but do not spam production logs excessively.
+
+IMPLEMENTATION DETAILS (search and adapt to existing code)
+A) FIND EXISTING TRACKING PING FLOW
+- Search the repo for: "tracking_pings", "ping", "lastLocation", "navigator.geolocation", "Send location", "Requesting location access".
+- If there is already an endpoint that records GPS pings (e.g. POST /api/track/:token/ping or similar), REUSE IT.
+- If no endpoint exists, create one in the existing Express router style:
+  - POST /api/driver/:driverToken/location (or the closest existing pattern)
+  - Body: { lat: number, lng: number, accuracy?: number, heading?: number, speed?: number, capturedAt?: string }
+  - Validate driverToken, find related active load/trackingToken, insert a row into tracking_pings (or the project’s tracking ping table), and update any "lastLocation" fields if they exist.
+  - Return 200 { ok: true }.
+
+B) DRIVER UI: AUTO-REQUEST & AUTO-SEND LOCATION
+- Remove/hide any manual “Send location” button.
+- On driver load page mount (after driver token is resolved), start location tracking:
+  1) Call navigator.geolocation.watchPosition(success, error, { enableHighAccuracy: true, maximumAge: 0, timeout: 15000 })
+  2) On first success:
+     - set UI state to "trackingActive"
+     - store last coords in state
+     - start a setInterval (60s) that sends the latest coords to backend endpoint
+     - also send immediately once on first success (so broker stops showing “Waiting...” quickly)
+  3) If watchPosition is not available or errors, fallback to getCurrentPosition with same options.
+  4) If error:
+     - show user-facing message: denied / unavailable / timeout
+     - include iOS hint: enable Location Services and allow Safari location for this site.
+- IMPORTANT: Do NOT rely on navigator.permissions.query for geolocation gating; iOS Safari behavior is inconsistent. Use watchPosition + error handling.
+
+C) STOP TRACKING AFTER DELIVERY DEPART (60s)
+- In the existing stop update route (PATCH /api/driver/:driverToken/stop/:stopId or similar), detect when the stop is type DELIVERY and it is the final stop for that load AND action is "depart":
+  - Immediately update load status to DELIVERED (use existing statuses; if "DELIVERED" exists, set it; otherwise set the closest existing delivered flag/field).
+  - Set a server-side "trackingEndsAt" timestamp = now + 60 seconds if such field exists; if not, add minimal field to the appropriate model (Load or Driver or Tracking session) using the project’s migration approach.
+- In the location ping endpoint, reject pings if:
+  - load is DELIVERED AND now > trackingEndsAt (or if a trackingActive flag is false).
+  - Return 410 { ok:false, error:"tracking_ended" }.
+- In driver UI, when depart delivery is confirmed:
+  - show banner: "Delivery completed. Tracking will stop in 1 minute."
+  - keep pinging during the next 60s, then stop timers (clearInterval + clearWatch) and update UI to "Tracking ended".
+
+D) BROKER TRACKING PAGE
+- Ensure broker/public tracking page reads the load status from /api/track/:trackingToken (already used).
+- When status becomes DELIVERED:
+  - show "DELIVERED" and "Tracking completed"
+  - stop showing “Waiting for driver to begin tracking…”
+  - optionally stop polling after a short delay (or keep polling but it’s fine).
+
+E) LOGGING / DEBUG
+- Server: log when a ping is received and stored: [TrackingPing] load=... driver=... lat=... lng=...
+- Server: log when a ping is rejected due to ended tracking.
+- Client: console.log minimal messages: "geolocation success", "geolocation error code", "ping sent", "ping rejected tracking_ended".
+
+F) VERIFY
+- Run the dev server.
+- Provide a short “How to test” section in the final response:
+  1) Open driver link in iPhone Safari, allow location.
+  2) Confirm in Replit console that ping endpoint is hit every ~60s.
+  3) Open broker tracking link and see live updates.
+  4) Press Depart on final Delivery; broker shows DELIVERED immediately; pings stop after 60s.
+
+DELIVERABLE
+- Commit only necessary file changes.
+- Ensure TypeScript/build passes.
+- Do not touch Resend.

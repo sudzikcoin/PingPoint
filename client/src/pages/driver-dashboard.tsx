@@ -132,6 +132,7 @@ export default function DriverDashboard() {
       });
 
       if (res.ok) {
+        console.log("[Driver] ping sent", { lat: latitude, lng: longitude });
         lastSendRef.current = now;
         setLastSentTime(new Date());
         setTrackingError(null);
@@ -145,12 +146,13 @@ export default function DriverDashboard() {
       } else if (res.status === 409) {
         // Tracking has ended (load delivered)
         const data = await res.json();
+        console.log("[Driver] ping rejected tracking_ended");
         if (data.trackingEnded) {
           stopTracking();
         }
       }
     } catch (err) {
-      console.error("Error sending location:", err);
+      console.error("[Driver] ping error:", err);
       setTrackingError("Network error");
     }
   }, [driverToken, trackingStatus, stopTracking]);
@@ -169,11 +171,12 @@ export default function DriverDashboard() {
     try {
       const watchId = navigator.geolocation.watchPosition(
         (position) => {
+          console.log("[Driver] geolocation success", { lat: position.coords.latitude, lng: position.coords.longitude });
           setTrackingStatus('active');
           sendLocation(position);
         },
         (err) => {
-          console.error("Geolocation error:", err);
+          console.error("[Driver] geolocation error code=" + err.code, err.message);
           if (err.code === err.PERMISSION_DENIED) {
             setTrackingStatus('denied');
             setTrackingError("Location permission denied");
