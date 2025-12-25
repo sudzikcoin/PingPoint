@@ -370,17 +370,21 @@ export default function AppLoads() {
                         <span className={cn(
                           "px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wide border",
                           theme === "arcade90s"
-                            ? "bg-arc-bg border-arc-secondary text-arc-secondary shadow-[0_0_5px_rgba(34,211,238,0.3)] rounded-none arcade-pixel-font"
-                            : load.status === "IN_TRANSIT"
-                              ? "bg-emerald-500/10 border-emerald-500/20 text-emerald-400"
-                              : "bg-brand-dark-pill border-brand-border text-brand-muted"
+                            ? load.status === "DELIVERED"
+                              ? "bg-arc-primary/20 border-arc-primary text-arc-primary shadow-[0_0_5px_rgba(250,204,21,0.3)] rounded-none arcade-pixel-font"
+                              : "bg-arc-bg border-arc-secondary text-arc-secondary shadow-[0_0_5px_rgba(34,211,238,0.3)] rounded-none arcade-pixel-font"
+                            : load.status === "DELIVERED"
+                              ? "bg-brand-gold/10 border-brand-gold/30 text-brand-gold"
+                              : load.status === "IN_TRANSIT"
+                                ? "bg-emerald-500/10 border-emerald-500/20 text-emerald-400"
+                                : "bg-brand-dark-pill border-brand-border text-brand-muted"
                         )}>
                           {load.status.replace("_", " ")}
                         </span>
                       </td>
                       <td className="px-6 py-4">
                         <span className={cn("text-xs italic", theme === "arcade90s" ? "text-arc-muted" : "text-brand-muted")}>
-                          {load.status === "IN_TRANSIT" ? "Active" : "Pending"}
+                          {load.status === "DELIVERED" ? "Completed" : load.status === "IN_TRANSIT" ? "Active" : "Pending"}
                         </span>
                       </td>
                       <td className="px-6 py-4 text-right">

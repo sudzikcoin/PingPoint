@@ -81,9 +81,18 @@ export default function PublicTracking() {
     fetchTracking(false);
   }, [fetchTracking]);
 
-  // Polling for live updates
+  // Polling for live updates (stop polling if load is delivered)
   useEffect(() => {
     if (!token || error) return;
+    
+    // Don't poll if load is already delivered
+    if (data?.status === 'DELIVERED') {
+      if (pollIntervalRef.current) {
+        clearInterval(pollIntervalRef.current);
+        pollIntervalRef.current = null;
+      }
+      return;
+    }
 
     pollIntervalRef.current = setInterval(() => {
       fetchTracking(true);
@@ -95,7 +104,7 @@ export default function PublicTracking() {
         pollIntervalRef.current = null;
       }
     };
-  }, [token, error, fetchTracking]);
+  }, [token, error, fetchTracking, data?.status]);
 
   if (loading) {
     return (
@@ -292,6 +301,15 @@ export default function PublicTracking() {
                   <span className="opacity-60">
                     ({parseFloat(data.lastLocation.lat).toFixed(4)}, {parseFloat(data.lastLocation.lng).toFixed(4)})
                   </span>
+                </div>
+              )}
+              
+              {data.status === 'DELIVERED' && (
+                <div className={cn("text-sm flex items-center gap-2 pt-2 border-t", 
+                  theme === "arcade90s" ? "text-arc-primary font-mono text-xs border-arc-border font-bold" : "text-brand-gold font-semibold border-brand-border/30"
+                )} data-testid="event-delivered">
+                  <span className={cn("w-2.5 h-2.5 rounded-full", theme === "arcade90s" ? "bg-arc-primary" : "bg-brand-gold")} />
+                  Load delivered successfully
                 </div>
               )}
               
