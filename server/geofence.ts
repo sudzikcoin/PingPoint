@@ -1,9 +1,12 @@
 import { db } from "./db";
 import { stops, stopGeofenceState, loads } from "@shared/schema";
 import { eq, and, isNull, isNotNull } from "drizzle-orm";
+import { ensureStopCoords } from "./geocode";
 
 const CONSECUTIVE_PINGS_REQUIRED = 2;
 const MIN_TIME_GAP_MS = 60 * 1000;
+const ACCURACY_THRESHOLD_M = 150;
+const IMMEDIATE_TRIGGER_ACCURACY_M = 50;
 
 export function haversineMeters(lat1: number, lng1: number, lat2: number, lng2: number): number {
   const R = 6371000;
@@ -86,29 +89,64 @@ export async function evaluateGeofencesForActiveLoad(
   driverId: string,
   loadId: string,
   currentLat: number,
-  currentLng: number
+  currentLng: number,
+  accuracy?: number | null
 ) {
+  const parsedAccuracy = accuracy != null && Number.isFinite(accuracy) ? accuracy : null;
+  console.log(`[Geofence] Evaluating load=${loadId} driver=${driverId} lat=${currentLat.toFixed(5)} lng=${currentLng.toFixed(5)} acc=${parsedAccuracy ?? 'unknown'}m`);
+
+  if (parsedAccuracy != null && parsedAccuracy > ACCURACY_THRESHOLD_M) {
+    console.log(`[Geofence] SKIPPED accuracy=${Math.round(parsedAccuracy)}m > threshold=${ACCURACY_THRESHOLD_M}m (too inaccurate)`);
+    return;
+  }
+
   const loadStops = await db
     .select()
     .from(stops)
     .where(eq(stops.loadId, loadId));
 
   const now = new Date();
+  const currentStop = loadStops
+    .sort((a, b) => a.sequence - b.sequence)
+    .find(s => !s.arrivedAt);
+
+  if (!currentStop) {
+    console.log(`[Geofence] No pending stops for load=${loadId}`);
+    return;
+  }
 
   for (const stop of loadStops) {
     if (stop.departedAt) continue;
 
+    let stopLat: number;
+    let stopLng: number;
+
     if (!stop.lat || !stop.lng) {
-      continue;
+      const coords = await ensureStopCoords({
+        id: stop.id,
+        lat: stop.lat,
+        lng: stop.lng,
+        fullAddress: stop.fullAddress,
+        city: stop.city,
+        state: stop.state,
+      });
+      if (!coords) {
+        console.log(`[Geofence] Stop ${stop.id} (${stop.type}) has no coords and geocoding failed, skipping`);
+        continue;
+      }
+      stopLat = coords.lat;
+      stopLng = coords.lng;
+    } else {
+      stopLat = parseFloat(stop.lat);
+      stopLng = parseFloat(stop.lng);
     }
 
-    const stopLat = parseFloat(stop.lat);
-    const stopLng = parseFloat(stop.lng);
     const radius = stop.geofenceRadiusM || 300;
-
     const distance = haversineMeters(currentLat, currentLng, stopLat, stopLng);
     const inside = isInsideGeofence(distance, radius);
     const outsideHysteresis = isOutsideWithHysteresis(distance, radius);
+
+    console.log(`[Geofence] Stop ${stop.id} (${stop.type}): dist=${Math.round(distance)}m radius=${radius}m inside=${inside} arrived=${!!stop.arrivedAt}`);
 
     const state = await getOrCreateGeofenceState(stop.id, driverId);
 
@@ -120,14 +158,20 @@ export async function evaluateGeofencesForActiveLoad(
         outsideStreak: 0,
       });
 
-      if (!stop.arrivedAt && newInsideStreak >= CONSECUTIVE_PINGS_REQUIRED) {
-        const canTrigger =
-          !state.lastArriveAttemptAt ||
-          now.getTime() - new Date(state.lastArriveAttemptAt).getTime() > MIN_TIME_GAP_MS;
+      if (!stop.arrivedAt) {
+        const highAccuracy = parsedAccuracy != null && parsedAccuracy <= IMMEDIATE_TRIGGER_ACCURACY_M;
+        const shouldTrigger = highAccuracy || newInsideStreak >= CONSECUTIVE_PINGS_REQUIRED;
 
-        if (canTrigger) {
-          await markStopArrived(stop.id);
-          await updateGeofenceState(stop.id, driverId, { lastArriveAttemptAt: now });
+        if (shouldTrigger) {
+          const canTrigger =
+            !state.lastArriveAttemptAt ||
+            now.getTime() - new Date(state.lastArriveAttemptAt).getTime() > MIN_TIME_GAP_MS;
+
+          if (canTrigger) {
+            console.log(`[Geofence] TRIGGER ARRIVE stop=${stop.id} type=${stop.type} dist=${Math.round(distance)}m radius=${radius}m streak=${newInsideStreak} acc=${parsedAccuracy ?? 'unknown'}m`);
+            await markStopArrived(stop.id);
+            await updateGeofenceState(stop.id, driverId, { lastArriveAttemptAt: now });
+          }
         }
       }
     } else if (outsideHysteresis) {
@@ -146,6 +190,7 @@ export async function evaluateGeofencesForActiveLoad(
             now.getTime() - new Date(state.lastDepartAttemptAt).getTime() > MIN_TIME_GAP_MS);
 
         if (canTrigger) {
+          console.log(`[Geofence] TRIGGER DEPART stop=${stop.id} type=${stop.type} dist=${Math.round(distance)}m streak=${newOutsideStreak}`);
           await markStopDeparted(stop.id);
           await updateGeofenceState(stop.id, driverId, { lastDepartAttemptAt: now });
         }

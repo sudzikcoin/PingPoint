@@ -1,0 +1,98 @@
+YOU ARE REPLIT BACKEND AGENT working inside the existing PingPoint/PINGPOINT project. Task: enable automatic geofence-based ARRIVE events (pickup/delivery) without breaking any existing flows, schemas, buttons, or UI. Make MINIMAL, LOCALIZED changes only. Do NOT refactor unrelated code. Do NOT remove manual Arrive/Depart buttons — keep them as fallback. Do NOT change existing API response shapes unless strictly necessary.
+
+GOAL
+1) Ensure every Stop has coordinates (lat/lng). If missing, geocode the stop’s full address and persist to DB.
+2) On every GPS ping received from driver (whatever endpoint currently stores driver location), run server-side geofence detection:
+   - Find the “current” stop (first stop in sequence that has arrivedAt == null; if all arrived, do nothing).
+   - Compute distance between driver ping (lat/lng) and stop (lat/lng) using Haversine.
+   - If within stop.geofenceRadiusM (default 300m) and stop.arrivedAt is null, set arrivedAt=now and emit/update the same “live updates” mechanism already used by manual Arrive button (or minimal equivalent).
+3) Add debug logs so we can verify:
+   - When a ping is received (driver, load, lat/lng, accuracy if present)
+   - When a stop is missing coords and geocoding runs (success/fail)
+   - When geofence triggers (stopId, distanceM, radiusM, arrivedAt set)
+4) Add guardrails to avoid false triggers:
+   - If ping accuracy exists and accuracy > 150m, do NOT trigger geofence (but still store the ping).
+   - Optionally require 2 consecutive pings within radius within 90 seconds OR a single ping within radius AND accuracy <= 50m. Keep it simple and configurable constants.
+
+IMPORTANT CONSTRAINTS
+- You must SEARCH the codebase first to locate: 
+  (a) the driver GPS ping endpoint(s) and where it stores lastLocation,
+  (b) the Stop model schema and fields (lat/lng, geofenceRadiusM, arrivedAt/departedAt),
+  (c) any existing “Arrive/Depart” endpoints and how they write timestamps and events.
+- Reuse existing DB models and event/logging mechanisms. Do NOT introduce a new database or major new tables unless absolutely required.
+- If the project already has a geocoding utility, reuse it. If not, implement a minimal geocoder:
+   - Prefer a free/no-key approach ONLY if already used in project.
+   - Otherwise implement using a single environment variable key (e.g., MAPBOX_TOKEN or GOOGLE_MAPS_KEY) BUT DO NOT break runtime if key is missing:
+       * If key missing, skip geocoding and log clearly “GEOCODE_SKIPPED_NO_KEY”.
+- Do NOT hardcode coordinates.
+- Do NOT break existing tracking links and public tracking page.
+
+STEP-BY-STEP PLAN (DO THIS)
+1) Inventory (read-only):
+   - Search for routes: “/api/track”, “/api/driver”, “ping”, “location”, “watchPosition”, “lastLocation”.
+   - Identify the endpoint that receives driver GPS (POST/PUT/PATCH). Note its route and handler file (likely server/routes.ts).
+   - Identify Stop model fields in Prisma/schema or any ORM definitions.
+   - Identify manual Arrive/Depart handlers and how they update stop timestamps and load status.
+
+2) Implement geocoding for stops with missing coords:
+   - Add a helper function `ensureStopCoords(stop)` that:
+       * If stop.lat && stop.lng exist => return them.
+       * Else build an address string from stop.fullAddress or components.
+       * Call `geocodeAddress(address)` -> {lat,lng} or null.
+       * If found, persist to DB for that stop (update stop.lat/lng).
+       * Log results.
+   - Place helper in the smallest appropriate file (e.g., server/geocode.ts) and import where needed.
+
+3) Implement server-side geofence check on ping:
+   - In the driver ping handler, after storing ping/lastLocation, call `maybeAutoArrive(loadId, driverId, pingLat, pingLng, accuracy?)`.
+   - `maybeAutoArrive`:
+       * Load the load + its stops ordered by sequence.
+       * Determine current stop: first with arrivedAt == null. If none => return.
+       * Ensure stop coords (ensureStopCoords).
+       * If still missing coords => log and return (do not throw).
+       * Calculate distance meters (Haversine).
+       * Apply accuracy rules.
+       * Apply simple debounce rule (choose one):
+           - If accuracy <= 50 and inside radius -> trigger immediately
+           - Else require 2 inside-radius pings within 90s:
+               * Implement with in-memory per-(loadId,stopId,driverId) cache Map storing lastInsideAt timestamp.
+               * This is OK for MVP; do not add DB table. Log that it’s in-memory.
+       * If trigger -> update stop.arrivedAt = now (only if null).
+       * Also create/append the same “live update” event already used by manual Arrive (search and reuse).
+       * Do NOT mark departedAt here.
+
+4) Update public/broker tracking view to show a real map marker (minimal):
+   - If the broker/public tracking page already uses Leaflet/OSM, ensure it uses lastLocation.lat/lng from API.
+   - If it currently shows text only, add a small embedded map component (Leaflet) that:
+       * Centers at lastLocation.
+       * Shows a marker.
+       * Does not require new API.
+   - This step is optional if it risks breaking; prioritize geofence auto-arrive.
+
+5) Testing checklist (MUST DO)
+   - Add a temporary dev-only log line that prints when ping endpoint is hit.
+   - Run the app; open driver link; allow location.
+   - Confirm server logs show ping received.
+   - Confirm stops have lat/lng (either already or after geocoding).
+   - Stand within ~300m of pickup or delivery:
+       * Confirm server logs show distance <= radius.
+       * Confirm stop.arrivedAt updated.
+       * Confirm public tracking “live updates” shows “Driver arrived at pickup/delivery”.
+   - Confirm manual Arrive/Depart still works as before.
+
+DELIVERABLES
+- Code changes committed in-place.
+- Tell me EXACTLY:
+  - which endpoint receives pings,
+  - what files you changed,
+  - what logs I should see when it works,
+  - how to set the geocoding key (if you added one) and what happens if absent.
+
+IMPLEMENTATION DETAILS (COPY EXACTLY)
+- Use Haversine formula for distance in meters.
+- Default geofence radius: if stop.geofenceRadiusM missing/null -> 300.
+- Accuracy threshold: if accuracy is provided and > 150 -> never trigger geofence.
+- Do not throw on geocode failure; just log and continue.
+
+NOW EXECUTE.
+Start by searching the codebase and reporting the discovered endpoints/models in a short bullet list, then implement the minimal patch.

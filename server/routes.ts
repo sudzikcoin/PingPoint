@@ -939,10 +939,11 @@ export async function registerRoutes(
         source: "DRIVER_APP",
       });
 
-      console.log(`[TrackingPing] stored load=${load.loadNumber} driver=${load.driverId} lat=${lat} lng=${lng}`);
+      console.log(`[TrackingPing] stored load=${load.loadNumber} driver=${load.driverId} lat=${lat} lng=${lng} acc=${accuracy ?? 'unknown'}m`);
 
       // Evaluate geofences for auto-arrive/depart (non-blocking)
-      evaluateGeofencesForActiveLoad(load.driverId, load.id, parseFloat(lat.toString()), parseFloat(lng.toString()))
+      const parsedAccuracy = accuracy != null ? parseFloat(accuracy.toString()) : null;
+      evaluateGeofencesForActiveLoad(load.driverId, load.id, parseFloat(lat.toString()), parseFloat(lng.toString()), parsedAccuracy)
         .catch(err => console.error("Error evaluating geofences:", err));
 
       return res.json({ ok: true, pingId: ping.id });
@@ -1000,10 +1001,11 @@ export async function registerRoutes(
         source: "DRIVER_APP",
       });
 
-      console.log(`[TrackingPing] stored load=${load.loadNumber} driver=${load.driverId} lat=${lat} lng=${lng}`);
+      console.log(`[TrackingPing] stored load=${load.loadNumber} driver=${load.driverId} lat=${lat} lng=${lng} acc=${accuracy ?? 'unknown'}m`);
 
       // Evaluate geofences for auto-arrive/depart (non-blocking)
-      evaluateGeofencesForActiveLoad(load.driverId, load.id, parseFloat(lat.toString()), parseFloat(lng.toString()))
+      const parsedAccuracy = accuracy != null ? parseFloat(accuracy.toString()) : null;
+      evaluateGeofencesForActiveLoad(load.driverId, load.id, parseFloat(lat.toString()), parseFloat(lng.toString()), parsedAccuracy)
         .catch(err => console.error("Error evaluating geofences:", err));
 
       return res.json({ ok: true, pingId: ping.id });
