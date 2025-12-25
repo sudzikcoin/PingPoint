@@ -15,7 +15,7 @@ import { checkAndConsumeLoadAllowance, rollbackLoadAllowance, getBillingSummary,
 import { createCheckoutSession, verifyWebhookSignature, processStripeEvent } from "./billing/stripe";
 import { incrementLoadsCreated, getUsageSummary } from "./billing/usage";
 import { createProPaymentIntent, checkAndConfirmIntent, getMerchantInfo } from "./billing/solana";
-import { evaluateGeofencesForActiveLoad } from "./geofence";
+import { evaluateGeofencesForActiveLoad, getGeofenceDebugInfo } from "./geofence";
 
 const uploadsDir = path.join(process.cwd(), "uploads", "rate-confirmations");
 if (!fs.existsSync(uploadsDir)) {
@@ -851,6 +851,7 @@ export async function registerRoutes(
       const loadStops = await storage.getStopsByLoad(load.id);
       const trackingPingsList = await storage.getTrackingPingsByLoad(load.id);
       const latestPing = trackingPingsList[0]; // First is most recent due to desc order
+      const geofenceDebug = await getGeofenceDebugInfo(load.id);
 
       return res.json({
         loadNumber: load.loadNumber,
@@ -862,6 +863,7 @@ export async function registerRoutes(
           lng: latestPing.lng,
           timestamp: latestPing.createdAt,
         } : null,
+        geofenceDebug,
       });
     } catch (error) {
       console.error("Error in /api/track/:token:", error);

@@ -1,6 +1,6 @@
 import { db } from "./db";
-import { stops, stopGeofenceState, loads } from "@shared/schema";
-import { eq, and, isNull, isNotNull } from "drizzle-orm";
+import { stops, stopGeofenceState, loads, trackingPings } from "@shared/schema";
+import { eq, and, isNull, isNotNull, desc } from "drizzle-orm";
 import { ensureStopCoords } from "./geocode";
 
 const CONSECUTIVE_PINGS_REQUIRED = 2;
@@ -197,4 +197,123 @@ export async function evaluateGeofencesForActiveLoad(
       }
     }
   }
+}
+
+export async function getGeofenceDebugInfo(loadId: string): Promise<{
+  targetStopId: string | null;
+  targetStopType: string | null;
+  targetStopSequence: number | null;
+  stopLat: number | null;
+  stopLng: number | null;
+  radiusM: number;
+  lastPingLat: number | null;
+  lastPingLng: number | null;
+  distanceM: number | null;
+  inside: boolean | null;
+  canAutoArrive: boolean;
+  reason: string;
+} | null> {
+  const [load] = await db.select().from(loads).where(eq(loads.id, loadId));
+  if (!load || !load.driverId) {
+    return null;
+  }
+
+  const loadStops = await db
+    .select()
+    .from(stops)
+    .where(eq(stops.loadId, loadId))
+    .orderBy(stops.sequence);
+
+  const targetStop = loadStops.find((s) => !s.arrivedAt);
+  if (!targetStop) {
+    return {
+      targetStopId: null,
+      targetStopType: null,
+      targetStopSequence: null,
+      stopLat: null,
+      stopLng: null,
+      radiusM: 300,
+      lastPingLat: null,
+      lastPingLng: null,
+      distanceM: null,
+      inside: null,
+      canAutoArrive: false,
+      reason: "all_stops_arrived",
+    };
+  }
+
+  const radius = targetStop.geofenceRadiusM ?? 300;
+
+  const [latestPing] = await db
+    .select()
+    .from(trackingPings)
+    .where(eq(trackingPings.loadId, loadId))
+    .orderBy(desc(trackingPings.createdAt))
+    .limit(1);
+
+  const stopCoords = await ensureStopCoords({
+    id: targetStop.id,
+    lat: targetStop.lat,
+    lng: targetStop.lng,
+    fullAddress: targetStop.fullAddress,
+    city: targetStop.city,
+    state: targetStop.state,
+  });
+
+  if (!stopCoords) {
+    return {
+      targetStopId: targetStop.id,
+      targetStopType: targetStop.type,
+      targetStopSequence: targetStop.sequence,
+      stopLat: null,
+      stopLng: null,
+      radiusM: radius,
+      lastPingLat: latestPing ? parseFloat(latestPing.lat) : null,
+      lastPingLng: latestPing ? parseFloat(latestPing.lng) : null,
+      distanceM: null,
+      inside: null,
+      canAutoArrive: false,
+      reason: "stop_coordinates_missing",
+    };
+  }
+
+  if (!latestPing) {
+    return {
+      targetStopId: targetStop.id,
+      targetStopType: targetStop.type,
+      targetStopSequence: targetStop.sequence,
+      stopLat: stopCoords.lat,
+      stopLng: stopCoords.lng,
+      radiusM: radius,
+      lastPingLat: null,
+      lastPingLng: null,
+      distanceM: null,
+      inside: null,
+      canAutoArrive: false,
+      reason: "no_location_pings",
+    };
+  }
+
+  const driverLat = parseFloat(latestPing.lat);
+  const driverLng = parseFloat(latestPing.lng);
+  const distance = haversineMeters(driverLat, driverLng, stopCoords.lat, stopCoords.lng);
+  const inside = isInsideGeofence(distance, radius);
+
+  const state = await getOrCreateGeofenceState(targetStop.id, load.driverId);
+  const canAutoArrive = inside && !targetStop.arrivedAt && state.insideStreak >= CONSECUTIVE_PINGS_REQUIRED - 1;
+
+  return {
+    targetStopId: targetStop.id,
+    targetStopType: targetStop.type,
+    targetStopSequence: targetStop.sequence,
+    stopLat: stopCoords.lat,
+    stopLng: stopCoords.lng,
+    radiusM: radius,
+    lastPingLat: driverLat,
+    lastPingLng: driverLng,
+    distanceM: Math.round(distance),
+    inside,
+    canAutoArrive,
+    reason: inside ? "inside_geofence" : "outside_geofence",
+  };
 }
