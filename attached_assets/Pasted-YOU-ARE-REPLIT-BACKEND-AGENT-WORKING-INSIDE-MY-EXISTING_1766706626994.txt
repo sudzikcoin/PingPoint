@@ -1,0 +1,134 @@
+YOU ARE REPLIT BACKEND AGENT WORKING INSIDE MY EXISTING PINGPOINT / PINKPOINT REPLIT PROJECT.
+CRITICAL RULES (DO NOT VIOLATE):
+- Make the smallest possible, localized changes. Do NOT refactor unrelated code.
+- Do NOT rename existing routes, DB tables, columns, or break any existing flows.
+- Keep current UI/UX working exactly as-is; only add what’s needed for auto-arrival geofence.
+- If you need DB changes, use the project’s existing migration system (Drizzle) and keep backwards compatibility.
+- Add detailed server logs for geofence decisions so I can debug quickly.
+GOAL:
+Fix “Auto Arrive by Geofence” so that when the driver device enters within 300m of the next stop (pickup/delivery), the stop’s arrivedAt is automatically set and the shipment status/updates reflect it. This must work on iOS Safari and desktop without breaking manual Arrive/Depart buttons.
+
+CURRENT SYMPTOMS / CLUES:
+- Driver location ping works now (iOS + desktop show real coordinates).
+- Stops in API response show lat:null, lng:null (so distance check can’t work).
+- Therefore, geofence can’t trigger because stop coordinates are missing.
+- We already have tables like: stops, stop_geofence_state, tracking_pings, activity_logs, loads.
+- There is an occasional dev crash: EADDRINUSE 0.0.0.0:5000 (don’t ignore; make dev server respect PORT and avoid double listen).
+
+WHAT TO IMPLEMENT (MINIMAL, COMPATIBLE):
+
+A) Server: ensure every stop has coordinates (lat/lng) so geofence can compute
+1) Find where stops are created/saved (load creation / broker side) and where tracking API returns stops (GET /api/track/:trackingId or similar).
+2) Add a server-side “lazy geocoding” step:
+   - When processing a driver location ping OR when serving tracking details:
+     - For each stop with lat/lng == null AND has a usable address string (fullAddress + city + state):
+       - Geocode it once and persist the result into the existing stops.lat / stops.lng columns.
+   - Use a safe provider strategy:
+     - If MAPBOX_TOKEN (or similar) exists in env, use Mapbox Geocoding API.
+     - Otherwise fallback to OpenStreetMap Nominatim (no key). Add strong rate-limit protection:
+       - In-memory cache by normalized address (Map<string, {lat,lng,ts}>)
+       - Do NOT geocode the same address more than once per server process.
+       - Only geocode at most 1 stop per request if you want to keep it super safe.
+   - If geocoding fails, keep lat/lng null and log once with reason.
+
+Implementation details:
+- Create: server/lib/geocode.ts
+  - export async function geocodeAddress(address: string): Promise<{lat:number,lng:number,provider:string}|null>
+  - Normalize address: trim, collapse spaces
+  - Cache results (Map)
+- Update stop rows ONLY if they were null to begin with.
+
+B) Server: geofence evaluation on every valid ping
+1) Locate the endpoint that receives driver pings (POST /api/track/:trackingId/ping OR similar).
+2) After storing the ping, run evaluateGeofence(trackingId, lat, lng, timestamp).
+3) Determine “next stop to arrive”:
+   - Sort stops by sequence asc
+   - Pick first stop where arrivedAt is null (this is the “active target stop”)
+   - If none, do nothing.
+4) If target stop has no coordinates yet:
+   - Attempt geocode (A) and persist; if still missing, log and exit.
+5) Compute distance using Haversine (meters):
+   - Create: server/lib/geo.ts with haversineMeters(lat1,lng1,lat2,lng2)
+6) Use stop.geofenceRadiusM if exists else default 300.
+7) Debounce to avoid false triggers:
+   - Use existing table stop_geofence_state if it exists (preferred).
+   - If schema already supports tracking inside/outside and lastEnterAt/lastExitAt/triggeredAt, use it.
+   - If it does NOT have required fields, add minimal columns via migration (do NOT remove anything):
+     - inside (boolean default false)
+     - insideSince (timestamp nullable)
+     - lastDistanceM (int nullable)
+     - autoArrivedAt (timestamp nullable)
+   - Logic:
+     - If distance <= radius:
+       - If state.inside == false: set inside=true, insideSince=now
+       - If state.inside == true and insideSince is set and (now - insideSince) >= 30 seconds OR you have at least 2 consecutive pings inside:
+         - Trigger auto-arrival ONLY if stop.arrivedAt is null AND state.autoArrivedAt is null
+         - Set stop.arrivedAt = now
+         - Set state.autoArrivedAt = now
+         - Insert an activity log entry (or existing “updates” mechanism) like: “Auto arrived at PICKUP (geofence)”
+         - If your system has load.status changes for arrived, update minimally (example: PLANNED -> AT_PICKUP, IN_TRANSIT, AT_DELIVERY) ONLY if there is already a status concept; don’t invent a huge new state machine. If unsure, just add activity log + stop.arrivedAt and keep load.status unchanged.
+     - Else (distance > radius):
+       - set inside=false, insideSince=null (do NOT auto-depart unless there is already a feature for it)
+
+8) Add clear logs:
+   - Prefix all with [Geofence]
+   - Log: trackingId, stopId, stopType, radius, distanceM, inside, actionTaken, arrivedAt before/after
+   - Log when stop coordinates are missing and when geocode happens.
+
+C) API response: include debug geofence info (non-breaking additive)
+In the tracking details response (GET /api/track/:trackingId):
+- Add a new field, do NOT remove existing fields:
+  geofenceDebug: {
+    targetStopId,
+    targetStopType,
+    targetStopSequence,
+    stopLat,
+    stopLng,
+    radiusM,
+    lastPingLat,
+    lastPingLng,
+    distanceM,
+    inside,
+    canAutoArrive,
+    reason
+  }
+This helps me see instantly why it didn’t trigger.
+
+D) Client: do NOT break design; only small additions if needed
+- Keep manual Arrive/Depart buttons.
+- If you already show “Driver arrived at pickup” based on stop.arrivedAt, it will now update automatically once the backend sets arrivedAt.
+- Optionally (only if easy): display a small “Geofence: distance Xm (inside/outside)” line under the tracking ON box using the new geofenceDebug. Keep it subtle.
+
+E) Fix dev crash: EADDRINUSE
+- In server/index.ts (or wherever listen happens), ensure you use:
+  const port = Number(process.env.PORT || 5000)
+  app.listen(port, '0.0.0.0', ...)
+- Ensure you are not calling listen twice (search for app.listen duplication).
+- Do not change production behavior; just prevent multiple listeners in dev.
+
+FILES YOU WILL LIKELY TOUCH (MINIMAL):
+- server/routes.ts (or server/index.ts) where ping endpoint + track GET endpoint are defined
+- server/lib/geocode.ts (new)
+- server/lib/geo.ts (new haversine)
+- server/services/geofence.ts (new evaluateGeofence)
+- drizzle schema/migration ONLY if stop_geofence_state lacks needed columns
+- client page only if you add tiny debug UI (optional)
+
+ACCEPTANCE TEST CHECKLIST (YOU MUST RUN / VERIFY):
+1) Create a load with pickup/delivery addresses.
+2) Confirm stops initially may have lat/lng null, but after first ping they get filled (check DB or API response).
+3) Open driver link on iOS Safari, allow location, confirm pings are stored.
+4) Stand within ~300m of delivery address:
+   - After at most 1–2 minutes (depending on ping interval), stop.arrivedAt becomes non-null automatically.
+   - UI updates to show arrived without pressing the button.
+   - Server logs show [Geofence] decision and “AUTO_ARRIVE TRIGGERED”.
+5) Ensure manual Arrive still works (no break).
+6) Ensure no EADDRINUSE crash when running dev.
+
+DELIVERABLE:
+- Implement everything above with the smallest changes possible.
+- If you must add env vars for geocoding, keep it optional:
+  - MAPBOX_TOKEN optional; fallback to Nominatim if absent.
+- After changes, print a short summary with exact files changed and where to look in logs.
+
+NOW IMPLEMENT.
