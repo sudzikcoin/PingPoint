@@ -1,0 +1,107 @@
+[REPLIT BACKEND AGENT — CHANGESET HEADER]
+You must make MINIMAL, LOCALIZED changes only. Do NOT refactor unrelated code. Do NOT break existing flows, schemas, tokens, auth, Resend email verification, billing limits, or existing endpoints. Preserve existing DB tables and data. If schema changes are required, add a safe migration and keep backward compatibility. Prefer reusing existing tables/columns when possible. After changes, run the app and verify via logs and manual browser testing. Provide a short checklist of what was changed and where.
+
+GOAL
+Fix driver location tracking:
+1) Remove manual “Send Location” button from Driver page.
+2) On driver link open: request geolocation permission and automatically send location every 60–120 seconds.
+3) Fix “Requesting location access…” so it doesn’t hang forever: handle denied/timeouts and show a visible “Enable Location” button to re-trigger permission request.
+4) When driver presses DEPART on DELIVERY stop:
+   - mark load as DELIVERED (broker should see delivered)
+   - stop tracking automatically 60 seconds after delivery depart (backend should ignore further pings; frontend should stop the timer when server indicates tracking ended).
+
+CONSTRAINTS
+- Resend is already configured and must not be changed.
+- Keep existing tokens: driverToken (drv_...) and trackingToken (trk_...).
+- Keep existing endpoints working: PATCH /api/driver/:driverToken/stop/:stopId and GET /api/track/:trackingToken.
+- Use existing DB tables where possible. I saw tables like: loads, drivers, stops, tracking_pings, activity_logs, etc. Use those.
+
+HIGH-LEVEL IMPLEMENTATION
+A) Backend: implement/ensure an endpoint that accepts driver location pings and stores them:
+   - POST /api/driver/:driverToken/location
+   - Body: { lat:number, lng:number, accuracy?:number, ts?:string|number }
+   - Validate driverToken => driver record.
+   - Find the driver’s active load (latest load where load.driverId == driver.id and load.status NOT IN ('DELIVERED','CANCELLED','ARCHIVED') and isArchived=false if exists).
+   - Write:
+     1) update drivers.lastLocation (it exists because API returns "lastLocation": null) with { lat, lng, accuracy, updatedAt }
+     2) insert into tracking_pings table a row with loadId, driverId, lat, lng, createdAt.
+   - If load is in “tracking stop window ended” return 410 (or 200 with {ended:true}) and do NOT insert.
+
+B) Backend: stop tracking + set delivered:
+   - In existing handler for PATCH /api/driver/:driverToken/stop/:stopId when action is DEPART:
+     If stop.type === 'DELIVERY' then:
+       1) update loads.status = 'DELIVERED'
+       2) set loads.deliveredAt = now (add column if missing)
+       3) set loads.trackingStopAt = now + 60 seconds (add column if missing)
+       4) add activity log entry “Driver departed delivery — DELIVERED” (activity_logs table exists; use existing pattern)
+   - Ensure GET /api/track/:trackingToken includes:
+       - load.status
+       - a computed flag trackingEnded = (load.trackingStopAt && now >= trackingStopAt)
+       - lastLocation (from drivers.lastLocation or latest tracking_ping)
+       - and if trackingEnded true, include a “Tracking ended / Delivered” message in live updates list (don’t remove existing updates; append).
+
+C) Frontend (Driver page): auto location pings
+   - Locate driver page component (likely routes/pages for driver link: /driver/:driverToken or similar).
+   - Remove the “Send Location” button and replace with:
+       - On mount: call requestAndStartLocation()
+       - requestAndStartLocation does:
+           1) set UI state “Requesting location access…”
+           2) call navigator.geolocation.getCurrentPosition with { enableHighAccuracy:true, timeout:10000, maximumAge:0 }
+           3) on success: send first ping immediately to POST /api/driver/:driverToken/location, then start interval every 120000ms (2 minutes). (Optionally randomize 60–120s: e.g. 90000ms +/- 30000ms.)
+           4) on error (PERMISSION_DENIED / TIMEOUT / POSITION_UNAVAILABLE): show readable error + show button “Enable Location” that calls requestAndStartLocation again.
+       - While interval runs, show “Location sharing active (updates every ~2 minutes)”.
+   - If POST /location returns 410 or response { ended:true } then:
+       - stop interval
+       - update UI “Tracking completed / Delivered. Location sharing stopped.”
+   - IMPORTANT: iOS Safari sometimes won’t prompt again if previously denied. Show a hint under the button: “If you don’t see a prompt, open Safari ‘aA’ -> Website Settings -> Location -> Allow, then reload”.
+
+D) Broker: show delivered
+   - Wherever broker list/details render load.status, ensure 'DELIVERED' is handled (badge/text “Delivered”).
+   - On load detail screen, show a visible “Delivered” status once status becomes DELIVERED.
+
+DATABASE CHANGES (only if missing)
+1) Check existing loads table schema. If it lacks deliveredAt and trackingStopAt, add:
+   - deliveredAt timestamp nullable
+   - trackingStopAt timestamp nullable
+Use the project’s existing migration system (drizzle). Create a safe migration adding nullable columns only.
+2) Ensure drivers table already has lastLocation (json/text). If missing, add a nullable JSON column lastLocation.
+
+STEP-BY-STEP TASKS FOR YOU (AGENT)
+1) Search codebase for:
+   - route handler for PATCH /api/driver/:driverToken/stop/:stopId
+   - route handler for GET /api/track/:trackingToken
+   - any existing “send location” endpoint or tracking_pings insertion logic
+   - driver UI component where “Send Location” is rendered
+2) Implement backend endpoint POST /api/driver/:driverToken/location if missing; otherwise fix it to:
+   - store driver.lastLocation
+   - insert tracking_pings
+   - enforce stop tracking window based on load.trackingStopAt
+3) Update depart delivery logic in PATCH stop endpoint to set DELIVERED + timestamps
+4) Update GET /api/track/:trackingToken to return trackingEnded flag and delivered info
+5) Update Driver page UI:
+   - remove manual button
+   - auto request permission + interval
+   - fix “Requesting location access…” hang by handling errors and showing “Enable Location” button
+   - stop on delivered/trackingEnded
+6) Run project and test end-to-end.
+
+MANUAL TEST PLAN (MUST EXECUTE)
+1) Create a new load with a driver link and tracking link.
+2) Open driver link on iPhone Safari (not inside in-app browser if possible).
+   - Expect system prompt to allow location (if not shown, UI must show error + Enable Location button).
+3) After allowing, observe in server logs that POST /api/driver/:driverToken/location is hit every ~2 minutes and driver.lastLocation becomes non-null.
+4) Open public tracking link and confirm:
+   - “Waiting for driver…” disappears once first ping arrives OR lastLocation becomes visible
+   - live updates update automatically without page refresh (if already implemented)
+5) Click Arrive/Depart pickup and delivery:
+   - after Depart DELIVERY: load.status becomes DELIVERED in broker UI
+   - within 60–90 seconds: further location POSTs are rejected/ignored; driver UI shows “Tracking completed”
+   - public page shows “Delivered / Tracking ended” message.
+
+OUTPUT REQUIRED
+After implementation, reply with:
+- Files changed list
+- New/changed endpoints
+- DB migration name (if any)
+- Quick verification checklist and what you saw in logs
+Do NOT include huge refactors. Keep changes minimal.

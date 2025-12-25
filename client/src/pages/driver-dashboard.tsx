@@ -382,17 +382,40 @@ export default function DriverDashboard() {
       
       case 'denied':
         return (
-          <div className={cn(
-            baseClasses,
-            theme === "arcade90s" 
-              ? "bg-red-500/10 text-red-400 border border-red-500/30" 
-              : "bg-red-500/10 text-red-400 border border-red-500/30"
-          )} data-testid="status-tracking-denied">
-            <AlertCircle className="w-4 h-4" />
-            <div className="flex-1">
-              <div className="font-medium">Location access denied</div>
-              <div className="opacity-70 text-[10px]">Enable location in your browser settings</div>
+          <div className="space-y-2 mb-4" data-testid="status-tracking-denied">
+            <div className={cn(
+              baseClasses,
+              "mb-0",
+              theme === "arcade90s" 
+                ? "bg-red-500/10 text-red-400 border border-red-500/30" 
+                : "bg-red-500/10 text-red-400 border border-red-500/30"
+            )}>
+              <AlertCircle className="w-4 h-4" />
+              <div className="flex-1">
+                <div className="font-medium">Location access denied</div>
+                <div className="opacity-70 text-[10px]">Enable location in your browser settings</div>
+              </div>
             </div>
+            <Button
+              onClick={requestLocationPermission}
+              variant="outline"
+              className={cn(
+                "w-full",
+                theme === "arcade90s"
+                  ? "border-arc-primary text-arc-primary hover:bg-arc-primary/10 rounded-none"
+                  : "border-brand-gold text-brand-gold hover:bg-brand-gold/10"
+              )}
+              data-testid="button-retry-location"
+            >
+              <MapPin className="w-4 h-4 mr-2" />
+              Try Again
+            </Button>
+            <p className={cn(
+              "text-[10px] text-center px-2",
+              theme === "arcade90s" ? "text-arc-muted" : "text-brand-muted"
+            )}>
+              iOS Safari: Tap the "aA" icon → Website Settings → Location → Allow, then reload this page.
+            </p>
           </div>
         );
       
@@ -406,6 +429,39 @@ export default function DriverDashboard() {
           )}>
             <SignalZero className="w-4 h-4" />
             <span>Geolocation not available on this device</span>
+          </div>
+        );
+      
+      case 'error':
+        return (
+          <div className="space-y-2 mb-4" data-testid="status-tracking-error">
+            <div className={cn(
+              baseClasses,
+              "mb-0",
+              theme === "arcade90s" 
+                ? "bg-orange-500/10 text-orange-400 border border-orange-500/30" 
+                : "bg-orange-500/10 text-orange-400 border border-orange-500/30"
+            )}>
+              <AlertCircle className="w-4 h-4" />
+              <div className="flex-1">
+                <div className="font-medium">Could not get location</div>
+                <div className="opacity-70 text-[10px]">{trackingError || "Please try again"}</div>
+              </div>
+            </div>
+            <Button
+              onClick={requestLocationPermission}
+              variant="outline"
+              className={cn(
+                "w-full",
+                theme === "arcade90s"
+                  ? "border-arc-primary text-arc-primary hover:bg-arc-primary/10 rounded-none"
+                  : "border-brand-gold text-brand-gold hover:bg-brand-gold/10"
+              )}
+              data-testid="button-retry-location-error"
+            >
+              <MapPin className="w-4 h-4 mr-2" />
+              Try Again
+            </Button>
           </div>
         );
       
