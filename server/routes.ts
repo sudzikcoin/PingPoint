@@ -902,11 +902,18 @@ export async function registerRoutes(
       const { lat, lng, accuracy, speed, heading } = req.body;
       const ua = req.headers['user-agent'] || 'unknown';
       
-      console.log(`[TrackingPing] received hasToken=${!!token} lat=${lat} lng=${lng} ua=${ua.substring(0, 50)}`);
+      console.log(`[TrackingPing] recv token=${token ? token.substring(0, 8) + '...' : 'missing'} lat=${lat} lng=${lng} ua=${ua.substring(0, 50)}`);
 
-      if (typeof lat !== 'number' || typeof lng !== 'number') {
-        console.log(`[TrackingPing] rejected reason=invalid_coords lat=${lat} lng=${lng}`);
-        return res.status(400).json({ error: "lat and lng are required numbers" });
+      // Validate coordinates are finite numbers within valid ranges
+      if (typeof lat !== 'number' || typeof lng !== 'number' || 
+          !Number.isFinite(lat) || !Number.isFinite(lng)) {
+        console.log(`[TrackingPing] REJECTED reason=invalid_coords lat=${lat} lng=${lng}`);
+        return res.status(400).json({ ok: false, error: "lat and lng are required numbers" });
+      }
+      
+      if (Math.abs(lat) > 90 || Math.abs(lng) > 180) {
+        console.log(`[TrackingPing] REJECTED reason=coords_out_of_range lat=${lat} lng=${lng}`);
+        return res.status(400).json({ ok: false, error: "invalid_coords" });
       }
 
       const load = await storage.getLoadByToken(token, 'driver');
@@ -951,15 +958,23 @@ export async function registerRoutes(
       const { token, lat, lng, accuracy, speed, heading, timestamp } = req.body;
       const ua = req.headers['user-agent'] || 'unknown';
       
-      console.log(`[TrackingPing] received hasToken=${!!token} lat=${lat} lng=${lng} ua=${ua.substring(0, 50)}`);
+      console.log(`[TrackingPing] recv token=${token ? token.substring(0, 8) + '...' : 'missing'} lat=${lat} lng=${lng} ua=${ua.substring(0, 50)}`);
 
       if (!token || typeof token !== 'string') {
-        console.log(`[TrackingPing] rejected reason=missing_token`);
-        return res.status(400).json({ error: "token is required" });
+        console.log(`[TrackingPing] REJECTED reason=missing_token`);
+        return res.status(400).json({ ok: false, error: "token is required" });
       }
-      if (typeof lat !== 'number' || typeof lng !== 'number') {
-        console.log(`[TrackingPing] rejected reason=invalid_coords lat=${lat} lng=${lng}`);
-        return res.status(400).json({ error: "lat and lng are required numbers" });
+      
+      // Validate coordinates are finite numbers within valid ranges
+      if (typeof lat !== 'number' || typeof lng !== 'number' || 
+          !Number.isFinite(lat) || !Number.isFinite(lng)) {
+        console.log(`[TrackingPing] REJECTED reason=invalid_coords lat=${lat} lng=${lng}`);
+        return res.status(400).json({ ok: false, error: "lat and lng are required numbers" });
+      }
+      
+      if (Math.abs(lat) > 90 || Math.abs(lng) > 180) {
+        console.log(`[TrackingPing] REJECTED reason=coords_out_of_range lat=${lat} lng=${lng}`);
+        return res.status(400).json({ ok: false, error: "invalid_coords" });
       }
 
       const load = await storage.getLoadByToken(token, 'driver');

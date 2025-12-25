@@ -1,0 +1,104 @@
+# REPLIT BACKEND AGENT — STRICT MODE (DO NOT BREAK EXISTING FLOWS)
+You are working inside the existing PingPoint / PinkPoint repo.
+ABSOLUTE RULES:
+- Make minimal, localized changes only for geolocation tracking on Driver link.
+- Do NOT rename existing routes, do NOT change DB schema unless explicitly required (it is NOT required here).
+- Keep existing UI/branding intact; only adjust the “Requesting location…” flow and tracking ping sending logic.
+- Preserve current endpoints and payload formats. If you must add fields, make them optional and backward compatible.
+- Add clear debug logs (client + server) so we can see exactly why iOS doesn’t send location.
+
+GOAL:
+Fix Driver link geolocation so that:
+1) iPhone/iPad Safari reliably prompts for location (or clearly shows DENIED with exact instructions).
+2) After user allows, the “Requesting location access…” spinner disappears and pings start sending.
+3) Remove any hardcoded/fallback coordinates being sent silently (e.g., 34.05, -118.25). If there is a fallback, it must be behind an explicit DEV flag.
+4) Public tracking page should update when real pings arrive.
+5) Server logs should show when a ping is stored vs rejected, and WHY.
+
+WHAT I OBSERVE (from user screenshots/logs):
+- Server shows GET /api/driver/... and GET /api/track/... but often NO ping logs (so phone/tablet aren’t sending).
+- lastLocation sometimes becomes {lat: 34.050000, lng: -118.250000} which looks like a hardcoded test fallback. This must not happen unless explicitly enabled.
+
+IMPLEMENTATION PLAN (DO THIS NOW):
+
+A) CLIENT: Fix driver geolocation flow
+Locate the driver page/component (likely something like):
+- client/src/pages/driver-dashboard.tsx
+or wherever the “Requesting location access…” UI and geolocation logic lives.
+
+1) Remove/avoid use of navigator.permissions.query({name:'geolocation'}) for Safari compatibility.
+2) Implement a robust permission+tracking state machine:
+   states: 'idle' | 'requesting' | 'granted' | 'denied' | 'error' | 'tracking'
+3) IMPORTANT FOR iOS:
+   - Do NOT auto-trigger geolocation on page load.
+   - Show a prominent button like “Enable Location” / “Start Tracking”.
+   - Only when the user taps the button, call geolocation (user gesture).
+4) On tap:
+   - Call navigator.geolocation.getCurrentPosition first with:
+     { enableHighAccuracy: true, timeout: 20000, maximumAge: 0 }
+   - If TIMEOUT or POSITION_UNAVAILABLE, retry once with:
+     { enableHighAccuracy: false, timeout: 20000, maximumAge: 60000 }
+   - If success:
+     - set state to 'tracking'
+     - immediately send ping to the existing ping endpoint
+     - then start watchPosition for continuous updates:
+       watchPosition({ enableHighAccuracy: true, maximumAge: 0, timeout: 20000 })
+     - Throttle sending to once per 60s (keep existing interval behavior).
+   - If error PERMISSION_DENIED:
+     - set state to 'denied'
+     - show iOS Safari instructions:
+       “iOS Safari: tap ‘aA’ in the address bar → Website Settings → Location → Allow, then reload”
+     - Provide a “Try Again” button that re-runs the request flow.
+   - If other error:
+     - show ‘error’ with error.code and message; “Try Again”.
+
+5) HARD RULE: Do not silently send any fallback coords.
+   - If lat/lng are missing or not finite numbers, do not send ping.
+   - If there is any existing “fallbackLat/fallbackLng” or default coords (especially 34.05/-118.25), remove it.
+   - OPTIONAL DEV MODE ONLY:
+     If you need testing support, allow a query param override ONLY when
+     process.env.NODE_ENV !== 'production' OR an env var DEV_FAKE_GPS === '1'.
+     Example: /driver/... ?devLat=...&devLng=...
+     But DEFAULT must be OFF.
+
+6) Add client-side debug logs (must be easy to read in Safari remote inspector):
+   console.log('[DriverGeo] state=...', ...)
+   console.log('[DriverGeo] request click')
+   console.log('[DriverGeo] getCurrentPosition success lat=... lng=... acc=...')
+   console.log('[DriverGeo] getCurrentPosition error code=... message=...')
+   console.log('[DriverGeo] watchPosition update lat=... lng=...')
+   console.log('[DriverGeo] ping sent load=... lat=... lng=...')
+   console.log('[DriverGeo] ping skipped reason=missing_coords or throttled')
+
+7) UI:
+   - Replace perpetual “Requesting location access…” with:
+     - Idle: show “Enable Location” button
+     - Requesting: show spinner “Requesting…”
+     - Denied: red banner + instructions + Try Again
+     - Tracking: green/blue banner “Tracking active — sending every 60s”
+   Keep styling consistent with current theme.
+
+B) SERVER: Improve ping endpoint logging + validation (WITHOUT changing schema)
+Locate server routes file (likely server/routes.ts or similar), where ping endpoint exists.
+
+1) Add logs when ping is received:
+   console.log('[TrackingPing] recv load=... driver=... lat=... lng=... ua=... ip=...')
+2) Validate:
+   - If lat/lng are not finite numbers OR abs(lat)>90 OR abs(lng)>180 -> reject 400 with JSON {ok:false, error:'invalid_coords'}
+   - Log rejection:
+     console.log('[TrackingPing] REJECTED load=... driver=... reason=invalid_coords lat=... lng=...')
+3) When stored successfully:
+   console.log('[TrackingPing] STORED load=... driver=... lat=... lng=...')
+4) Keep existing behavior regarding tracking end, delivery end, etc. Do not alter those rules except to add logs.
+
+C) QUICK TEST CHECKLIST (write this in README or console notes, do not require user to guess):
+1) Open driver link on iPhone Safari → tap “Enable Location” → choose “Allow while using”.
+2) Watch browser console (or server logs) to see:
+   [TrackingPing] STORED ... every ~60 seconds
+3) Open public tracking link → it should show “Last location update: ...” and coords should match the phone’s actual area, not 34.05/-118.25.
+4) If denied, UI must show explicit Safari instructions, and Try Again must work after changing website settings.
+
+DELIVERABLE:
+- Commit the minimal code changes to the driver client page + server ping endpoint.
+- Ensure no other unrelated changes.
+- After changes, run the app and confirm in server console that pings appear when enabling location on mobile.
