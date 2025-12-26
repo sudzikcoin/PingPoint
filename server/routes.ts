@@ -1180,7 +1180,19 @@ export async function registerRoutes(
         return res.status(401).json({ error: "Unauthorized" });
       }
 
-      const customerId = await getStripeCustomerByEmail(broker.email);
+      let customerId: string | null;
+      try {
+        customerId = await getStripeCustomerByEmail(broker.email);
+      } catch (error: any) {
+        if (error.message?.includes("not configured")) {
+          return res.status(503).json({ 
+            error: "Billing portal is not available. Please try again later.",
+            code: "STRIPE_NOT_CONFIGURED"
+          });
+        }
+        throw error;
+      }
+
       if (!customerId) {
         return res.status(400).json({ error: "No billing account found. Please subscribe first." });
       }

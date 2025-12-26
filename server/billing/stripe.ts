@@ -139,7 +139,9 @@ export async function createBillingPortalSession(
 
 export async function getStripeCustomerByEmail(email: string): Promise<string | null> {
   const stripe = getStripe();
-  if (!stripe) return null;
+  if (!stripe) {
+    throw new Error("Stripe is not configured (STRIPE_SECRET_KEY missing)");
+  }
 
   const customers = await stripe.customers.list({ email, limit: 1 });
   return customers.data[0]?.id || null;
