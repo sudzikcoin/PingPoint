@@ -1,0 +1,356 @@
+You are a senior TypeScript/Node.js backend engineer working in a Replit project called **PingPoint**. The app already has:
+- Express-based API routes under `/api/...`
+- A billing module under `/api/billing/...` that talks to Stripe
+- A database (likely via Prisma/ORM) that stores the user’s billing/subscription state and load credits
+- Frontend that calls:
+  - `POST /api/billing/stripe/checkout` to create Stripe Checkout Sessions
+  - `POST /api/billing/stripe/webhook` as the Stripe webhook endpoint
+  - `GET /api/billing/summary` to show the current plan, cycle dates, and credits on the Billing page
+
+Stripe is already configured in **test mode** with:
+- `STRIPE_SECRET_KEY` – test secret key
+- `PINGPOINT_PUBLIC_KEY` (or similar) – Stripe publishable key for the frontend
+- `STRIPE_PRICE_PRO_KEY` – price ID for the **PingPoint Pro** monthly subscription ($99/month)
+- `STRIPE_PRICE_EXTRA_KEY` – price ID for the **Extra load credit** one-time payment ($0.99 per credit)
+- `STRIPE_WEBHOOK_SECRET` – secret from the Stripe “event destination / webhook” we created.  
+These secrets already exist in Replit (check the Secrets panel).
+
+The system currently:
+- Successfully opens Stripe Checkout for Pro and Extra credits.
+- Stripe shows **succeeded** payments and active subscriptions in dashboard.
+- The webhook endpoint is called and returns HTTP 200, but logs show messages like:
+  - `"Unhandled event type"`
+  - `"Not a subscription renewal"`
+  - `"Error in Stripe webhook: Invalid time value"`
+- The PingPoint billing summary still shows `plan: "FREE"` and old limits after a successful checkout. Credits / plan are not updated.
+
+Your goal: **fully finish the Stripe billing flow** so that subscription and extra credit purchases update the PingPoint billing state correctly, and there are no webhook errors.
+
+---
+
+### 1. Inspect existing billing code
+
+1. Search the repo for files and folders named like:
+   - `api/billing`
+   - `stripe.ts`, `billing.ts`, `billingRouter`, `stripeRouter`, etc.
+2. Identify:
+   - The Express router that handles `/api/billing/summary`
+   - The handler that creates Stripe Checkout Sessions (likely `/api/billing/stripe/checkout`)
+   - The webhook handler at `/api/billing/stripe/webhook`
+   - The database models/tables used to store billing info (e.g. `BillingAccount`, `UserBilling`, `Plan`, or similar)
+3. Identify how the current user is determined:
+   - There may be a hard-coded user ID for now (for single-user demo), OR
+   - Some auth/session middleware.  
+   **Important:** Keep the existing mechanism; do not introduce real auth. If there is a helper like `getCurrentUserId()` or a placeholder constant such as `const CURRENT_USER_ID = ...`, reuse it everywhere in billing logic.
+
+Do not delete or break existing endpoints; adjust them.
+
+---
+
+### 2. Clarify the desired billing model
+
+Implement/maintain a simple BillingAccount model (adapt the names to existing models):
+
+- Fields (adjust to match current schema):
+  - `id`
+  - `userId` (or companyId/tenantId – use whatever is already used)
+  - `plan` – `"FREE"` or `"PRO"`
+  - `cycleStartAt` – Date
+  - `cycleEndAt` – Date
+  - `includedLoads` – number of loads included in the current cycle (3 for FREE, 200 for PRO)
+  - `loadsUsed` – number of loads used in the current cycle
+  - `creditBalance` – extra load credits bought beyond the monthly limit
+  - `stripeCustomerId` – Stripe customer ID (string, nullable initially)
+  - `stripeSubscriptionId` – Stripe subscription ID (string, nullable initially)
+
+Rules:
+- **FREE plan**:
+  - `includedLoads = 3`
+  - `loadsUsed` can never exceed `includedLoads + creditBalance`.
+- **PRO plan**:
+  - `includedLoads = 200`
+  - Billing cycle is 30 days (or monthly). The actual dates should come from Stripe if possible.
+- When user buys extra load credits (one-time payment), we **increment `creditBalance` by the purchased quantity**.
+- When a new PRO subscription starts, we:
+  - Set `plan = "PRO"`
+  - Reset `loadsUsed = 0`
+  - Set `includedLoads = 200`
+  - Set `cycleStartAt` and `cycleEndAt` based on Stripe data or on “now + 30 days”
+- On subscription renewal (next month):
+  - Keep `plan = "PRO"`
+  - Reset `loadsUsed = 0`
+  - Reset `includedLoads = 200`
+  - Shift `cycleStartAt / cycleEndAt` to the new period
+  - Do **not** reset `creditBalance` (extra credits carry over unless there is custom logic in UI).
+
+If the database already has a similar model, reuse it and only add missing fields.
+
+---
+
+### 3. Fix `/api/billing/summary`
+
+1. Find the handler returning the billing summary (likely `GET /api/billing/summary`).
+2. Ensure it:
+   - Fetches the billing account for the current user.
+   - If none exists, create a default FREE plan with:
+     - `plan = "FREE"`
+     - `cycleStartAt = new Date()` (or existing value)
+     - `cycleEndAt = cycleStartAt + 30 days`
+     - `includedLoads = 3`
+     - `loadsUsed = 0`
+     - `creditBalance = 0`
+   - Returns JSON like:
+     ```json
+     {
+       "plan": "FREE" | "PRO",
+       "cycleStartAt": "... ISO date ...",
+       "cycleEndAt": "... ISO date ...",
+       "includedLoads": number,
+       "loadsUsed": number,
+       "creditBalance": number
+     }
+     ```
+3. Use proper `Date` → ISO conversion (`toISOString()`), but store `Date` objects in DB, not strings.
+
+---
+
+### 4. Fix `/api/billing/stripe/checkout`
+
+1. Locate the POST handler that creates Stripe Checkout Sessions. There will probably be two flows:
+   - **Upgrade to PRO subscription** (mode `"subscription"`)
+   - **Buy extra load credits** (mode `"payment"`)
+
+2. Ensure you use `STRIPE_SECRET_KEY` and `STRIPE_PRICE_*_KEY` env vars, via the Stripe Node SDK.
+
+3. For **Pro subscription checkout**:
+   - `mode: "subscription"`
+   - `line_items: [{ price: STRIPE_PRICE_PRO_KEY, quantity: 1 }]`
+   - Pass metadata to the Checkout session:
+     ```ts
+     metadata: {
+       userId: <currentUserId>,
+       purpose: "subscription_pro"
+     }
+     ```
+   - Optionally also attach `client_reference_id: <currentUserId>`.
+
+4. For **extra load credits checkout**:
+   - `mode: "payment"`
+   - Determine quantity from request body (e.g. `quantity` field).
+   - `line_items: [{ price: STRIPE_PRICE_EXTRA_KEY, quantity }]`
+   - Metadata:
+     ```ts
+     metadata: {
+       userId: <currentUserId>,
+       purpose: "extra_credits",
+       credits: String(quantity)
+     }
+     ```
+
+5. Return `{ url: session.url }` to the client, as is already done.
+
+Do not change the frontend API contract: keep request/response shape the same, only fix metadata if needed.
+
+---
+
+### 5. Correct `/api/billing/stripe/webhook`
+
+This is the most important part.
+
+#### 5.1 Raw body and signature verification
+
+1. Ensure the Express route for `/api/billing/stripe/webhook` uses raw body, not JSON-parsed body. For example:
+
+```ts
+// Only for this route:
+app.post("/api/billing/stripe/webhook",
+  express.raw({ type: "application/json" }),
+  stripeWebhookHandler
+);
+
+If you use a router/middleware, adapt accordingly. The key is: this route must receive req.body as a raw Buffer.
+	2.	Inside the handler:
+	•	Create the Stripe client with STRIPE_SECRET_KEY.
+	•	Read const sig = req.headers["stripe-signature"] as string;
+	•	Use STRIPE_WEBHOOK_SECRET from env.
+	•	Call stripe.webhooks.constructEvent(req.body, sig, STRIPE_WEBHOOK_SECRET) inside a try/catch.
+	•	If verification fails, log and return HTTP 400.
+
+This should remove the previous "Webhook payload must be provided as a string or a Buffer" error.
+
+5.2 Handle event types correctly
+Implement logic for the following event types:
+
+a) checkout.session.completed
+This event will be sent when:
+	•	A subscription checkout (Pro plan) is completed.
+	•	A one-time payment (extra credits) is completed.
+
+In the webhook handler:
+
+if (event.type === "checkout.session.completed") {
+  const session = event.data.object as Stripe.Checkout.Session;
+  const metadata = session.metadata || {};
+  const userId = metadata.userId || session.client_reference_id;
+  const purpose = metadata.purpose;
+
+  if (!userId) {
+    // log and ignore gracefully
+    return res.json({ received: true, processed: false, message: "Missing userId in metadata" });
+  }
+
+  if (purpose === "subscription_pro" && session.mode === "subscription") {
+    // New PRO subscription started
+    const stripeCustomerId = session.customer as string | null;
+    const stripeSubscriptionId = session.subscription as string | null;
+
+    // Save/Update BillingAccount for this user:
+    // - plan = "PRO"
+    // - includedLoads = 200
+    // - loadsUsed = 0
+    // - creditBalance stays as is
+    // - cycleStartAt and cycleEndAt:
+    //   Prefer to use subscription.current_period_start / current_period_end,
+    //   but if you don't fetch subscription here, then use:
+    //   cycleStartAt = new Date()
+    //   cycleEndAt = new Date(Date.now() + 30*24*60*60*1000)
+    // - stripeCustomerId, stripeSubscriptionId set from session
+    //
+    // Use your ORM/DB models; make sure this code cannot throw `Invalid time value`.
+
+    // After DB update:
+    return res.json({ received: true, processed: true });
+  }
+
+  if (purpose === "extra_credits" && session.mode === "payment") {
+    const credits = Number(metadata.credits || "0") || 0;
+
+    // Find the BillingAccount for userId and increment creditBalance by `credits`.
+    // Don't change plan or other fields.
+
+    return res.json({ received: true, processed: true });
+  }
+
+  // Any other checkout sessions – simply acknowledge:
+  return res.json({ received: true, processed: false, message: "Unhandled checkout.session purpose" });
+}
+
+b) invoice.paid (subscription renewals)
+This event fires for several reasons. We only care when it is a subscription cycle renewal.
+
+if (event.type === "invoice.paid") {
+  const invoice = event.data.object as Stripe.Invoice;
+
+  // Only handle recurring subscription cycle invoices
+  if (invoice.billing_reason !== "subscription_cycle") {
+    console.log("[Stripe Webhook] invoice.paid: Not a subscription renewal");
+    return res.json({ received: true, processed: false, message: "Not a subscription renewal" });
+  }
+
+  const stripeCustomerId = invoice.customer as string | null;
+  const stripeSubscriptionId = invoice.subscription as string | null;
+
+  if (!stripeSubscriptionId || !stripeCustomerId) {
+    return res.json({ received: true, processed: false, message: "Missing subscription/customer in invoice" });
+  }
+
+  // The new period dates are in invoice.lines.data[0].period.start/end (UNIX seconds)
+  const line = invoice.lines.data[0];
+  const period = line?.period;
+
+  let cycleStartAt: Date | null = null;
+  let cycleEndAt: Date | null = null;
+
+  if (period && typeof period.start === "number" && typeof period.end === "number") {
+    // convert UNIX seconds -> JS Date
+    cycleStartAt = new Date(period.start * 1000);
+    cycleEndAt = new Date(period.end * 1000);
+  }
+
+  // Guard against invalid dates:
+  if (!cycleStartAt || Number.isNaN(cycleStartAt.getTime()) ||
+      !cycleEndAt || Number.isNaN(cycleEndAt.getTime())) {
+    // Fallback: 30 days from now, avoid "Invalid time value" error
+    const now = new Date();
+    cycleStartAt = now;
+    cycleEndAt = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
+  }
+
+  // Find BillingAccount by stripeSubscriptionId or stripeCustomerId
+  // and update:
+  // - plan = "PRO" (should already be)
+  // - includedLoads = 200
+  // - loadsUsed = 0
+  // - cycleStartAt, cycleEndAt from above
+  // - Do not reset creditBalance.
+
+  return res.json({ received: true, processed: true });
+}
+
+c) customer.subscription.deleted (cancellation)
+Optionally handle cancellation:
+
+if (event.type === "customer.subscription.deleted") {
+  const subscription = event.data.object as Stripe.Subscription;
+  const stripeSubscriptionId = subscription.id;
+
+  // Find BillingAccount by stripeSubscriptionId and:
+  // - plan = "FREE"
+  // - includedLoads = 3
+  // - loadsUsed = 0 (or min(current, includedLoads))
+  // - Keep creditBalance as is or reset, depending on your business rules.
+  // - Clear stripeSubscriptionId if desired.
+
+  return res.json({ received: true, processed: true });
+}
+
+d) Default branch
+At the end of the webhook handler, keep a default branch:
+
+console.log("[Stripe Webhook] Unhandled event type:", event.type);
+return res.json({ received: true, processed: false, message: "Unhandled event type" });
+
+Make sure every path returns a JSON response and never throws uncaught exceptions. Surround DB calls with try/catch and log errors, but still respond with HTTP 200 where appropriate so Stripe stops retrying once you are confident.
+
+⸻
+
+6. Keep logs but make them clearer
+
+Update console logs in the webhook to be clear and structured, e.g.:
+	•	[Stripe Webhook] checkout.session.completed: purpose=subscription_pro userId=...
+	•	[Stripe Webhook] invoice.paid (renewal): subscription=... periodStart=... periodEnd=...
+	•	[Stripe Webhook] invoice.paid: Not a subscription renewal (billing_reason=...)
+	•	[Stripe Webhook] ERROR: ...
+
+This will make it easier to debug from the Replit console.
+
+⸻
+
+7. Validate end-to-end behavior (without Stripe CLI)
+
+After changes, ensure the project builds and runs with npm run dev (whatever the existing dev command is). You do not need to add tests unless there are already tests for billing.
+
+Then confirm the following flows work logically (you don’t have to click in a real browser, just reason about the code and keep it consistent):
+	1.	Initial FREE plan
+	•	A new user hits /api/billing/summary and gets FREE plan with 3 loads and 0 credits.
+	2.	Upgrade to PRO
+	•	Frontend calls /api/billing/stripe/checkout for Pro.
+	•	After successful checkout.session.completed for subscription:
+	•	Webhook sets plan PRO, 200 included loads, loadsUsed=0, cycle dates, stores Stripe IDs.
+	•	/api/billing/summary now returns PRO plan.
+	3.	Subscription renewal
+	•	invoice.paid with billing_reason = "subscription_cycle":
+	•	Webhook updates cycleStartAt / cycleEndAt, resets loadsUsed and includedLoads=200.
+	•	No “Invalid time value” error is possible.
+	4.	Buy extra load credits
+	•	Frontend calls /api/billing/stripe/checkout for extra credits with a quantity.
+	•	After checkout, checkout.session.completed with purpose="extra_credits":
+	•	Webhook increments creditBalance by quantity.
+	•	/api/billing/summary shows updated creditBalance.
+	5.	Cancellation
+	•	If a subscription is canceled in Stripe, customer.subscription.deleted downgrades plan back to FREE.
+
+Make sure all code changes are minimal and integrate with existing types, models, and routing in the project. Do not break other parts of the app.
+
+When you are done, summarize what you changed, including which files were edited and a short explanation of the webhook flow.
+

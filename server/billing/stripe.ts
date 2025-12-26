@@ -150,14 +150,17 @@ export async function getStripeCustomerByEmail(email: string): Promise<string | 
 async function upgradeToPro(brokerId: string, periodEnd: Date): Promise<void> {
   await ensureBrokerEntitlements(brokerId);
   
+  const now = new Date();
   await db
     .update(brokerEntitlements)
     .set({
       plan: "PRO",
       includedLoads: PRO_INCLUDED_LOADS,
+      loadsUsed: 0,
+      cycleStartAt: now,
       cycleEndAt: periodEnd,
       status: "active",
-      updatedAt: new Date(),
+      updatedAt: now,
     })
     .where(eq(brokerEntitlements.brokerId, brokerId));
 
@@ -185,6 +188,8 @@ async function downgradeToFree(brokerId: string): Promise<void> {
 }
 
 export async function processStripeEvent(event: Stripe.Event): Promise<{ processed: boolean; message: string }> {
+  console.log(`[Stripe Webhook] Processing event: ${event.type}`);
+  
   if (await isEventProcessed(event.id)) {
     return { processed: false, message: "Event already processed" };
   }
@@ -193,35 +198,54 @@ export async function processStripeEvent(event: Stripe.Event): Promise<{ process
     const session = event.data.object as Stripe.Checkout.Session;
     const metadata = session.metadata || {};
     const brokerId = metadata.brokerId;
+    
+    console.log(`[Stripe Webhook] checkout.session.completed: mode=${session.mode}, kind=${metadata.kind}, brokerId=${brokerId}`);
 
-    if (session.mode === "subscription" && metadata.kind === "pro_subscription") {
+    if (session.mode === "subscription") {
       if (!brokerId) {
+        console.log(`[Stripe Webhook] Missing brokerId in subscription checkout metadata`);
         return { processed: false, message: "Missing brokerId in metadata" };
       }
 
-      const subscriptionId = typeof session.subscription === 'string' ? session.subscription : null;
-      if (subscriptionId) {
-        const stripe = getStripe();
-        if (stripe) {
-          const subscription = await stripe.subscriptions.retrieve(subscriptionId);
-          const periodEnd = new Date((subscription as any).current_period_end * 1000);
-          await upgradeToPro(brokerId, periodEnd);
+      try {
+        const subscriptionId = typeof session.subscription === 'string' ? session.subscription : null;
+        let periodEnd = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000); // Default: 30 days from now
+        
+        if (subscriptionId) {
+          const stripe = getStripe();
+          if (stripe) {
+            const subscription = await stripe.subscriptions.retrieve(subscriptionId);
+            const rawPeriodEnd = (subscription as any).current_period_end;
+            if (rawPeriodEnd && typeof rawPeriodEnd === 'number') {
+              periodEnd = new Date(rawPeriodEnd * 1000);
+            }
+          }
         }
+        
+        // Validate the date
+        if (isNaN(periodEnd.getTime())) {
+          periodEnd = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+        }
+        
+        await upgradeToPro(brokerId, periodEnd);
+
+        await db.insert(stripePayments).values({
+          brokerId,
+          checkoutSessionId: session.id,
+          paymentIntentId: null,
+          amount: session.amount_total || 9900,
+          currency: session.currency || "usd",
+          status: "completed",
+          creditsGranted: 0,
+        });
+
+        await markEventProcessed(event.id, event.type);
+        console.log(`[Stripe Webhook] Subscription activated for broker ${brokerId}`);
+        return { processed: true, message: "Subscription activated" };
+      } catch (err: any) {
+        console.error(`[Stripe Webhook] Error processing subscription checkout:`, err.message);
+        throw err;
       }
-
-      await db.insert(stripePayments).values({
-        brokerId,
-        checkoutSessionId: session.id,
-        paymentIntentId: null,
-        amount: session.amount_total || 9900,
-        currency: session.currency || "usd",
-        status: "completed",
-        creditsGranted: 0,
-      });
-
-      await markEventProcessed(event.id, event.type);
-      console.log(`[Stripe] Processed subscription checkout for broker ${brokerId}`);
-      return { processed: true, message: "Subscription activated" };
     }
 
     if (session.mode === "payment" && metadata.kind === "extra_load_credits") {
@@ -244,34 +268,59 @@ export async function processStripeEvent(event: Stripe.Event): Promise<{ process
       });
 
       await markEventProcessed(event.id, event.type);
-      console.log(`[Stripe] Processed checkout.session.completed: granted ${credits} credits to broker ${brokerId}`);
+      console.log(`[Stripe Webhook] Granted ${credits} credits to broker ${brokerId}`);
       return { processed: true, message: `Granted ${credits} credits` };
     }
 
+    console.log(`[Stripe Webhook] Unhandled checkout session: mode=${session.mode}, kind=${metadata.kind}`);
     return { processed: false, message: "Unhandled checkout session type" };
   }
 
   if (event.type === "invoice.paid") {
     const invoice = event.data.object as Stripe.Invoice;
     const subscriptionId = (invoice as any).subscription;
+    const billingReason = invoice.billing_reason;
     
-    if (subscriptionId && typeof subscriptionId === 'string' && invoice.billing_reason === "subscription_cycle") {
+    console.log(`[Stripe Webhook] invoice.paid: billing_reason=${billingReason}, subscriptionId=${subscriptionId}`);
+    
+    // Handle both initial subscription creation and renewals
+    if (subscriptionId && typeof subscriptionId === 'string' && 
+        (billingReason === "subscription_cycle" || billingReason === "subscription_create")) {
       const stripe = getStripe();
       if (stripe) {
-        const subscription = await stripe.subscriptions.retrieve(subscriptionId);
-        const brokerId = (subscription as any).metadata?.brokerId;
-        
-        if (brokerId) {
-          const periodEnd = new Date((subscription as any).current_period_end * 1000);
-          await upgradeToPro(brokerId, periodEnd);
+        try {
+          const subscription = await stripe.subscriptions.retrieve(subscriptionId);
+          const brokerId = (subscription as any).metadata?.brokerId;
           
-          await markEventProcessed(event.id, event.type);
-          console.log(`[Stripe] Renewed PRO subscription for broker ${brokerId}`);
-          return { processed: true, message: "Subscription renewed" };
+          if (brokerId) {
+            const rawPeriodEnd = (subscription as any).current_period_end;
+            let periodEnd = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+            
+            if (rawPeriodEnd && typeof rawPeriodEnd === 'number') {
+              periodEnd = new Date(rawPeriodEnd * 1000);
+            }
+            
+            if (isNaN(periodEnd.getTime())) {
+              periodEnd = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+            }
+            
+            await upgradeToPro(brokerId, periodEnd);
+            
+            await markEventProcessed(event.id, event.type);
+            const action = billingReason === "subscription_create" ? "created" : "renewed";
+            console.log(`[Stripe Webhook] PRO subscription ${action} for broker ${brokerId}`);
+            return { processed: true, message: `Subscription ${action}` };
+          } else {
+            console.log(`[Stripe Webhook] invoice.paid: No brokerId in subscription metadata`);
+          }
+        } catch (err: any) {
+          console.error(`[Stripe Webhook] Error processing invoice.paid:`, err.message);
+          throw err;
         }
       }
     }
 
+    console.log(`[Stripe Webhook] invoice.paid: Not a subscription event we handle`);
     return { processed: false, message: "Not a subscription renewal" };
   }
 
@@ -282,12 +331,13 @@ export async function processStripeEvent(event: Stripe.Event): Promise<{ process
     if (brokerId) {
       await downgradeToFree(brokerId);
       await markEventProcessed(event.id, event.type);
-      console.log(`[Stripe] Subscription canceled for broker ${brokerId}`);
+      console.log(`[Stripe Webhook] Subscription canceled for broker ${brokerId}`);
       return { processed: true, message: "Subscription canceled" };
     }
 
     return { processed: false, message: "Missing brokerId in subscription metadata" };
   }
 
+  console.log(`[Stripe Webhook] ${event.type}: Unhandled event type`);
   return { processed: false, message: "Unhandled event type" };
 }
