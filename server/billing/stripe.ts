@@ -4,7 +4,7 @@ import { stripeWebhookEvents, stripePayments, brokerEntitlements } from "@shared
 import { eq } from "drizzle-orm";
 import { grantCredits, ensureBrokerEntitlements, PRO_INCLUDED_LOADS, CYCLE_DAYS } from "./entitlements";
 
-export const STRIPE_PRICE_EXTRA_LOAD = process.env.STRIPE_PRICE_EXTRA_LOAD || "";
+export const STRIPE_PRICE_EXTRA_LOAD = process.env.STRIPE_PRICE_EXTRA_CREDIT || process.env.STRIPE_PRICE_EXTRA_LOAD || "";
 export const STRIPE_PRICE_PRO_MONTHLY = process.env.STRIPE_PRICE_PRO_MONTHLY || "";
 export const STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET || "";
 

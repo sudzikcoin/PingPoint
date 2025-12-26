@@ -1,0 +1,335 @@
+You are a senior TypeScript/Next.js 14 engineer working inside my existing PingPoint project on Replit (App Router + React + Tailwind). Your task: make the Stripe integration for the Billing page actually work so that the “PAY WITH CARD ($99/MO)” button opens Stripe Checkout (test mode) and I can pay.
+
+🚦 VERY IMPORTANT CONSTRAINTS
+- Do NOT change or delete any existing DB schema, auth logic, routing structure, or non-billing pages.
+- Only touch:
+  - The billing API route(s) used by the buttons on `/app/billing`
+  - The React component(s) for the Billing page itself
+  - `package.json` (only if Stripe dependency is missing)
+- Keep all file paths, imports, and code style consistent with the project.
+- Use TypeScript and Next.js App Router conventions.
+- Keep changes as small and local as possible.
+
+🔐 ENVIRONMENT / SECRETS (already configured in Replit)
+DO NOT hardcode these values; just read them via `process.env`:
+- `STRIPE_SECRET_KEY` – my `sk_test_...` secret key for Stripe sandbox.
+- `STRIPE_WEBHOOK_SECRET` – my `whsec_...` signing secret for the webhook (already set up, do not touch webhook logic unless required).
+- `STRIPE_PRICE_PRO_MONTHLY` – **price ID** (`price_...`) for the $99/month Pro subscription (NOT the `prod_...` id).
+- `STRIPE_PRICE_EXTRA_CREDIT` – **price ID** (`price_...`) for the $0.99 “extra load credit”.
+- `PINGPOINT_PUBLIC_URL` – public base URL of the app, e.g. `https://6770...replit.dev` (WITHOUT `/app/billing` at the end).
+
+We are in **Stripe TEST mode** (sandbox). All integration must work there.
+
+=====================================
+1) CHECK STRIPE DEPENDENCY
+=====================================
+1. Open `package.json`.
+2. If `"stripe"` is not in dependencies, add it with a recent version, e.g.:
+
+   "stripe": "^16.0.0"
+
+3. Run install if Replit does not do it automatically.
+
+=====================================
+2) FIND THE BILLING PAGE + BUTTON HANDLERS
+=====================================
+1. Search the codebase for the text: `PAY WITH CARD`.
+2. Open the React component that renders this button (likely something like `app/(dashboard)/app/billing/page.tsx` or a child component).
+3. Identify the click handler for the Pro plan button – it might look like `handleUpgradeToPro`, `onUpgrade`, etc.
+4. Determine which API endpoint it currently calls via `fetch`/`axios`. Often it will be something like:
+   - `/api/billing/checkout`
+   - `/api/billing/stripe/checkout`
+   - or similar.
+
+👉 From now on, we will standardize on the following:
+- Pro subscription: use an API endpoint `/api/billing/checkout`
+- Extra credits: use `/api/billing/extra-credits` (if a separate button exists)
+
+If the current code uses other URLs, update the frontend to use **these** two URLs instead (and then create the matching API routes below).
+
+=====================================
+3) IMPLEMENT /api/billing/checkout (Stripe Checkout – subscription)
+=====================================
+Create (or update if already exists) the file:
+
+app/api/billing/checkout/route.ts
+
+Implement it as a Next.js App Router API route in TypeScript that:
+
+- Uses `Stripe` from the `stripe` package.
+- Reads envs:
+  - `STRIPE_SECRET_KEY`
+  - `STRIPE_PRICE_PRO_MONTHLY`
+  - `PINGPOINT_PUBLIC_URL`
+- Creates a **Stripe Checkout Session** in `mode: 'subscription'` with one line item using `STRIPE_PRICE_PRO_MONTHLY`.
+- Builds URLs:
+  - `success_url = PINGPOINT_PUBLIC_URL + '/app/billing?success=1'`
+  - `cancel_url  = PINGPOINT_PUBLIC_URL + '/app/billing?canceled=1'`
+- Returns JSON `{ url: session.url }` on POST.
+- Handles errors gracefully and logs them to the server console.
+
+Use this structure (adapt to local utils if needed, but keep logic equivalent):
+
+```ts
+import Stripe from 'stripe';
+import { NextRequest, NextResponse } from 'next/server';
+
+const stripeSecretKey = process.env.STRIPE_SECRET_KEY;
+const pricePro = process.env.STRIPE_PRICE_PRO_MONTHLY;
+const publicUrl = process.env.PINGPOINT_PUBLIC_URL || '';
+
+if (!stripeSecretKey) {
+  console.error('STRIPE_SECRET_KEY is not set');
+}
+
+const stripe = new Stripe(stripeSecretKey || '', {
+  apiVersion: '2024-06-20',
+});
+
+export async function POST(req: NextRequest) {
+  try {
+    if (!stripeSecretKey || !pricePro) {
+      return NextResponse.json(
+        { error: 'Stripe is not configured on server' },
+        { status: 500 },
+      );
+    }
+
+    const successUrl = `${publicUrl}/app/billing?success=1`;
+    const cancelUrl = `${publicUrl}/app/billing?canceled=1`;
+
+    const session = await stripe.checkout.sessions.create({
+      mode: 'subscription',
+      line_items: [
+        {
+          price: pricePro,
+          quantity: 1,
+        },
+      ],
+      success_url: successUrl,
+      cancel_url: cancelUrl,
+    });
+
+    return NextResponse.json({ url: session.url });
+  } catch (error: any) {
+    console.error('Stripe checkout (subscription) error:', error);
+    return NextResponse.json(
+      { error: 'Stripe checkout failed' },
+      { status: 500 },
+    );
+  }
+}
+
+// Optional: allow GET to redirect directly to Stripe if front-end uses a link instead of fetch
+export async function GET(req: NextRequest) {
+  try {
+    if (!stripeSecretKey || !pricePro) {
+      return NextResponse.json(
+        { error: 'Stripe is not configured on server' },
+        { status: 500 },
+      );
+    }
+
+    const successUrl = `${publicUrl}/app/billing?success=1`;
+    const cancelUrl = `${publicUrl}/app/billing?canceled=1`;
+
+    const session = await stripe.checkout.sessions.create({
+      mode: 'subscription',
+      line_items: [
+        {
+          price: pricePro,
+          quantity: 1,
+        },
+      ],
+      success_url: successUrl,
+      cancel_url: cancelUrl,
+    });
+
+    return NextResponse.redirect(session.url!, 303);
+  } catch (error: any) {
+    console.error('Stripe checkout (subscription) GET error:', error);
+    return NextResponse.json(
+      { error: 'Stripe checkout failed' },
+      { status: 500 },
+    );
+  }
+}
+
+=====================================
+4) IMPLEMENT /api/billing/extra-credits (Stripe Checkout – one-time payment)
+
+If the “BUY EXTRA LOAD CREDITS” section already calls some API, adapt it to call /api/billing/extra-credits with a POST containing quantity. Then create:
+
+app/api/billing/extra-credits/route.ts
+
+Logic:
+	•	Read STRIPE_SECRET_KEY, STRIPE_PRICE_EXTRA_CREDIT, PINGPOINT_PUBLIC_URL.
+	•	Parse JSON body: { quantity?: number }, default quantity = 1.
+	•	Create a Stripe Checkout Session with:
+	•	mode: 'payment'
+	•	line_items: [{ price: STRIPE_PRICE_EXTRA_CREDIT, quantity }]
+	•	same success_url and cancel_url as above.
+	•	Return { url: session.url }.
+
+Code template:
+
+import Stripe from 'stripe';
+import { NextRequest, NextResponse } from 'next/server';
+
+const stripeSecretKey = process.env.STRIPE_SECRET_KEY;
+const priceExtra = process.env.STRIPE_PRICE_EXTRA_CREDIT;
+const publicUrl = process.env.PINGPOINT_PUBLIC_URL || '';
+
+if (!stripeSecretKey) {
+  console.error('STRIPE_SECRET_KEY is not set');
+}
+
+const stripe = new Stripe(stripeSecretKey || '', {
+  apiVersion: '2024-06-20',
+});
+
+export async function POST(req: NextRequest) {
+  try {
+    if (!stripeSecretKey || !priceExtra) {
+      return NextResponse.json(
+        { error: 'Stripe is not configured on server' },
+        { status: 500 },
+      );
+    }
+
+    const body = await req.json().catch(() => ({} as any));
+    const quantityRaw = body?.quantity;
+    const quantity =
+      typeof quantityRaw === 'number' && quantityRaw > 0
+        ? quantityRaw
+        : 1;
+
+    const successUrl = `${publicUrl}/app/billing?success=1`;
+    const cancelUrl = `${publicUrl}/app/billing?canceled=1`;
+
+    const session = await stripe.checkout.sessions.create({
+      mode: 'payment',
+      line_items: [
+        {
+          price: priceExtra,
+          quantity,
+        },
+      ],
+      success_url: successUrl,
+      cancel_url: cancelUrl,
+    });
+
+    return NextResponse.json({ url: session.url });
+  } catch (error: any) {
+    console.error('Stripe checkout (extra credits) error:', error);
+    return NextResponse.json(
+      { error: 'Stripe checkout failed' },
+      { status: 500 },
+    );
+  }
+}
+
+=====================================
+5) UPDATE FRONTEND HANDLERS ON /app/billing
+
+In the Billing page component (where the buttons are):
+	1.	For the Pro subscription button (“PAY WITH CARD ($99/MO)”), replace the handler with something like:
+
+const [isProcessingPro, setIsProcessingPro] = useState(false);
+
+const handleUpgradeToPro = async () => {
+  try {
+    setIsProcessingPro(true);
+    const res = await fetch('/api/billing/checkout', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}), // no extra data, server knows it's subscription
+    });
+
+    if (!res.ok) {
+      console.error('Upgrade error', await res.text());
+      setIsProcessingPro(false);
+      alert('Stripe error. Please try again or contact support.');
+      return;
+    }
+
+    const data = await res.json();
+    if (data?.url) {
+      window.location.href = data.url;
+    } else {
+      setIsProcessingPro(false);
+      alert('No Stripe checkout URL returned');
+    }
+  } catch (e) {
+    console.error(e);
+    setIsProcessingPro(false);
+    alert('Unexpected error with Stripe');
+  }
+};
+
+	2.	Make sure the button uses this handler and the processing state:
+
+<button
+  onClick={handleUpgradeToPro}
+  disabled={isProcessingPro}
+>
+  {isProcessingPro ? 'Processing…' : 'PAY WITH CARD ($99/MO)'}
+</button>
+
+	3.	For the “BUY EXTRA LOAD CREDITS” button, wire it similarly, but POST to /api/billing/extra-credits and send quantity from the UI:
+
+const [extraQuantity, setExtraQuantity] = useState(1);
+const [isProcessingExtra, setIsProcessingExtra] = useState(false);
+
+const handleBuyExtraCredits = async () => {
+  try {
+    setIsProcessingExtra(true);
+    const res = await fetch('/api/billing/extra-credits', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ quantity: extraQuantity }),
+    });
+
+    if (!res.ok) {
+      console.error('Extra credits error', await res.text());
+      setIsProcessingExtra(false);
+      alert('Stripe error. Please try again or contact support.');
+      return;
+    }
+
+    const data = await res.json();
+    if (data?.url) {
+      window.location.href = data.url;
+    } else {
+      setIsProcessingExtra(false);
+      alert('No Stripe checkout URL returned');
+    }
+  } catch (e) {
+    console.error(e);
+    setIsProcessingExtra(false);
+    alert('Unexpected error with Stripe');
+  }
+};
+
+Tie this handler to the “Buy extra credits” button and keep the existing quantity UI (± buttons, etc.) unchanged.
+
+=====================================
+6) НЕ МЕНЯЙ WEBHOOK
+	•	В проекте уже настроен Stripe Webhook endpoint по адресу /api/billing/stripe/webhook, и в Stripe Workbench он зарегистрирован с нужными событиями.
+	•	НЕ меняй его логику, файлы и путь, если в этом нет прямой необходимости.
+	•	Единственное, что можно сделать: убедиться, что он использует process.env.STRIPE_WEBHOOK_SECRET (а не захардкоженный ключ). Если всё уже так – оставь как есть.
+
+=====================================
+7) ТЕСТ
+	1.	Убедись, что STRIPE_SECRET_KEY, STRIPE_PRICE_PRO_MONTHLY, STRIPE_PRICE_EXTRA_CREDIT, PINGPOINT_PUBLIC_URL, STRIPE_WEBHOOK_SECRET заданы в Replit Secrets.
+	2.	Запусти проект в Replit.
+	3.	Открой /app/billing по PINGPOINT_PUBLIC_URL.
+	4.	Нажми:
+	•	“PAY WITH CARD ($99/MO)” – должно перенаправить на Stripe Checkout (TEST).
+	•	“BUY EXTRA LOAD CREDITS” – тоже должно перекинуть на отдельную Stripe Checkout страницу.
+	5.	В случае ошибки:
+	•	выводи подробное сообщение в серверный лог (console.error),
+	•	на фронте показывай краткий alert или UI-ошибку, но не ломай страницу.
+
+Сделай все шаги выше, обнови /api маршруты и обработчики кнопок так, чтобы после нажатия “PAY WITH CARD ($99/MO)” я попадал на реальную страницу Stripe Checkout в тестовом режиме и мог провести платеж.
+
