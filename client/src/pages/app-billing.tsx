@@ -67,6 +67,28 @@ export default function AppBilling() {
   const [showSolanaModal, setShowSolanaModal] = useState(false);
   const [creatingIntent, setCreatingIntent] = useState(false);
   const [upgradingWithCard, setUpgradingWithCard] = useState(false);
+  
+  // Promo code state
+  const [promoCode, setPromoCode] = useState("");
+  const [promoValidating, setPromoValidating] = useState(false);
+  const [appliedPromo, setAppliedPromo] = useState<{
+    valid: boolean;
+    code: string;
+    discountType: string;
+    discountValue: number;
+    rewardLoads: number;
+    message: string;
+  } | null>(null);
+
+  // Referral state
+  const [referralData, setReferralData] = useState<{
+    referralCode: string;
+    referralLink: string;
+    totalReferrals: number;
+    activeReferrals: number;
+    totalRewardsEarned: number;
+  } | null>(null);
+  const [referralCopied, setReferralCopied] = useState(false);
 
   useEffect(() => {
     const params = new URLSearchParams(searchString);
@@ -78,7 +100,20 @@ export default function AppBilling() {
   useEffect(() => {
     fetchSummary();
     fetchMerchantInfo();
+    fetchReferralData();
   }, []);
+
+  const fetchReferralData = async () => {
+    try {
+      const res = await fetch("/api/broker/referral", { credentials: "include" });
+      if (res.ok) {
+        const data = await res.json();
+        setReferralData(data);
+      }
+    } catch (error) {
+      console.error("Error fetching referral data:", error);
+    }
+  };
 
   const fetchSummary = async () => {
     try {
@@ -137,7 +172,11 @@ export default function AppBilling() {
     try {
       const res = await fetch("/api/billing/stripe/checkout-subscription", {
         method: "POST",
+        headers: { "Content-Type": "application/json" },
         credentials: "include",
+        body: JSON.stringify({ 
+          promoCode: appliedPromo?.code || undefined 
+        }),
       });
 
       if (res.ok) {
@@ -185,6 +224,51 @@ export default function AppBilling() {
       toast.error("Failed to create payment intent");
     } finally {
       setCreatingIntent(false);
+    }
+  };
+
+  const handleValidatePromo = async () => {
+    if (!promoCode.trim()) return;
+    
+    setPromoValidating(true);
+    try {
+      const res = await fetch("/api/billing/promo/validate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ code: promoCode.trim() }),
+      });
+      
+      const data = await res.json();
+      if (data.valid) {
+        setAppliedPromo(data);
+        toast.success(data.message);
+      } else {
+        toast.error(data.message || "Invalid promo code");
+        setAppliedPromo(null);
+      }
+    } catch (error) {
+      toast.error("Failed to validate promo code");
+      setAppliedPromo(null);
+    } finally {
+      setPromoValidating(false);
+    }
+  };
+
+  const handleClearPromo = () => {
+    setPromoCode("");
+    setAppliedPromo(null);
+  };
+
+  const handleCopyReferralLink = async () => {
+    if (!referralData) return;
+    try {
+      await navigator.clipboard.writeText(referralData.referralLink);
+      setReferralCopied(true);
+      toast.success("Referral link copied!");
+      setTimeout(() => setReferralCopied(false), 2000);
+    } catch (error) {
+      toast.error("Failed to copy link");
     }
   };
 
@@ -353,6 +437,63 @@ export default function AppBilling() {
                     </li>
                   </ul>
 
+                  {/* Promo Code Input */}
+                  <div className={cn("p-3 rounded border", theme === "arcade90s" ? "border-arc-border bg-arc-bg/50" : "border-brand-border/50 bg-brand-bg/30")}>
+                    <div className={cn("text-xs uppercase tracking-wide mb-2", theme === "arcade90s" ? "text-arc-muted arcade-pixel-font" : "text-brand-muted")}>
+                      Have a promo code?
+                    </div>
+                    {appliedPromo ? (
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <span className={cn("font-mono font-bold", theme === "arcade90s" ? "text-arc-secondary" : "text-green-400")}>
+                            {appliedPromo.code}
+                          </span>
+                          <p className={cn("text-xs mt-1", theme === "arcade90s" ? "text-arc-text" : "text-white")}>
+                            {appliedPromo.message}
+                          </p>
+                        </div>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={handleClearPromo}
+                          className={cn(theme === "arcade90s" ? "text-arc-muted" : "text-brand-muted")}
+                          data-testid="button-clear-promo"
+                        >
+                          <X className="w-4 h-4" />
+                        </Button>
+                      </div>
+                    ) : (
+                      <div className="flex gap-2">
+                        <input
+                          type="text"
+                          value={promoCode}
+                          onChange={(e) => setPromoCode(e.target.value.toUpperCase())}
+                          placeholder="Enter code"
+                          className={cn(
+                            "flex-1 px-3 py-2 text-sm border rounded",
+                            theme === "arcade90s" 
+                              ? "bg-arc-bg border-arc-border text-arc-text rounded-none placeholder:text-arc-muted/50" 
+                              : "bg-brand-bg border-brand-border text-white placeholder:text-brand-muted/50"
+                          )}
+                          data-testid="input-promo-code"
+                        />
+                        <Button
+                          onClick={handleValidatePromo}
+                          disabled={!promoCode.trim() || promoValidating}
+                          className={cn(
+                            "px-4",
+                            theme === "arcade90s" 
+                              ? "bg-arc-secondary text-black rounded-none" 
+                              : "bg-brand-gold text-black"
+                          )}
+                          data-testid="button-apply-promo"
+                        >
+                          {promoValidating ? <Loader2 className="w-4 h-4 animate-spin" /> : "Apply"}
+                        </Button>
+                      </div>
+                    )}
+                  </div>
+
                   <div className="space-y-3">
                     <Button
                       onClick={handleUpgradeWithCard}
@@ -476,6 +617,71 @@ export default function AppBilling() {
                 </Button>
               </CardContent>
             </Card>
+
+            {/* Referral Program Section */}
+            {referralData && (
+              <Card className={cn(theme === "arcade90s" ? "arcade-panel border-arc-border rounded-none" : "bg-brand-card border-brand-border")}>
+                <CardHeader>
+                  <CardTitle className={cn("text-sm uppercase tracking-widest flex items-center gap-2", theme === "arcade90s" ? "text-arc-primary arcade-pixel-font" : "text-brand-text")}>
+                    <Sparkles className="w-4 h-4" /> Refer & Earn
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <p className={cn("text-sm", theme === "arcade90s" ? "text-arc-muted" : "text-brand-muted")}>
+                    Earn <span className={cn("font-bold", theme === "arcade90s" ? "text-arc-secondary" : "text-brand-gold")}>20 free loads</span> for each friend who subscribes to PRO!
+                    They get <span className={cn("font-bold", theme === "arcade90s" ? "text-arc-secondary" : "text-brand-gold")}>10 free loads</span> too.
+                  </p>
+
+                  <div className={cn("p-3 rounded border", theme === "arcade90s" ? "border-arc-border bg-arc-bg/50" : "border-brand-border/50 bg-brand-bg/30")}>
+                    <div className={cn("text-xs uppercase tracking-wide mb-2", theme === "arcade90s" ? "text-arc-muted arcade-pixel-font" : "text-brand-muted")}>
+                      Your Referral Code
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <span className={cn("font-mono text-lg font-bold tracking-widest", theme === "arcade90s" ? "text-arc-secondary" : "text-brand-gold")} data-testid="text-referral-code">
+                        {referralData.referralCode}
+                      </span>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={handleCopyReferralLink}
+                        className={cn(theme === "arcade90s" ? "border-arc-border rounded-none" : "")}
+                        data-testid="button-copy-referral-link"
+                      >
+                        {referralCopied ? <CheckCircle className="w-4 h-4 text-green-400" /> : <Copy className="w-4 h-4" />}
+                        <span className="ml-2">{referralCopied ? "Copied!" : "Copy Link"}</span>
+                      </Button>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-3 gap-3">
+                    <div className={cn("p-3 rounded text-center", theme === "arcade90s" ? "bg-arc-bg/50 border border-arc-border" : "bg-brand-bg/50 border border-brand-border/50")}>
+                      <div className={cn("text-2xl font-bold", theme === "arcade90s" ? "text-arc-text" : "text-white")} data-testid="text-total-referrals">
+                        {referralData.totalReferrals}
+                      </div>
+                      <div className={cn("text-xs uppercase", theme === "arcade90s" ? "text-arc-muted" : "text-brand-muted")}>
+                        Referrals
+                      </div>
+                    </div>
+                    <div className={cn("p-3 rounded text-center", theme === "arcade90s" ? "bg-arc-bg/50 border border-arc-border" : "bg-brand-bg/50 border border-brand-border/50")}>
+                      <div className={cn("text-2xl font-bold", theme === "arcade90s" ? "text-arc-secondary" : "text-brand-gold")} data-testid="text-active-referrals">
+                        {referralData.activeReferrals}
+                      </div>
+                      <div className={cn("text-xs uppercase", theme === "arcade90s" ? "text-arc-muted" : "text-brand-muted")}>
+                        Active
+                      </div>
+                    </div>
+                    <div className={cn("p-3 rounded text-center", theme === "arcade90s" ? "bg-arc-bg/50 border border-arc-border" : "bg-brand-bg/50 border border-brand-border/50")}>
+                      <div className={cn("text-2xl font-bold text-green-400")} data-testid="text-rewards-earned">
+                        {referralData.totalRewardsEarned}
+                      </div>
+                      <div className={cn("text-xs uppercase", theme === "arcade90s" ? "text-arc-muted" : "text-brand-muted")}>
+                        Loads Earned
+                      </div>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            )}
           </>
         )}
       </div>

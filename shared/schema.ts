@@ -12,6 +12,7 @@ export const brokers = pgTable("brokers", {
   phone: text("phone"),
   timezone: text("timezone").default("Central (CT)"),
   emailVerified: boolean("email_verified").notNull().default(false),
+  referralCode: text("referral_code").unique(), // Personal referral code for sharing
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`now()`),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().default(sql`now()`),
 });
@@ -360,8 +361,10 @@ export const promotions = pgTable("promotions", {
   id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
   code: text("code").notNull().unique(),
   description: text("description"),
-  discountType: text("discount_type").notNull(), // PERCENT, FIXED_LOAD_CREDITS
+  discountType: text("discount_type").notNull(), // FIXED_LOAD_CREDITS, PERCENT_FIRST_SUBSCRIPTION, FIXED_FIRST_SUBSCRIPTION
   discountValue: integer("discount_value").notNull(),
+  rewardLoads: integer("reward_loads").notNull().default(0), // Extra loads granted on redemption
+  perUserLimit: integer("per_user_limit").default(1), // How many times a single user can redeem
   active: boolean("active").notNull().default(true),
   validFrom: timestamp("valid_from", { withTimezone: true }),
   validTo: timestamp("valid_to", { withTimezone: true }),
@@ -370,14 +373,33 @@ export const promotions = pgTable("promotions", {
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`now()`),
 });
 
-// Referrals model
+// Promotion Redemptions - tracks per-user redemption
+export const promotionRedemptions = pgTable("promotion_redemptions", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  promotionId: uuid("promotion_id").notNull().references(() => promotions.id),
+  brokerId: uuid("broker_id").notNull().references(() => brokers.id),
+  stripeCheckoutSessionId: text("stripe_checkout_session_id"),
+  stripeSubscriptionId: text("stripe_subscription_id"),
+  stripeInvoiceId: text("stripe_invoice_id"),
+  loadsGranted: integer("loads_granted").notNull().default(0),
+  discountApplied: boolean("discount_applied").notNull().default(false),
+  status: text("status").notNull().default("PENDING"), // PENDING, COMPLETED, EXPIRED
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`now()`),
+});
+
+// Referrals model - tracks each referral relationship
 export const referrals = pgTable("referrals", {
   id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
   referrerId: uuid("referrer_id").notNull().references(() => brokers.id),
   referredId: uuid("referred_id").references(() => brokers.id),
-  code: text("code").notNull().unique(),
-  rewardLoads: integer("reward_loads").notNull().default(1),
-  status: text("status").notNull().default("PENDING"), // PENDING, CLAIMED, EXPIRED
+  referrerCode: text("referrer_code").notNull(), // The referral code used
+  referredEmail: text("referred_email"),
+  stripeCheckoutSessionId: text("stripe_checkout_session_id"),
+  stripeSubscriptionId: text("stripe_subscription_id"),
+  stripeInvoiceId: text("stripe_invoice_id"),
+  referrerLoadsGranted: integer("referrer_loads_granted").notNull().default(0),
+  referredLoadsGranted: integer("referred_loads_granted").notNull().default(0),
+  status: text("status").notNull().default("REGISTERED"), // REGISTERED, PRO_SUBSCRIBED, REWARDS_GRANTED
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`now()`),
 });
 
@@ -479,17 +501,36 @@ export type InsertPromotion = {
   description?: string;
   discountType: string;
   discountValue: number;
+  rewardLoads?: number;
+  perUserLimit?: number;
   active?: boolean;
   validFrom?: Date;
   validTo?: Date;
   maxRedemptions?: number;
 };
 
+export type PromotionRedemption = typeof promotionRedemptions.$inferSelect;
+export type InsertPromotionRedemption = {
+  promotionId: string;
+  brokerId: string;
+  stripeCheckoutSessionId?: string;
+  stripeSubscriptionId?: string;
+  stripeInvoiceId?: string;
+  loadsGranted?: number;
+  discountApplied?: boolean;
+  status?: string;
+};
+
 export type Referral = typeof referrals.$inferSelect;
 export type InsertReferral = {
   referrerId: string;
   referredId?: string;
-  code: string;
-  rewardLoads?: number;
+  referrerCode: string;
+  referredEmail?: string;
+  stripeCheckoutSessionId?: string;
+  stripeSubscriptionId?: string;
+  stripeInvoiceId?: string;
+  referrerLoadsGranted?: number;
+  referredLoadsGranted?: number;
   status?: string;
 };

@@ -1103,6 +1103,182 @@ export async function registerRoutes(
     }
   });
 
+  // =============================================
+  // PROMO & REFERRAL ENDPOINTS
+  // =============================================
+
+  // Referral reward configuration
+  const REFERRAL_REFERRER_LOADS = 20;
+  const REFERRAL_REFERRED_LOADS = 10;
+
+  // POST /api/billing/promo/validate - Validate a promo code
+  app.post("/api/billing/promo/validate", async (req: Request, res: Response) => {
+    try {
+      const broker = await getBrokerFromRequest(req);
+      if (!broker) {
+        return res.status(401).json({ error: "Unauthorized" });
+      }
+
+      const { code } = req.body;
+      if (!code || typeof code !== "string") {
+        return res.status(400).json({ valid: false, message: "Promo code is required" });
+      }
+
+      const promotion = await storage.getPromotionByCode(code);
+      if (!promotion) {
+        return res.json({ valid: false, message: "Invalid promo code" });
+      }
+
+      const now = new Date();
+      
+      if (!promotion.active) {
+        return res.json({ valid: false, message: "This promo code is no longer active" });
+      }
+
+      if (promotion.validFrom && now < new Date(promotion.validFrom)) {
+        return res.json({ valid: false, message: "This promo code is not yet active" });
+      }
+
+      if (promotion.validTo && now > new Date(promotion.validTo)) {
+        return res.json({ valid: false, message: "This promo code has expired" });
+      }
+
+      if (promotion.maxRedemptions && promotion.redemptionCount >= promotion.maxRedemptions) {
+        return res.json({ valid: false, message: "This promo code has reached its usage limit" });
+      }
+
+      // Check per-user limit
+      const userRedemptions = await storage.getPromotionRedemptionsByUser(broker.id, promotion.id);
+      const completedRedemptions = userRedemptions.filter(r => r.status === "COMPLETED").length;
+      if (promotion.perUserLimit && completedRedemptions >= promotion.perUserLimit) {
+        return res.json({ valid: false, message: "You have already used this promo code" });
+      }
+
+      // Build benefit description
+      const benefits: string[] = [];
+      if (promotion.rewardLoads > 0) {
+        benefits.push(`${promotion.rewardLoads} free loads`);
+      }
+      if (promotion.discountType === "PERCENT_FIRST_SUBSCRIPTION" && promotion.discountValue > 0) {
+        benefits.push(`${promotion.discountValue}% off first month`);
+      }
+      if (promotion.discountType === "FIXED_FIRST_SUBSCRIPTION" && promotion.discountValue > 0) {
+        benefits.push(`$${(promotion.discountValue / 100).toFixed(2)} off first month`);
+      }
+
+      return res.json({
+        valid: true,
+        code: promotion.code,
+        discountType: promotion.discountType,
+        discountValue: promotion.discountValue,
+        rewardLoads: promotion.rewardLoads,
+        description: promotion.description,
+        message: benefits.length > 0 ? `Benefits: ${benefits.join(" + ")}` : "Code applied successfully",
+      });
+    } catch (error) {
+      console.error("Error in POST /api/billing/promo/validate:", error);
+      return res.status(500).json({ valid: false, message: "Error validating promo code" });
+    }
+  });
+
+  // GET /api/broker/referral - Get broker's personal referral code and stats
+  app.get("/api/broker/referral", async (req: Request, res: Response) => {
+    try {
+      const broker = await getBrokerFromRequest(req);
+      if (!broker) {
+        return res.status(401).json({ error: "Unauthorized" });
+      }
+
+      // Generate referral code if not exists
+      let referralCode = broker.referralCode;
+      if (!referralCode) {
+        // Generate a unique 8-character code
+        const generateCode = () => {
+          const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+          let code = "";
+          for (let i = 0; i < 8; i++) {
+            code += chars.charAt(Math.floor(Math.random() * chars.length));
+          }
+          return code;
+        };
+
+        let attempts = 0;
+        while (!referralCode && attempts < 10) {
+          const candidate = generateCode();
+          const existing = await storage.getBrokerByReferralCode(candidate);
+          if (!existing) {
+            await storage.updateBrokerReferralCode(broker.id, candidate);
+            referralCode = candidate;
+          }
+          attempts++;
+        }
+      }
+
+      const stats = await storage.getReferralStats(broker.id);
+      const origin = process.env.PINGPOINT_PUBLIC_URL || "https://pingpoint.app";
+      const referralLink = `${origin}/login?ref=${referralCode}`;
+
+      return res.json({
+        code: referralCode,
+        link: referralLink,
+        stats: {
+          totalReferred: stats.totalReferred,
+          proSubscribed: stats.proSubscribed,
+          loadsEarned: stats.loadsEarned,
+        },
+        rewards: {
+          referrerLoads: REFERRAL_REFERRER_LOADS,
+          referredLoads: REFERRAL_REFERRED_LOADS,
+        },
+      });
+    } catch (error) {
+      console.error("Error in GET /api/broker/referral:", error);
+      return res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  // GET /api/broker/referrals - Get list of referred users
+  app.get("/api/broker/referrals", async (req: Request, res: Response) => {
+    try {
+      const broker = await getBrokerFromRequest(req);
+      if (!broker) {
+        return res.status(401).json({ error: "Unauthorized" });
+      }
+
+      const allReferrals = await storage.getReferrals();
+      const myReferrals = allReferrals.filter(r => r.referrerId === broker.id);
+
+      const enriched = await Promise.all(
+        myReferrals.map(async (ref) => {
+          const referred = ref.referredId ? await storage.getBroker(ref.referredId) : null;
+          return {
+            id: ref.id,
+            referredEmail: ref.referredEmail ? maskEmail(ref.referredEmail) : null,
+            referredName: referred?.name || null,
+            status: ref.status,
+            loadsEarned: ref.referrerLoadsGranted,
+            createdAt: ref.createdAt,
+          };
+        })
+      );
+
+      return res.json({ referrals: enriched });
+    } catch (error) {
+      console.error("Error in GET /api/broker/referrals:", error);
+      return res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  // Helper function to mask email
+  function maskEmail(email: string): string {
+    const [local, domain] = email.split("@");
+    if (!domain) return email;
+    const masked = local.length > 2 
+      ? local[0] + "*".repeat(Math.min(local.length - 2, 5)) + local[local.length - 1]
+      : local[0] + "*";
+    return `${masked}@${domain}`;
+  }
+
   // POST /api/billing/stripe/checkout-credits - Create Stripe checkout session for credits
   app.post("/api/billing/stripe/checkout-credits", async (req: Request, res: Response) => {
     try {
@@ -1150,11 +1326,13 @@ export async function registerRoutes(
         return res.status(401).json({ error: "Unauthorized" });
       }
 
+      const { promoCode } = req.body || {};
+
       const origin = getBaseUrl(req);
       const successUrl = `${origin}/app/billing?success=true&session_id={CHECKOUT_SESSION_ID}`;
       const cancelUrl = `${origin}/app/billing`;
 
-      const checkoutUrl = await createSubscriptionCheckoutSession(broker.id, broker.email, successUrl, cancelUrl);
+      const checkoutUrl = await createSubscriptionCheckoutSession(broker.id, broker.email, successUrl, cancelUrl, promoCode);
 
       if (!checkoutUrl) {
         return res.status(500).json({ error: "Failed to create checkout session" });

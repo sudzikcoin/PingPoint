@@ -11,6 +11,7 @@ import {
   brokerDevices,
   adminAuditLogs,
   promotions,
+  promotionRedemptions,
   referrals,
   brokerEntitlements,
   brokerCredits,
@@ -34,6 +35,8 @@ import {
   type InsertAdminAuditLog,
   type Promotion,
   type InsertPromotion,
+  type PromotionRedemption,
+  type InsertPromotionRedemption,
   type Referral,
   type InsertReferral,
   type BrokerEntitlement,
@@ -115,6 +118,18 @@ export interface IStorage {
   updateBrokerEntitlement(brokerId: string, data: Partial<BrokerEntitlement>): Promise<BrokerEntitlement | undefined>;
   getReferrals(): Promise<Referral[]>;
   createReferral(ref: InsertReferral): Promise<Referral>;
+  
+  // Promo/Referral operations
+  getPromotionByCode(code: string): Promise<Promotion | undefined>;
+  getPromotionRedemptionsByUser(brokerId: string, promotionId: string): Promise<PromotionRedemption[]>;
+  createPromotionRedemption(redemption: InsertPromotionRedemption): Promise<PromotionRedemption>;
+  updatePromotionRedemption(id: string, data: Partial<PromotionRedemption>): Promise<PromotionRedemption | undefined>;
+  incrementPromotionRedemptionCount(promotionId: string): Promise<void>;
+  getBrokerByReferralCode(code: string): Promise<Broker | undefined>;
+  updateBrokerReferralCode(brokerId: string, code: string): Promise<Broker | undefined>;
+  getReferralByReferredId(referredId: string): Promise<Referral | undefined>;
+  updateReferral(id: string, data: Partial<Referral>): Promise<Referral | undefined>;
+  getReferralStats(brokerId: string): Promise<{ totalReferred: number; proSubscribed: number; loadsEarned: number }>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -666,6 +681,96 @@ export class DatabaseStorage implements IStorage {
       .values(ref)
       .returning();
     return referral;
+  }
+
+  // Promo/Referral operations
+  async getPromotionByCode(code: string): Promise<Promotion | undefined> {
+    const [promotion] = await db
+      .select()
+      .from(promotions)
+      .where(eq(promotions.code, code.toUpperCase()));
+    return promotion || undefined;
+  }
+
+  async getPromotionRedemptionsByUser(brokerId: string, promotionId: string): Promise<PromotionRedemption[]> {
+    return await db
+      .select()
+      .from(promotionRedemptions)
+      .where(and(
+        eq(promotionRedemptions.brokerId, brokerId),
+        eq(promotionRedemptions.promotionId, promotionId)
+      ));
+  }
+
+  async createPromotionRedemption(redemption: InsertPromotionRedemption): Promise<PromotionRedemption> {
+    const [result] = await db
+      .insert(promotionRedemptions)
+      .values(redemption)
+      .returning();
+    return result;
+  }
+
+  async updatePromotionRedemption(id: string, data: Partial<PromotionRedemption>): Promise<PromotionRedemption | undefined> {
+    const [result] = await db
+      .update(promotionRedemptions)
+      .set(data)
+      .where(eq(promotionRedemptions.id, id))
+      .returning();
+    return result || undefined;
+  }
+
+  async incrementPromotionRedemptionCount(promotionId: string): Promise<void> {
+    await db
+      .update(promotions)
+      .set({ redemptionCount: sql`${promotions.redemptionCount} + 1` })
+      .where(eq(promotions.id, promotionId));
+  }
+
+  async getBrokerByReferralCode(code: string): Promise<Broker | undefined> {
+    const [broker] = await db
+      .select()
+      .from(brokers)
+      .where(eq(brokers.referralCode, code.toUpperCase()));
+    return broker || undefined;
+  }
+
+  async updateBrokerReferralCode(brokerId: string, code: string): Promise<Broker | undefined> {
+    const [broker] = await db
+      .update(brokers)
+      .set({ referralCode: code.toUpperCase(), updatedAt: new Date() })
+      .where(eq(brokers.id, brokerId))
+      .returning();
+    return broker || undefined;
+  }
+
+  async getReferralByReferredId(referredId: string): Promise<Referral | undefined> {
+    const [referral] = await db
+      .select()
+      .from(referrals)
+      .where(eq(referrals.referredId, referredId));
+    return referral || undefined;
+  }
+
+  async updateReferral(id: string, data: Partial<Referral>): Promise<Referral | undefined> {
+    const [referral] = await db
+      .update(referrals)
+      .set(data)
+      .where(eq(referrals.id, id))
+      .returning();
+    return referral || undefined;
+  }
+
+  async getReferralStats(brokerId: string): Promise<{ totalReferred: number; proSubscribed: number; loadsEarned: number }> {
+    const allReferrals = await db
+      .select()
+      .from(referrals)
+      .where(eq(referrals.referrerId, brokerId));
+    
+    const totalReferred = allReferrals.length;
+    const proSubscribed = allReferrals.filter(r => r.status === 'PRO_SUBSCRIBED' || r.status === 'REWARDS_GRANTED').length;
+    const loadsEarned = allReferrals.reduce((sum, r) => sum + (r.referrerLoadsGranted || 0), 0);
+    
+    return { totalReferred, proSubscribed, loadsEarned };
   }
 }
 

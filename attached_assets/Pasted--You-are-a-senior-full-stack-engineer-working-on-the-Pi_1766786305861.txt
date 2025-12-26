@@ -1,0 +1,362 @@
+
+You are a senior full-stack engineer working on the PingPoint (PinkPoint) project on Replit.
+
+Context:
+- Stack: Node.js + TypeScript + Express backend, Next.js/React dashboard frontend, Prisma + PostgreSQL, Stripe for subscriptions & extra load credits.
+- Billing already works:
+  - Plans: FREE (3 loads), PRO ($99/mo, 200 loads), extra credits $0.99 each.
+  - Stripe Checkout and webhooks update internal billing counters (plan, included loads, extra credits, cycle dates).
+- In a previous step, an ADMIN concept and basic admin panel might have been added (with `ADMIN_EMAILS`, `/api/admin/*`, `AdminAuditLog`, `Promotion`, `Referral` models etc.). You MUST detect what’s already implemented and extend it instead of redefining / breaking it.
+
+GOAL
+Implement a **proper promotions and referral system** that integrates with the existing billing & Stripe, without breaking anything.
+
+High-level features:
+1. **Promo codes / campaigns**:
+   - Admin can create promo codes that give:
+     - Extra free loads (one-time credit).
+     - Optional discount on the **first PRO subscription payment** (percentage or fixed amount).
+   - Codes can have:
+     - Code string (e.g. `PING50`, `LAUNCH25`).
+     - Active flag, start/end dates.
+     - Global max redemptions; per-user limit.
+   - User can enter a promo code on the Billing page before purchasing.
+
+2. **Referral program**:
+   - Every broker (user) has a personal referral code.
+   - Referral link: `https://<current-app-domain>/signup?ref=CODE`.
+   - When a new broker signs up with this code AND successfully pays for their first PRO subscription:
+     - The **referrer** gets +X free loads (configurable, e.g. 20).
+     - The **referred** user also gets +Y free loads (e.g. 10).
+   - Admin can see basic referral stats and manually adjust rewards if necessary.
+
+3. **UI integrations**:
+   - Billing page:
+     - Input field for promo / referral code with “Apply” button.
+     - Shows applied discount / free loads before redirecting to Stripe Checkout.
+   - Broker dashboard:
+     - New “Referrals” section:
+       - Shows user’s personal referral code and shareable link.
+       - Shows simple stats: number of referred users, how many activated PRO, how many free loads earned.
+       - Table/list of referred accounts (mask emails partially if needed).
+   - Admin panel:
+     - Tab to manage promo codes (list/create/update/deactivate).
+     - Tab or section to view referrals & rewards.
+
+CONSTRAINTS
+- Do NOT change or break existing Stripe integration and webhook handlers.
+- Do NOT modify core billing logic in a way that changes current behaviour for users without promo/referral.
+- All changes must be **additive and backward compatible**.
+- Reuse existing billing functions/helpers wherever possible (especially anything that adds extra loads/credits).
+
+──────────────────────────────
+STEP 1 – Inspect existing models and admin code
+──────────────────────────────
+1. Search the repo for:
+   - `Promotion` and `Referral` models in `prisma/schema.prisma`.
+   - Any `/api/admin/promotions` or `/api/admin/referrals` endpoints.
+   - Any existing promo/referral code logic.
+2. If these models or endpoints already exist from previous steps:
+   - EXTEND them instead of redefining.
+   - Preserve existing fields; only add what’s needed.
+3. If there is no promotions/referral implementation yet, create it as described below.
+
+──────────────────────────────
+STEP 2 – Prisma schema for promotions and referrals
+──────────────────────────────
+In `prisma/schema.prisma`, define or extend models to support the required features.
+
+A) Promotion / PromoCode model
+If `Promotion` already exists: reuse that model, adding missing fields. If not, create it:
+
+```prisma
+enum PromotionDiscountType {
+  NONE
+  PERCENT_FIRST_SUBSCRIPTION  // e.g. 50% off first month
+  FIXED_FIRST_SUBSCRIPTION    // e.g. $20 off first month
+}
+
+enum PromotionRewardType {
+  NONE
+  EXTRA_LOADS_SINGLE_USE      // one-time credit of extra loads
+}
+
+model Promotion {
+  id              String   @id @default(cuid())
+  code            String   @unique
+  description     String?
+  active          Boolean  @default(true)
+  discountType    PromotionDiscountType @default(NONE)
+  discountValue   Int      @default(0)   // percent or amount in cents, depending on type
+  rewardType      PromotionRewardType @default(NONE)
+  rewardLoads     Int      @default(0)   // extra loads granted when conditions met
+
+  maxRedemptions  Int?     // total times this promo can be used
+  perUserLimit    Int?     // times a single user can redeem
+  validFrom       DateTime?
+  validTo         DateTime?
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  redemptions     PromotionRedemption[]
+}
+
+And a redemption model to track usage:
+
+model PromotionRedemption {
+  id           String   @id @default(cuid())
+  createdAt    DateTime @default(now())
+
+  promotionId  String
+  promotion    Promotion @relation(fields: [promotionId], references: [id])
+
+  userId       String
+  user         User     @relation(fields: [userId], references: [id])
+
+  // link to billing entities if needed
+  stripeCustomerId    String?
+  stripeSubscriptionId String?
+  stripeInvoiceId     String?
+  stripeCheckoutSessionId String?
+
+  appliedToFirstSubscription Boolean @default(false)
+}
+
+B) Referral models
+If Referral already exists, adapt to the following semantics; otherwise, create:
+
+model ReferralCode {
+  id           String   @id @default(cuid())
+  code         String   @unique
+  ownerId      String
+  owner        User     @relation("ReferralCode_Owner", fields: [ownerId], references: [id])
+
+  createdAt    DateTime @default(now())
+  active       Boolean  @default(true)
+}
+
+enum ReferralStatus {
+  REGISTERED          // referred user registered with this code
+  PRO_SUBSCRIBED      // referred user completed first PRO payment
+  REWARD_GRANTED      // rewards (loads) already granted
+}
+
+model Referral {
+  id              String   @id @default(cuid())
+  createdAt       DateTime @default(now())
+
+  codeId          String
+  code            ReferralCode @relation(fields: [codeId], references: [id])
+
+  referrerId      String
+  referrer        User    @relation("Referral_Referrer", fields: [referrerId], references: [id])
+
+  referredId      String? // may be null until signup completes
+  referred        User?   @relation("Referral_Referred", fields: [referredId], references: [id])
+
+  referredEmail   String?
+  status          ReferralStatus @default(REGISTERED)
+
+  stripeCustomerId      String?
+  stripeSubscriptionId  String?
+  stripeInvoiceId       String?
+}
+
+Run migrations using the project’s standard command (e.g. npx prisma migrate dev --name promotions_and_referrals), ensuring no errors.
+
+──────────────────────────────
+STEP 3 – Backend services for promotions and referrals
+──────────────────────────────
+Create or extend service/helper modules to encapsulate logic.
+
+A) Promotion service
+Implement a module, e.g. src/services/promotionService.ts:
+
+Main functions:
+	•	validatePromoCode({ userId, code, now }): Promise<{ valid: boolean, promotion?, errors?, effectiveDiscount?, rewardLoads? }>
+	•	Fetch Promotion by code (case-insensitive).
+	•	Check active, validFrom, validTo.
+	•	Check total redemptions vs maxRedemptions.
+	•	Check per-user redemptions vs perUserLimit (count PromotionRedemption records for that user).
+	•	recordPromoPending({ userId, promotionId, stripeCheckoutSessionId })
+	•	Create PromotionRedemption entry with the stripeCheckoutSessionId and mark appliedToFirstSubscription = false.
+	•	markPromoCompletedOnSubscription({ stripeCheckoutSessionId, stripeCustomerId, stripeSubscriptionId, stripeInvoiceId })
+	•	On webhook when first subscription payment is confirmed:
+	•	Find the associated PromotionRedemption by stripeCheckoutSessionId.
+	•	Attach Stripe IDs.
+	•	If promotion has rewardLoads > 0:
+	•	Use existing billing logic to add rewardLoads to user’s extra credits.
+	•	If promotion has discount type:
+	•	Discount will have already affected Stripe price/amount via metadata or dynamic price in Checkout; keep a comment in code noting that.
+
+B) Referral service
+Create src/services/referralService.ts:
+	•	ensureUserReferralCode(userId): Promise<ReferralCode>:
+	•	If user already has a ReferralCode, return it.
+	•	Else generate a new unique code (short, uppercase, e.g. 8 chars) and store.
+	•	registerReferralOnSignup({ refCode, email }):
+	•	When a new user starts signup flow with ?ref=CODE:
+	•	Find ReferralCode.
+	•	Create Referral record with:
+	•	codeId, referrerId, referredEmail, status REGISTERED.
+	•	attachReferredUser({ referralId, referredUserId }):
+	•	After signup completes and user is created, link referredId.
+	•	markReferralProSubscribedOnStripe({ stripeCustomerId, stripeSubscriptionId, stripeInvoiceId, stripeCheckoutSessionId, refCode, referredUserId }):
+	•	On webhook after first successful PRO payment:
+	•	Find matching Referral by code and referredId (or email or Stripe IDs).
+	•	Set status = PRO_SUBSCRIBED.
+	•	Grant rewards if not yet granted:
+	•	Using configuration constants, e.g.
+	•	REFERRAL_REFERRER_LOADS = 20
+	•	REFERRAL_REFERRED_LOADS = 10
+	•	Call existing billing helper to add loads to:
+	•	referrer
+	•	referred
+	•	Set status = REWARD_GRANTED.
+
+──────────────────────────────
+STEP 4 – API endpoints
+──────────────────────────────
+A) Public/broker-facing API
+
+Create a router, e.g. routes/promotions.ts or integrate into existing billing router:
+	1.	POST /api/billing/promo/validate
+	•	Auth required.
+	•	Body: { code: string }.
+	•	Use promotionService.validatePromoCode.
+	•	Return:
+
+{
+  "valid": true,
+  "code": "PING50",
+  "discountType": "PERCENT_FIRST_SUBSCRIPTION",
+  "discountValue": 50,
+  "rewardLoads": 20,
+  "message": "50% off first month + 20 extra loads after successful payment."
+}
+
+
+	•	If invalid, return { valid: false, message: "Reason" }.
+
+	2.	For creating Stripe Checkout session for PRO subscription and/or extra credits:
+	•	Extend the existing endpoint that creates checkout sessions (e.g. /api/billing/stripe/checkout-subscription):
+	•	Accept optional promoCode and referralCode fields in the request body.
+	•	When a valid promo code is applied:
+	•	Option A (simpler): store the promo details only in DB & metadata and still use the same price (no monetary discount), but grant extra loads as reward. (If you choose this, keep discountType but skip changing amount.)
+	•	Option B (more advanced): adjust the amount or use a different Stripe Price for discounted first month. Choose the simplest approach that fits current implementation WITHOUT breaking anything.
+	•	When a referral code is present:
+	•	Validate that such referral code exists and belongs to some user.
+	•	Attach referralCode to Stripe Checkout Session metadata.
+	•	In both cases, include metadata in Stripe.Checkout.SessionCreateParams:
+
+metadata: {
+  promoCode: promoCode || '',
+  referralCode: referralCode || '',
+  userId: currentUser.id,
+}
+
+
+	•	After creating the session, if promoCode is valid:
+	•	Call promotionService.recordPromoPending({ userId, promotionId, stripeCheckoutSessionId: session.id }).
+	•	For referralCode, create or update Referral record in referralService as “registered for PRO payment”.
+
+B) Admin API
+
+In the existing /api/admin router, add:
+	•	GET /api/admin/promotions
+	•	Returns a paginated list of Promotion with aggregated redemption counts.
+	•	POST /api/admin/promotions
+	•	Creates a new promotion with fields:
+	•	code, description, discountType, discountValue, rewardLoads, maxRedemptions, perUserLimit, validFrom, validTo, active.
+	•	PATCH /api/admin/promotions/:id
+	•	Update active, text fields, limits, etc.
+	•	GET /api/admin/referrals
+	•	Returns recent Referral rows with joined info (referrer email, referred email, status, rewards).
+
+Protect all with the existing requireAdmin middleware and log changes to AdminAuditLog.
+
+──────────────────────────────
+STEP 5 – Webhook integration (Stripe)
+──────────────────────────────
+In the Stripe webhook handler (already created for subscription + extra credit events):
+	1.	For checkout.session.completed and/or invoice.paid that correspond to a new PRO subscription (first payment):
+	•	Parse event.data.object as a Checkout.Session or Invoice.
+	•	Extract:
+	•	metadata.promoCode
+	•	metadata.referralCode
+	•	metadata.userId
+	•	Stripe IDs: customer, subscription, id (invoice or session).
+	•	If promoCode present:
+	•	Call promotionService.markPromoCompletedOnSubscription(...).
+	•	If referralCode present:
+	•	Call referralService.markReferralProSubscribedOnStripe(...).
+	•	Make sure all these functions are idempotent (safe for retries) by checking existing records before adding rewards.
+	2.	Preserve existing webhook logic and existing error handling; append to it instead of replacing.
+
+──────────────────────────────
+STEP 6 – Frontend changes (Next.js)
+──────────────────────────────
+A) Billing page (where user upgrades to PRO / buys credits)
+	•	Add a small section above the “Pay with card” button:
+	•	Input for promo/referral code.
+	•	“Apply” button that calls POST /api/billing/promo/validate.
+	•	Show success/error message.
+	•	When valid:
+	•	Show a short summary like:
+	•	“This code will grant +20 extra loads after successful PRO payment.”
+	•	Or “This code will apply 50% off your first month.”
+	•	Store the applied code in component state and pass it in the request body when creating the Stripe checkout session.
+
+B) Referrals tab for brokers
+	•	Create a new page/section, e.g. app/(dashboard)/referrals/page.tsx (or adapt to existing routing).
+	•	On load, call a new endpoint, e.g. GET /api/referrals/me that:
+	•	Ensures the user has a ReferralCode (using ensureUserReferralCode).
+	•	Returns:
+	•	myCode
+	•	shareUrl (constructed using current app base URL).
+	•	Some stats: totalReferred, proSubscribedCount, totalRewardLoads, availableRewardLoads.
+	•	List of referred users with masked emails and statuses.
+	•	Display:
+	•	Card with referral code and copy/share buttons.
+	•	Simple stats and a small table.
+
+C) Admin UI
+	•	In the Admin Panel:
+	•	Promotions tab:
+	•	Table of existing promotions with usage counts.
+	•	Form to create a new promo.
+	•	Switch to activate/deactivate.
+	•	Referrals tab:
+	•	Table with columns: referrer email, referred email, status, rewardLoads, dates.
+	•	Use the same UI component library and styles already used in other admin/pages; keep design consistent with the neon PingPoint dashboard.
+
+──────────────────────────────
+STEP 7 – Testing
+──────────────────────────────
+	1.	Run Prisma migrations and start the app.
+	2.	As admin:
+	•	Create a promo code: e.g. “LAUNCH20” with 0% discount and rewardLoads=20.
+	3.	As a normal user:
+	•	Go to Billing, apply “LAUNCH20”.
+	•	Proceed to PRO subscription via Stripe test card.
+	•	After checkout.session.completed, verify:
+	•	Promo webhook executed without errors.
+	•	PromotionRedemption entry created and linked to user.
+	•	User’s extra loads increased by 20 (check in existing billing summary view and DB).
+	4.	Referral:
+	•	User A opens Referrals tab, sees code “ABC123”.
+	•	Simulate signup for User B with ?ref=ABC123.
+	•	User B buys PRO subscription.
+	•	Verify that both A and B receive reward loads per configured constants.
+	•	Verify that referral status becomes REWARD_GRANTED.
+	5.	Ensure:
+	•	Users without promo/referral experience exactly the same billing and flow as before.
+	•	Admin panel works, no unauthorized access, and no runtime errors in console.
+
+DELIVERABLE
+	•	Updated Prisma schema and migrations for promo codes and referral program.
+	•	Backend services & API endpoints for validating and applying promotions and referrals.
+	•	Stripe webhook integration that grants rewards idempotently.
+	•	UI updates on Billing page, broker “Referrals” section, and Admin panel tabs for managing promotions and viewing referrals.
+	•	All existing PingPoint functionality (loads, billing, webhooks, Stripe integration) remains intact and fully working.
