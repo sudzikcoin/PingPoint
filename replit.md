@@ -34,6 +34,11 @@ Preferred communication style: Simple, everyday language.
     - **Credits**: Extra loads purchasable at $0.99 each via Stripe Checkout.
     - **Enforcement**: Load limits enforced at the API level.
     - **Integrations**: Stripe for credit purchases and Solana Pay for PRO plan subscriptions.
+- **Promotions & Referrals**:
+    - **Promo Codes**: Validated via /api/billing/promo/validate, stored in Stripe session metadata, redeemed on subscription activation.
+    - **Promo Types**: FIXED_LOAD_CREDITS (grants bonus loads), PERCENT_FIRST_SUBSCRIPTION, FIXED_FIRST_SUBSCRIPTION (future: Stripe coupon integration).
+    - **Referral Program**: Brokers get auto-generated 8-char referral codes. Referrer earns 20 loads, referred user earns 10 loads on first PRO subscription.
+    - **Tracking**: promotionRedemptions table tracks per-user redemptions, referrals table tracks referral relationships and reward status.
 
 ### System Design Choices
 
