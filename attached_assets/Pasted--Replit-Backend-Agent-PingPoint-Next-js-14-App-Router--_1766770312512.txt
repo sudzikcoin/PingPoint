@@ -1,0 +1,122 @@
+Ты — Replit Backend Agent, работаешь в уже существующем проекте PingPoint (Next.js 14 + App Router + TypeScript). ТВОЯ ЗАДАЧА: ИСПРАВИТЬ ОБРАБОТЧИК STRIPE WEBHOOK, КОТОРЫЙ СЕЙЧАС ПАДАЕТ С ОШИБКОЙ «Webhook payload must be provided as a string or a Buffer», НО НЕ ЛОМАТЬ СУЩЕСТВУЮЩУЮ БИЗНЕС-ЛОГИКУ (обновление подписок и load credits).
+
+ОБЩИЕ ПРАВИЛА:
+- Делай МИНИМАЛЬНЫЕ, ЛОКАЛЬНЫЕ изменения.
+- НЕ меняй env-переменные и их имена (они уже заданы в Replit Secrets):  
+  - STRIPE_SECRET_KEY  
+  - STRIPE_WEBHOOK_SECRET  
+  - STRIPE_PRICE_PRO_KEY (или аналог, который уже используется)  
+  - STRIPE_PRICE_EXTRA_KEY (или аналог)  
+- НЕ трогай UI, страницы биллинга и весь остальной код, КРОМЕ файла обработчика вебхука Stripe.
+- Проект уже работает: checkout-сессия создаётся и платежи проходят. Проблема ТОЛЬКО в валидации подписи вебхука и парсинге тела.
+
+1) НАЙДИ ФАЙЛ ОБРАБОТЧИКА STRIPE WEBHOOK
+- Найди в проекте файл с маршрутом, который соответствует пути:  
+  `/api/billing/stripe/webhook` (App Router).  
+  Обычно это: `app/api/billing/stripe/webhook/route.ts` или `route.tsx`.  
+- Если файл называется по-другому, но он явно привязан к этому пути, используй его.
+- В этом файле уже есть логика обработки событий Stripe (обновление подписки, начисление load credits и т.п.). ЕЁ НУЖНО СОХРАНИТЬ.
+
+2) ОБНОВИ ИМПОРТЫ И RUNTIME
+В файле вебхука:
+- Убедись, что есть такие импорты (добавь/обнови при необходимости):
+
+```ts
+import Stripe from "stripe";
+import { headers } from "next/headers";
+import { NextResponse } from "next/server";
+
+	•	Добавь (если ещё нет) строчку:
+
+export const runtime = "nodejs";
+
+(это важно: вебхук должен работать в Node.js runtime, а не в edge).
+	3.	ИСПРАВЬ ОБРАБОТКУ ТЕЛА ЗАПРОСА И КОНСТРУКЦИЮ СОБЫТИЯ
+Сейчас ошибка из Stripe говорит, что в stripe.webhooks.constructEvent подаётся УЖЕ РАСПАРСЕННЫЙ объект, а нужно сырое тело (string/Buffer). Переделай начало обработчика POST так, чтобы оно выглядело по сути вот так:
+
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY as string, {
+  apiVersion: "2025-12-15.clover",
+});
+
+export async function POST(req: Request) {
+  const sig = headers().get("stripe-signature");
+
+  if (!sig) {
+    console.error("Missing stripe-signature header");
+    return new NextResponse("Missing stripe-signature header", { status: 400 });
+  }
+
+  // ВАЖНО: получаем СЫРОЕ тело, а НЕ JSON
+  const rawBody = await req.text();
+
+  let event: Stripe.Event;
+
+  try {
+    event = stripe.webhooks.constructEvent(
+      rawBody,
+      sig,
+      process.env.STRIPE_WEBHOOK_SECRET as string
+    );
+  } catch (err: any) {
+    console.error("Webhook signature verification failed:", err.message);
+    return new NextResponse(`Webhook Error: ${err.message}`, { status: 400 });
+  }
+
+  // ==== СЮДА ВСТАВЬ СУЩЕСТВУЮЩУЮ БИЗНЕС-ЛОГИКУ ОБРАБОТКИ СОБЫТИЙ ====
+  // Ничего не выкидывай, просто используй уже сконструированный объект `event`.
+  // Если раньше ты делал что-то вроде:
+  //   const body = await req.json();
+  //   const event = body as Stripe.Event;
+  //   switch (event.type) { ... }
+  // то теперь УБЕРИ await req.json(), а switch оставь, но работай с `event` из constructEvent.
+
+  try {
+    // пример скелета — ВСТАВЬ сюда существующий switch/case вместо комментариев:
+    /*
+    switch (event.type) {
+      case "checkout.session.completed": {
+        const session = event.data.object as Stripe.Checkout.Session;
+        // твоя существующая логика: обновить план пользователя, проставить PRO, выдать 200 loads и т.п.
+        break;
+      }
+      case "invoice.payment_succeeded": {
+        const invoice = event.data.object as Stripe.Invoice;
+        // твоя логика продления подписки и т.п.
+        break;
+      }
+      // другие кейсы, которые уже есть в проекте
+      default:
+        console.log(`Unhandled event type ${event.type}`);
+    }
+    */
+
+    return NextResponse.json({ received: true });
+  } catch (error) {
+    console.error("Error while processing webhook:", error);
+    return new NextResponse("Webhook handler error", { status: 500 });
+  }
+}
+
+КЛЮЧЕВЫЕ МОМЕНТЫ:
+	•	НИГДЕ в обработчике НЕ должно быть await req.json() или других попыток ещё раз читать/парсить тело запроса. Тело читается ОДИН РАЗ через await req.text().
+	•	Валидация подписи ДОЛЖНА использовать process.env.STRIPE_WEBHOOK_SECRET.
+	•	Вся бизнес-логика (switch по event.type, обновление подписки и load credits в БД) остаётся той же, просто работает уже с event, созданным через stripe.webhooks.constructEvent.
+
+	4.	УБЕРИ СТАРЫЙ НЕПРАВИЛЬНЫЙ КОД
+
+	•	В этом файле убери/обнови всё, что:
+	•	вызывает await req.json() в обработчике вебхука;
+	•	создаёт event без stripe.webhooks.constructEvent или с неправильными аргументами;
+	•	ломает текущий workflow.
+	•	НЕ меняй маршруты, НЕ меняй названия переменных окружения, НЕ меняй код создания Checkout Session (он уже работает).
+
+	5.	ПРОВЕРКА
+После изменения файла:
+
+	•	Запусти проект (если нужно) и удостоверься, что сервер поднимается без TypeScript-ошибок.
+	•	Открой в Stripe Workbench твой event destination (engaging-legacy) и нажми Send test events для типов, которые ты слушаешь (например checkout.session.completed и invoice.payment_succeeded).
+	•	Убедись, что в разделе Event deliveries события теперь отображаются как успешные (без красных Failed).
+	•	Дополнительно проверь, что после реального тестового платежа (через тестовую карту 4242…) твой backend корректно обновляет подписку/кредиты как и раньше.
+
+Выполни все шаги, применив изменения только в файле обработчика вебхука, без модификации остальных частей проекта.
+

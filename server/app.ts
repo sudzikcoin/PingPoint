@@ -33,13 +33,17 @@ export async function createApp(): Promise<AppInstance> {
   app.use(securityHeaders);
   app.use(corsHandler);
   app.use(cookieParser());
-  app.use(
+  app.use((req, res, next) => {
+    // Skip JSON parsing for Stripe webhook - it needs raw body
+    if (req.path === "/api/billing/stripe/webhook") {
+      return next();
+    }
     express.json({
       verify: (req, _res, buf) => {
         req.rawBody = buf;
       },
-    }),
-  );
+    })(req, res, next);
+  });
 
   app.use(express.urlencoded({ extended: false }));
 
