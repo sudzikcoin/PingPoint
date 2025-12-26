@@ -1,0 +1,258 @@
+
+You are a senior full-stack engineer working on the PingPoint (PinkPoint) project hosted on Replit.
+
+Tech stack (based on repo inspection – ADAPT to actual files you find):
+- Node.js / TypeScript
+- Express backend with REST endpoints like `/api/billing/summary`, `/api/billing/stripe/*`, `/api/loads/*`
+- Next.js / React frontend (dashboard pages like Billing, New Load, etc.)
+- Prisma + PostgreSQL (models for users/brokers, loads/shipments, billing/subscriptions, etc.)
+- Stripe integration for subscriptions and extra load credits
+- Session / auth system already exists for brokers
+
+GOAL
+Implement a proper **Admin account and Admin Panel** WITHOUT breaking any existing logic.
+
+High-level requirements:
+1. Allow one or more **admin users** to log in through the same mechanism as brokers.
+2. Admin can:
+   - View all brokers/users and their billing & usage status.
+   - Manually fix billing/usage issues when Stripe succeeded but loads/credits were not added (e.g., add load credits, reset used loads, change plan).
+   - Block / unblock accounts (by user, email; OPTIONAL: store IPs).
+   - See an **activity / audit log** of important admin actions.
+   - See list of all brokers with active subscriptions.
+   - Have a foundation for simple **promotions & referral codes** (DB + endpoints + very basic UI stubs; can be minimal).
+
+CONSTRAINTS
+- Do NOT break existing auth, billing, Stripe webhooks, or load-creation logic.
+- Keep changes **additive and minimal**: reuse existing patterns, middleware, UI components, and API structure.
+- Prefer environment-based admin configuration to avoid risky migrations where possible.
+- If you must change DB schema, use **Prisma migrations** and keep them backward compatible.
+
+────────────────────────────────
+STEP 1 – Detect if ADMIN role already exists
+────────────────────────────────
+1. Inspect the codebase for any existing admin role or flags:
+   - Prisma schema: look for `role`, `isAdmin`, `UserRole`, etc.
+   - Auth logic / session payload: search for `admin`, `isAdmin`, `role`.
+   - Any `/admin` routes or admin components.
+2. If there is already a fully implemented admin role and panel, **STOP** and only:
+   - Add the extra features requested (manual credit adjustment, blocking, logs, etc.) to the existing admin system.
+3. If there is no real admin system yet (most likely case), proceed with the steps below.
+
+────────────────────────────────
+STEP 2 – Add an Admin concept (NO breaking changes)
+────────────────────────────────
+Use a **config-based admin list** to avoid breaking the DB:
+
+1. Add a new environment variable (in Replit Secrets):  
+   - `ADMIN_EMAILS` – comma-separated list of admin emails, e.g.:  
+     `ADMIN_EMAILS=agip31@gmail.com,sudzikgroup@gmail.com`
+
+2. In the place where you build the authenticated user object / session (whatever is currently used):
+   - Read `process.env.ADMIN_EMAILS`.
+   - Split by comma, trim spaces, normalize case.
+   - Mark the user as admin if their `email` is in this list.
+   - Example logic (ADAPT to the real code):
+     - `const isAdmin = adminEmailList.includes(user.email.toLowerCase());`
+     - Attach `isAdmin` to:
+       - The user object returned to the frontend.
+       - Any session/JWT payload, if used.
+
+3. Create a small **Express middleware** helper, e.g. `requireAdmin`:
+   - Checks that the request is authenticated.
+   - Checks that `req.user.isAdmin === true` (or equivalent).
+   - If not admin, return `403 Forbidden` with a JSON error.
+   - Reuse existing auth middleware patterns.
+
+────────────────────────────────
+STEP 3 – Admin API routes
+────────────────────────────────
+Create a separate **admin API namespace**, e.g. under `/api/admin/*`.
+
+1. Create an Express router, e.g. `routes/admin.ts` or similar:
+   - Attach under `/api/admin` in the main server file.
+   - Protect the whole router with authentication + `requireAdmin`.
+
+2. Implement at least these endpoints (TypeScript, zod validation if the project uses it):
+
+   a) `GET /api/admin/users`
+   - Returns paginated list of brokers/users.
+   - Fields: id, email, name, createdAt, current plan, loadsUsed, includedLoads, extraCredits, subscription status, Stripe customerId & subscriptionId if available.
+   - This should reuse existing billing/usage models, not duplicate logic.
+
+   b) `GET /api/admin/users/:id`
+   - Detailed view for a single user: billing summary + last N loads.
+
+   c) `POST /api/admin/users/:id/update-usage`
+   - Body: `{ loadsUsed?, extraCredits?, plan?, cycleEndAt? }`.
+   - For each provided field:
+     - Safely update the corresponding billing/usage records.
+   - Use transactions where appropriate.
+   - Log this action in the admin audit log (see STEP 4).
+
+   d) `POST /api/admin/users/:id/add-credits`
+   - Simple shortcut body: `{ credits: number }`.
+   - Increments user’s extraCredits. Useful when Stripe succeeded but webhook failed.
+   - Also logs the action.
+
+   e) `POST /api/admin/users/:id/block`
+   - Body: `{ reason?: string }`.
+   - Mark user as blocked in the DB (see STEP 4 schema).
+   - If there’s already a status field – reuse it; otherwise, add a new one.
+   - Blocked users **must not** be able to:
+     - Create new loads.
+     - Start new subscriptions or buy extra credits.
+   - Keep admin endpoints accessible despite blocking.
+
+   f) `POST /api/admin/users/:id/unblock`
+   - Clears block status.
+
+   g) `GET /api/admin/subscriptions`
+   - Returns list of all users with active Stripe subscriptions & their status.
+   - Use existing models that store `stripeCustomerId`, `stripeSubscriptionId`, plan, etc.
+
+   h) `GET /api/admin/logs`
+   - Returns paginated admin audit log (STEP 4).
+
+   i) Skeleton endpoints for **promos & referrals** (basic only):
+   - `GET /api/admin/promotions`
+   - `POST /api/admin/promotions`
+   - `GET /api/admin/referrals`
+   - `POST /api/admin/referrals`
+   For now, implement minimal CRUD and basic DB models so they can be used later.
+
+────────────────────────────────
+STEP 4 – DB schema additions (Prisma)
+────────────────────────────────
+Keep changes minimal and additive.
+
+1. Edit `prisma/schema.prisma` (adapt to actual models) and add:
+
+   a) To the main user/broker model (whatever is used to represent logged-in brokers):
+
+   - `status` field if absent:
+     ```prisma
+     enum UserStatus {
+       ACTIVE
+       BLOCKED
+     }
+     ```
+
+     In `User` model:
+     ```prisma
+     status      UserStatus @default(ACTIVE)
+     blockedAt   DateTime? 
+     blockedReason String?
+     ```
+
+   (If there is already a status/active flag, reuse/extend it instead of adding new.)
+
+   b) Admin audit log model:
+
+   ```prisma
+   model AdminAuditLog {
+     id           String   @id @default(cuid())
+     createdAt    DateTime @default(now())
+
+     actorUserId  String?          // admin performing the action
+     actor        User?   @relation(fields: [actorUserId], references: [id])
+
+     targetUserId String?
+     targetUser   User?   @relation("AdminLog_TargetUser", fields: [targetUserId], references: [id])
+
+     action       String           // e.g. "ADD_CREDITS", "BLOCK_USER", "UPDATE_USAGE"
+     metadata     Json?            // details (amounts, previous values, etc.)
+   }
+
+c) Promotions (very simple skeleton):
+
+model Promotion {
+  id           String   @id @default(cuid())
+  code         String   @unique
+  description  String?
+  discountType String   // e.g. "PERCENT", "FIXED_LOAD_CREDITS"
+  discountValue Int
+  active       Boolean  @default(true)
+  validFrom    DateTime?
+  validTo      DateTime?
+  maxRedemptions Int?
+  createdAt    DateTime @default(now())
+}
+
+d) Referrals skeleton:
+
+model Referral {
+  id           String   @id @default(cuid())
+  referrerId   String
+  referrer     User     @relation("Referral_Referrer", fields: [referrerId], references: [id])
+
+  referredId   String?
+  referred     User?    @relation("Referral_Referred", fields: [referredId], references: [id])
+
+  code         String   @unique
+  rewardLoads  Int      @default(0)
+  createdAt    DateTime @default(now())
+}
+
+	2.	Run Prisma migrate:
+	•	npx prisma migrate dev --name admin_and_promotions (or the repo’s standard migration command).
+	•	Make sure the app still starts.
+	3.	Wherever user auth is checked for normal requests (e.g., middleware before load creation), add a simple check:
+	•	If user.status === "BLOCKED", return 403 with an appropriate JSON error.
+	4.	In each admin endpoint that mutates data, create an AdminAuditLog entry with:
+	•	actorUserId = current admin’s ID.
+	•	targetUserId when applicable.
+	•	action = short string.
+	•	metadata = JSON snapshot of what changed (before/after for critical fields).
+
+────────────────────────────────
+STEP 5 – Admin UI (Next.js)
+────────────────────────────────
+Create a simple but usable Admin Panel in the existing dashboard layout.
+	1.	Create a new Next.js route, for example:
+	•	app/(dashboard)/admin/page.tsx (adjust path to match existing routing structure).
+	2.	Access control in the frontend:
+	•	Use existing user context / fetch /api/auth/me (or similar) to know isAdmin.
+	•	If not admin, either redirect away or show “Forbidden” page.
+	3.	Admin dashboard page should have:
+	•	Users tab:
+	•	Table of users with pagination: email, createdAt, plan, loadsUsed, credits, status, subscription info.
+	•	Action buttons:
+	•	“Edit usage” (opens modal or side panel to adjust plan, loadsUsed, extraCredits).
+	•	“Add credits +N” quick action.
+	•	“Block / Unblock”.
+	•	Subscriptions tab:
+	•	Table of users with active subscriptions (from /api/admin/subscriptions).
+	•	Logs tab:
+	•	Table of last 100 records from /api/admin/logs sorted by createdAt desc.
+	•	Promos & Referrals tab (minimal):
+	•	Show existing promotions and a simple form to create a new promotion.
+	•	Show referral records if any.
+	4.	Reuse existing UI components:
+	•	Buttons, tables, modals, layout wrappers.
+	•	Stick to current styling (dark neon PingPoint style).
+	5.	Make sure all admin actions call the new admin APIs and handle success/error states without breaking the rest of the site.
+
+────────────────────────────────
+STEP 6 – Wiring everything together & testing
+────────────────────────────────
+	1.	Add ADMIN_EMAILS to Replit Secrets with at least one known email used in testing.
+	2.	Restart the app so env variables are loaded.
+	3.	Log in as the admin user; confirm:
+	•	isAdmin is true in the user object.
+	•	/admin page is accessible only for admins.
+	4.	Create a test broker, subscription, and some loads.
+	5.	From the admin panel:
+	•	Add credits to the broker and verify billing summary changes.
+	•	Block the broker and confirm they cannot create new loads or buy credits, then unblock.
+	•	Check that each admin change appears in AdminAuditLog and is visible in the UI.
+	6.	Confirm that normal flows (sign up, create loads, Stripe billing, webhooks) continue to work exactly as before.
+
+────────────────────────────────
+DELIVERABLE
+	•	All necessary backend & frontend code for:
+	•	Admin detection via ADMIN_EMAILS.
+	•	Admin API (/api/admin/*) with endpoints described above.
+	•	Prisma schema & migrations for UserStatus, AdminAuditLog, Promotion, Referral (adapted to existing models).
+	•	Simple Admin Panel UI in Next.js to manage users, subscriptions, logs, and basic promotions/referrals.
+	•	No regressions in existing PingPoint functionality.
