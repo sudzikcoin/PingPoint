@@ -1,0 +1,201 @@
+### REPLIT BACKEND AGENT — FIX + BILLING (MINIMAL CHANGES, DO NOT BREAK EXISTING FLOWS)
+
+You are working inside an EXISTING Replit project. Your #1 rule: **make the smallest possible, localized changes**. Do NOT refactor folders, do NOT rename routes, do NOT rewrite DB layer. Preserve current schemas, API contracts, and UI flows unless absolutely required. If you need to add anything, add it in a way that is backward-compatible.
+
+GOAL (3 parts):
+A) Fix **auto-arrival / auto-depart** via geofence radius (300m) for PICKUP/DELIVERY based on driver GPS pings.
+B) Fix dev/runtime stability issues (including EADDRINUSE: port already in use) without breaking deploy.
+C) Implement **card payments to my business account**:
+   1) Monthly subscription “Pro” ($99/mo) = 200 loads per cycle
+   2) One-time purchase: extra load credit ($0.99 each)
+   Keep Solana/USDC “Coming soon” untouched for now, but prepare the backend so it can be added later.
+
+========================================================
+STEP 0 — QUICK REPO AUDIT (NO CHANGES YET)
+1) Inspect repo structure: server entry (likely `server/index.ts`), routes (`server/routes.ts`), client pages (billing page), DB layer (Drizzle/SQL/Prisma).
+2) Identify existing endpoints for:
+   - driver link page (driver dashboard)
+   - tracking public link (/track or /api/track/...)
+   - ping endpoint (where GPS coords are POSTed/stored)
+3) Identify DB tables already present. I expect tables like:
+   - loads, stops, tracking_pings, stop_geofence_state, activity_logs
+   - stripe_payments, stripe_webhook_events, broker_credits, broker_entitlements, broker_usage
+4) Confirm how “Arrive/Depart” works now (manual buttons) and what fields are used:
+   - stop.arrivedAt / stop.departedAt (or similar)
+   - load.status (PLANNED/IN_TRANSIT/DELIVERED etc.)
+5) Confirm if stops have `lat/lng`. In screenshots stops.lat/lng are NULL — this is likely why geofence cannot trigger.
+
+IMPORTANT: Auto-geofence can ONLY work if each stop has a geofence center (lat/lng). So we must ensure stop coordinates exist.
+
+========================================================
+PART A — AUTO GEOFENCE ARRIVE/DEPART (300m) WITHOUT BREAKING MANUAL BUTTONS
+
+### A1) Ensure each STOP has lat/lng (geocode only when missing)
+Implement a server-side helper (new file allowed, e.g. `server/lib/geocode.ts` or local in routes):
+- `async ensureStopCoordinates(stop): Promise<{lat:number,lng:number} | null>`
+Rules:
+- If stop.lat & stop.lng already exist: return them.
+- If missing: geocode using **OpenStreetMap Nominatim** as a fallback (no paid keys).
+  - Build a clean query string from stop.fullAddress + city + state (use what exists).
+  - Use fetch with a proper User-Agent header.
+  - Respect rate limits: add small delay (e.g. 900ms) between calls OR cache results in DB so each stop is geocoded once.
+- Save results back into the stop row (lat/lng) so future geofence checks are fast.
+- If geocode fails: return null and log clearly.
+
+Do NOT geocode on every request. Only when stop has null coordinates.
+
+### A2) Central geofence evaluator called on EVERY stored ping
+Wherever GPS pings are received and stored (the endpoint that inserts into `tracking_pings`):
+After successfully storing the ping:
+1) Load the relevant load + stops (pickup/delivery) for that trackingId/loadId.
+2) For each stop:
+   - Ensure stop coordinates (A1).
+   - Compute distance between ping and stop center (Haversine).
+   - radiusM = stop.geofenceRadiusM ?? 300
+3) Use `stop_geofence_state` table if it exists; if not, add minimal table:
+   - id, stopId (unique), lastInside(boolean), lastPingAt(datetime), lastDistanceM(int), arrivedAutoAt(datetime|null), departedAutoAt(datetime|null)
+   Keep it minimal; do not delete or modify existing tables unless necessary.
+
+### A3) Trigger logic (do not spam events)
+For each stop:
+- inside = distanceM <= radiusM
+- If inside AND stop.arrivedAt is null:
+   - Set stop.arrivedAt = ping.timestamp (or now)
+   - Create activity log entry like: “AUTO_ARRIVE PICKUP” / “AUTO_ARRIVE DELIVERY”
+   - Update stop_geofence_state.arrivedAutoAt if present
+- If stop.arrivedAt is not null AND stop.departedAt is null:
+   - Optional auto-depart: only if we previously were inside and now outside AND we have at least N meters away (e.g. distanceM > radiusM + 100) to avoid jitter.
+   - When that condition is met: set stop.departedAt = ping.timestamp and log “AUTO_DEPART …”
+- Always update stop_geofence_state.lastInside/lastPingAt/lastDistanceM.
+
+IMPORTANT: Manual Arrive/Depart buttons must still work and must NOT be overwritten.
+Rules:
+- If user manually set arrivedAt/departedAt, do not change them. Only set if null.
+- Never “un-arrive” a stop.
+- Use a debounce: don’t process auto events more than once per stop.
+
+### A4) Load status updates (minimal, only if logic already exists)
+If your project already updates load.status based on stop events, reuse that same function.
+If not, implement minimal:
+- After pickup.arrivedAt => load.status could become IN_TRANSIT or AT_PICKUP (only if such statuses exist).
+- After delivery.arrivedAt => load.status could become DELIVERED/COMPLETED if that’s in system.
+Do NOT invent new statuses if not used elsewhere.
+
+### A5) Developer-friendly debug
+Add logs with consistent prefix:
+- [Geofence] ping stored: loadId=... lat=... lng=...
+- [Geofence] stop=... type=PICKUP distance=... inside=true
+- [Geofence] AUTO_ARRIVE fired stopId=...
+Make sure logs do not leak secrets.
+
+========================================================
+PART B — FIX “EADDRINUSE: 0.0.0.0:5000 address already in use”
+This happens when multiple dev processes start the server.
+
+Do minimal changes:
+1) In server bootstrap (likely `server/index.ts`):
+   - Use `const PORT = Number(process.env.PORT || 5000);`
+   - Add `server.on("error", (err)=>{ if (err.code==="EADDRINUSE") { console.error(...); process.exit(1); } else throw err; })`
+   This prevents half-broken state and gives clear output.
+
+2) Check Replit Workflows:
+   - Ensure ONLY ONE workflow launches the backend.
+   - If there is both `npm run dev` and another start, disable duplicates (minimal `.replit` changes only if required).
+   - Do NOT change ports randomly in production; Replit routing expects a stable port.
+
+3) If you find a client dev server also binding 5000, move client dev to a different port ONLY in dev config, and keep backend on 5000/PORT.
+
+========================================================
+PART C — BILLING WITH CARD (STRIPE) + ONE-TIME CREDIT PURCHASE
+We implement Stripe fully end-to-end but keep UI minimal changes.
+
+### C1) Add env vars (do not hardcode)
+Add support for these env vars (read from Replit Secrets):
+- STRIPE_SECRET_KEY
+- STRIPE_WEBHOOK_SECRET
+- STRIPE_PRICE_PRO_MONTHLY   (Price ID for $99/mo)
+- STRIPE_PRICE_EXTRA_CREDIT  (optional if using Checkout for one-time)
+- APP_BASE_URL (e.g. https://xxxxx.replit.dev)
+
+If some already exist, reuse.
+
+### C2) Data model (minimal)
+Reuse existing tables if present:
+- `stripe_payments`, `stripe_webhook_events`
+- `broker_entitlements` (plan, loadsPerCycle, cycleEndsAt)
+- `broker_credits` (extraCredits)
+If missing, add the smallest tables/columns needed WITHOUT breaking current auth or brokers.
+
+Assume “broker/company” identity exists (brokerId or companyId). Use the same “current broker” mechanism that the project already uses.
+
+### C3) Backend routes (Express)
+Add routes without breaking existing ones:
+
+1) POST /api/billing/checkout/subscription
+   - Create/reuse Stripe Customer for broker
+   - Create Stripe Checkout Session (mode="subscription") using STRIPE_PRICE_PRO_MONTHLY
+   - success_url = APP_BASE_URL + "/billing?success=1"
+   - cancel_url  = APP_BASE_URL + "/billing?canceled=1"
+   - Return sessionUrl to client
+
+2) POST /api/billing/checkout/credits
+   - Body: { quantity: number } (default 1, min 1, max 100)
+   - Use Stripe Checkout Session (mode="payment") with unit amount = 99 cents * quantity OR use a price with adjustable_quantity
+   - success_url / cancel_url same pattern
+   - Return sessionUrl
+
+3) POST /api/billing/portal
+   - Create Stripe Billing Portal session for the customer
+   - return url
+
+4) POST /api/stripe/webhook
+   - Verify signature using STRIPE_WEBHOOK_SECRET
+   - Store raw events into stripe_webhook_events for audit (idempotent by event.id)
+   - Handle these event types (minimum):
+     - checkout.session.completed
+     - invoice.paid (subscription renew)
+     - customer.subscription.created/updated/deleted
+     - payment_intent.succeeded (if using payment intents)
+   - Update DB entitlements/credits accordingly:
+     A) Subscription active => plan="PRO", loadsPerCycle=200, set cycleEndsAt based on Stripe period_end
+     B) Subscription canceled/ended => downgrade to FREE at period end (do not remove immediately if still active)
+     C) One-time credits purchase => increment broker_credits by quantity purchased
+
+Idempotency:
+- If event already processed (exists in stripe_webhook_events), do nothing.
+
+### C4) Connect to UI (minimal)
+On the billing page (where the buttons exist):
+- Replace “COMING SOON” for card subscription ONLY (keep Solana coming soon text for crypto):
+   - Add “Upgrade to Pro (Card)” button that calls /api/billing/checkout/subscription and redirects to sessionUrl.
+- For “Buy 1 credit”:
+   - On click, call /api/billing/checkout/credits with quantity from UI, redirect to sessionUrl.
+- After return with ?success=1, refresh billing data from existing endpoint (or add GET /api/billing/status returning plan, loadsUsed, cycleEndsAt, extraCredits).
+
+DO NOT redesign UI. Just wire the existing buttons.
+
+### C5) Ensure business account payout
+Default Stripe account payout goes to the connected bank for that Stripe account. Nothing special needed in code; just use your Stripe secret key from your business Stripe.
+
+========================================================
+FINAL CHECKLIST (MUST DO)
+1) Auto-geofence:
+   - Create a load with pickup+delivery addresses
+   - Verify stops.lat/lng become populated after first ping
+   - Walk/drive into 300m radius -> stop.arrivedAt auto sets
+   - Move out -> optional depart triggers only once
+   - Manual Arrive/Depart still works
+2) Billing:
+   - Clicking Pro opens Stripe Checkout
+   - Webhook updates plan to PRO and loadsPerCycle=200
+   - Buying 1 credit increases broker_credits
+   - Billing page shows updated numbers after refresh
+3) Stability:
+   - No more silent crash; EADDRINUSE gives clear error and stops
+   - Only one server instance runs
+
+DELIVERABLES
+- Provide exact files changed + what changed
+- Provide any new env vars needed
+- Provide a short “How to test” list (commands + steps)
+- Do NOT break any existing route, schema, or UI behavior.

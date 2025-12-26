@@ -66,6 +66,7 @@ export default function AppBilling() {
   const [intentStatus, setIntentStatus] = useState<SolanaIntentStatus | null>(null);
   const [showSolanaModal, setShowSolanaModal] = useState(false);
   const [creatingIntent, setCreatingIntent] = useState(false);
+  const [upgradingWithCard, setUpgradingWithCard] = useState(false);
 
   useEffect(() => {
     const params = new URLSearchParams(searchString);
@@ -131,7 +132,35 @@ export default function AppBilling() {
     }
   };
 
-  const handleUpgradeToPro = async () => {
+  const handleUpgradeWithCard = async () => {
+    setUpgradingWithCard(true);
+    try {
+      const res = await fetch("/api/billing/stripe/checkout-subscription", {
+        method: "POST",
+        credentials: "include",
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        if (data.url) {
+          window.location.href = data.url;
+        }
+      } else {
+        const error = await res.json();
+        if (error.code === "STRIPE_NOT_CONFIGURED") {
+          toast.error("Card payments are not configured yet. Please contact support.");
+        } else {
+          toast.error(error.error || "Failed to start checkout");
+        }
+      }
+    } catch (error) {
+      toast.error("Failed to start checkout");
+    } finally {
+      setUpgradingWithCard(false);
+    }
+  };
+
+  const handleUpgradeWithSolana = async () => {
     setCreatingIntent(true);
     try {
       const res = await fetch("/api/billing/solana/pro-intent", {
@@ -324,34 +353,61 @@ export default function AppBilling() {
                     </li>
                   </ul>
 
-                  <Button
-                    onClick={handleUpgradeToPro}
-                    disabled={creatingIntent || !merchantInfo?.configured}
-                    className={cn(
-                      "w-full py-3 font-semibold uppercase tracking-wide transition",
-                      theme === "arcade90s"
-                        ? "bg-purple-500 text-white rounded-none hover:bg-purple-400 hover:shadow-[0_0_20px_rgba(168,85,247,0.4)]"
-                        : "bg-purple-500 text-white hover:bg-purple-400"
-                    )}
-                    data-testid="button-upgrade-pro"
-                  >
-                    {creatingIntent ? (
-                      <>
-                        <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                        Creating Payment...
-                      </>
-                    ) : !merchantInfo?.configured ? (
-                      "Coming Soon"
-                    ) : (
-                      "Pay with USDC (Solana)"
-                    )}
-                  </Button>
-                  
-                  {!merchantInfo?.configured && (
-                    <p className={cn("text-xs text-center", theme === "arcade90s" ? "text-arc-muted" : "text-brand-muted")}>
-                      Solana payments will be available soon
-                    </p>
-                  )}
+                  <div className="space-y-3">
+                    <Button
+                      onClick={handleUpgradeWithCard}
+                      disabled={upgradingWithCard}
+                      className={cn(
+                        "w-full py-3 font-semibold uppercase tracking-wide transition",
+                        theme === "arcade90s"
+                          ? "bg-purple-500 text-white rounded-none hover:bg-purple-400 hover:shadow-[0_0_20px_rgba(168,85,247,0.4)]"
+                          : "bg-purple-500 text-white hover:bg-purple-400"
+                      )}
+                      data-testid="button-upgrade-pro-card"
+                    >
+                      {upgradingWithCard ? (
+                        <>
+                          <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                          Processing...
+                        </>
+                      ) : (
+                        <>
+                          <CreditCard className="w-4 h-4 mr-2" />
+                          Pay with Card ($99/mo)
+                        </>
+                      )}
+                    </Button>
+
+                    <div className={cn("flex items-center gap-2", theme === "arcade90s" ? "text-arc-muted" : "text-brand-muted")}>
+                      <div className="flex-1 h-px bg-current opacity-30" />
+                      <span className="text-xs uppercase">or</span>
+                      <div className="flex-1 h-px bg-current opacity-30" />
+                    </div>
+
+                    <Button
+                      onClick={handleUpgradeWithSolana}
+                      disabled={creatingIntent || !merchantInfo?.configured}
+                      variant="outline"
+                      className={cn(
+                        "w-full py-3 font-semibold uppercase tracking-wide transition",
+                        theme === "arcade90s"
+                          ? "border-purple-500/50 text-purple-400 rounded-none hover:bg-purple-500/10"
+                          : "border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
+                      )}
+                      data-testid="button-upgrade-pro-solana"
+                    >
+                      {creatingIntent ? (
+                        <>
+                          <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                          Creating Payment...
+                        </>
+                      ) : !merchantInfo?.configured ? (
+                        "USDC (Coming Soon)"
+                      ) : (
+                        "Pay with USDC (Solana)"
+                      )}
+                    </Button>
+                  </div>
                 </CardContent>
               </Card>
             )}

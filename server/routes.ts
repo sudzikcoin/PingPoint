@@ -12,7 +12,7 @@ import express from "express";
 import { sendBrokerVerificationEmail, sendDriverAppLink } from "./email";
 import { strictRateLimit } from "./middleware/rateLimit";
 import { checkAndConsumeLoadAllowance, rollbackLoadAllowance, getBillingSummary, FREE_INCLUDED_LOADS } from "./billing/entitlements";
-import { createCheckoutSession, verifyWebhookSignature, processStripeEvent } from "./billing/stripe";
+import { createCheckoutSession, createSubscriptionCheckoutSession, createBillingPortalSession, getStripeCustomerByEmail, verifyWebhookSignature, processStripeEvent } from "./billing/stripe";
 import { incrementLoadsCreated, getUsageSummary } from "./billing/usage";
 import { createProPaymentIntent, checkAndConfirmIntent, getMerchantInfo } from "./billing/solana";
 import { evaluateGeofencesForActiveLoad, getGeofenceDebugInfo } from "./geofence";
@@ -1134,6 +1134,67 @@ export async function registerRoutes(
       if (error.message?.includes("not configured")) {
         return res.status(503).json({ 
           error: "Payment processing is not available. Please try again later.",
+          code: "STRIPE_NOT_CONFIGURED"
+        });
+      }
+      return res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  // POST /api/billing/stripe/checkout-subscription - Create Stripe checkout session for Pro subscription
+  app.post("/api/billing/stripe/checkout-subscription", async (req: Request, res: Response) => {
+    try {
+      const broker = await getBrokerFromRequest(req);
+      if (!broker) {
+        return res.status(401).json({ error: "Unauthorized" });
+      }
+
+      const origin = getBaseUrl(req);
+      const successUrl = `${origin}/app/billing?success=true&session_id={CHECKOUT_SESSION_ID}`;
+      const cancelUrl = `${origin}/app/billing`;
+
+      const checkoutUrl = await createSubscriptionCheckoutSession(broker.id, broker.email, successUrl, cancelUrl);
+
+      if (!checkoutUrl) {
+        return res.status(500).json({ error: "Failed to create checkout session" });
+      }
+
+      return res.json({ url: checkoutUrl });
+    } catch (error: any) {
+      console.error("Error in POST /api/billing/stripe/checkout-subscription:", error);
+      if (error.message?.includes("not configured")) {
+        return res.status(503).json({ 
+          error: "Payment processing is not available. Please try again later.",
+          code: "STRIPE_NOT_CONFIGURED"
+        });
+      }
+      return res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  // POST /api/billing/stripe/portal - Create Stripe billing portal session
+  app.post("/api/billing/stripe/portal", async (req: Request, res: Response) => {
+    try {
+      const broker = await getBrokerFromRequest(req);
+      if (!broker) {
+        return res.status(401).json({ error: "Unauthorized" });
+      }
+
+      const customerId = await getStripeCustomerByEmail(broker.email);
+      if (!customerId) {
+        return res.status(400).json({ error: "No billing account found. Please subscribe first." });
+      }
+
+      const origin = getBaseUrl(req);
+      const returnUrl = `${origin}/app/billing`;
+
+      const portalUrl = await createBillingPortalSession(customerId, returnUrl);
+      return res.json({ url: portalUrl });
+    } catch (error: any) {
+      console.error("Error in POST /api/billing/stripe/portal:", error);
+      if (error.message?.includes("not configured")) {
+        return res.status(503).json({ 
+          error: "Billing portal is not available. Please try again later.",
           code: "STRIPE_NOT_CONFIGURED"
         });
       }
