@@ -1,0 +1,175 @@
+### REPLIT BACKEND AGENT — “ADULT” PAYMENTS (STRIPE) + WORKING BUTTONS (NO BREAKING CHANGES)
+
+ROLE
+You are a senior full-stack engineer. Work inside the EXISTING Replit project. Make the smallest possible localized changes. Do NOT refactor. Do NOT rename existing routes. Do NOT remove current billing UI. Add only what’s needed so the billing buttons actually open a real payment flow and update entitlements after payment.
+
+CURRENT PROBLEM
+On /app/billing the “PAY WITH CARD ($99/MO)” button is visible and active but does nothing. We need a real payment provider integration and a working end-to-end flow.
+
+TARGET
+1) Stripe subscriptions for PRO ($99/mo) -> increases monthly allowance to 200 loads per cycle.
+2) Stripe one-time purchase for extra credits ($0.99 each).
+3) Webhooks update DB (plan, cycle end, credits) reliably and idempotently.
+4) Billing page reflects current plan/credits/usage.
+5) Keep “USDC (Coming soon)” unchanged.
+
+NON-NEGOTIABLE RULES
+- Minimal changes; keep existing DB and app flows.
+- Use existing auth/currentCompanyId/currentBrokerId pattern already present.
+- No “fake success” without webhook verification.
+- Everything must work in Replit deploy (HTTPS required for Stripe webhooks).
+
+========================================================
+PHASE 1 — AUDIT + LOCATE EXISTING BILLING CODE
+1) Find billing page component and current handler for the card button:
+   - likely `client/src/pages/billing.tsx` or `client/src/pages/billing/index.tsx` or similar.
+   - identify onClick and what it currently calls (or if it’s missing).
+2) Find server router: `server/index.ts`, `server/routes.ts`, or similar Express setup.
+3) Find any existing Stripe placeholders:
+   - search for `stripe`, `checkout`, `webhook`, `STRIPE_`, `billing`, `price_`.
+4) Identify DB layer (Drizzle/Prisma/raw SQL) and existing tables:
+   - stripe_payments, stripe_webhook_events, broker_entitlements, broker_credits, broker_usage, brokers/companies.
+   - If already exist, reuse. If missing, add minimal tables.
+
+Deliver at end: list of file paths that will be edited.
+
+========================================================
+PHASE 2 — STRIPE SETUP (BACKEND)
+We will implement these backend endpoints (Express):
+
+A) POST /api/billing/checkout/subscription
+   - Auth required (use existing session/currentCompanyId).
+   - Creates Stripe customer (store customerId in DB for this company/broker).
+   - Creates Stripe Checkout Session (mode: "subscription") using STRIPE_PRICE_PRO_MONTHLY.
+   - success_url: `${APP_BASE_URL}/app/billing?success=1`
+   - cancel_url:  `${APP_BASE_URL}/app/billing?canceled=1`
+   - Returns JSON: { url: session.url }
+
+B) POST /api/billing/checkout/credits
+   - Body: { quantity: number } (default 1, min 1, max 100)
+   - Creates Stripe Checkout Session (mode: "payment")
+   - Use inline price_data with unit_amount=99, currency="usd", product name "Extra Load Credit"
+     total = unit_amount * quantity
+   - success_url/cancel_url same pattern
+   - Returns { url }
+
+C) POST /api/billing/portal
+   - Creates Stripe Billing Portal session for the customer
+   - Returns { url }
+
+D) POST /api/stripe/webhook
+   - Uses raw body and verifies signature with STRIPE_WEBHOOK_SECRET
+   - Stores each event in `stripe_webhook_events` (idempotent by event.id)
+   - Handles:
+     1) checkout.session.completed (subscription OR payment)
+     2) customer.subscription.created/updated/deleted
+     3) invoice.paid (subscription renewal)
+   - Updates DB entitlements/credits:
+     - PRO subscription active -> plan="PRO", loadsPerCycle=200, cycleEndsAt from Stripe current_period_end
+     - subscription canceled -> schedule downgrade at period end (store status)
+     - one-time credits -> increment broker_credits by quantity purchased (read from session metadata or line_items quantity)
+
+IMPORTANT: Stripe Checkout session line items for one-time need either:
+- metadata on session: { creditQuantity } OR
+- fetch line items via Stripe API in webhook handler.
+
+Use metadata for simplicity:
+- For credits checkout: set `metadata: { creditQuantity: String(quantity), companyId: String(currentCompanyId) }`
+- For subscription checkout: set `metadata: { companyId: String(currentCompanyId) }`
+
+========================================================
+PHASE 3 — ENV VARS (REPLIT SECRETS)
+Add these env keys (read, do not hardcode):
+- STRIPE_SECRET_KEY
+- STRIPE_WEBHOOK_SECRET
+- STRIPE_PRICE_PRO_MONTHLY   (Price ID created in Stripe dashboard)
+- APP_BASE_URL               (your deployed base URL, e.g. https://xxxx.replit.app or .replit.dev)
+
+Also ensure server uses process.env.PORT properly (Replit sets PORT).
+
+========================================================
+PHASE 4 — DB UPDATES (MINIMAL)
+Prefer using existing tables. If missing, add minimal:
+
+1) company/broker table:
+   - add stripeCustomerId (nullable) if not present
+
+2) Entitlements table (if not present):
+   broker_entitlements:
+     - companyId (unique)
+     - plan ("FREE"|"PRO")
+     - loadsPerCycle int default 3
+     - cycleEndsAt datetime nullable
+     - subscriptionStatus text nullable
+     - stripeSubscriptionId text nullable
+
+3) Credits table (if not present):
+   broker_credits:
+     - companyId (unique)
+     - extraCredits int default 0
+
+4) Webhook events table (if not present):
+   stripe_webhook_events:
+     - eventId (unique)
+     - type
+     - createdAt
+     - payloadJson
+     - processedAt
+
+Do NOT break existing migrations. If using Drizzle, add a new migration file only.
+
+========================================================
+PHASE 5 — FRONTEND WIRING (MAKE BUTTON ACTUALLY DO SOMETHING)
+On billing page:
+1) “PAY WITH CARD ($99/MO)” onClick:
+   - POST /api/billing/checkout/subscription
+   - If response {url} -> `window.location.href = url`
+   - Show loading state + toast on error
+
+2) “BUY 1 CREDIT” (and quantity selector):
+   - POST /api/billing/checkout/credits with {quantity}
+   - redirect to returned url
+
+3) On page load:
+   - call GET /api/billing/status (create if missing) to render:
+     - plan, loadsUsed, loadsPerCycle, cycleEndsAt, extraCredits
+   - After returning from Stripe (?success=1), refresh status.
+
+Add GET /api/billing/status if not present:
+- returns the current entitlement/usage for currentCompanyId.
+
+========================================================
+PHASE 6 — WEBHOOKS IN REPLIT (MAKE IT REAL)
+1) Ensure webhook route uses RAW body:
+   - In Express, for webhook path ONLY, use `express.raw({ type: "application/json" })`
+   - For rest of app keep `express.json()`.
+2) Confirm deployed URL for webhook:
+   - `${APP_BASE_URL}/api/stripe/webhook`
+3) Log clear messages:
+   - [StripeWebhook] verified event=... type=...
+   - [StripeWebhook] processed companyId=... result=...
+
+========================================================
+PHASE 7 — TEST CHECKLIST (MUST PASS)
+1) Clicking card button redirects to Stripe Checkout (no blank click).
+2) Completing payment returns to /app/billing?success=1
+3) Webhook fires and updates DB:
+   - plan becomes PRO
+   - loadsPerCycle becomes 200
+   - cycleEndsAt is set
+4) Buying extra credits increments extraCredits.
+5) Re-opening /app/billing shows updated values.
+6) Cancel subscription in Stripe portal -> status updates after webhook.
+
+========================================================
+OUTPUT REQUIREMENTS
+After implementing, provide:
+- list of files changed
+- new env vars required
+- exact Stripe dashboard steps (create product/price for PRO, get price id, set webhook endpoint)
+- how to test end-to-end on Replit deploy
+
+DO IT NOW
+Implement phases 2–6 with minimal changes and no broken routes. If anything is missing (like companyId source), use the existing placeholder pattern in code (e.g. `getCurrentCompanyId(req)`), but do NOT invent a new auth system.
+
+END.
