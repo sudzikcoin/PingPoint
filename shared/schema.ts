@@ -329,13 +329,64 @@ export const activityLogs = pgTable("activity_logs", {
   entityType: text("entity_type").notNull(), // LOAD, DRIVER, BROKER, STOP
   entityId: uuid("entity_id").notNull(),
   action: text("action").notNull(), // CREATED, UPDATED, STATUS_CHANGED, PING_RECEIVED, etc.
-  actorType: text("actor_type").notNull(), // BROKER, DRIVER, SYSTEM
+  actorType: text("actor_type").notNull(), // BROKER, DRIVER, SYSTEM, ADMIN
   actorId: uuid("actor_id"),
   previousValue: text("previous_value"),
   newValue: text("new_value"),
   metadata: text("metadata"), // JSON string for extra context
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`now()`),
 });
+
+// Admin Audit Log model
+export const adminAuditLogs = pgTable("admin_audit_logs", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  actorBrokerId: uuid("actor_broker_id").references(() => brokers.id),
+  actorEmail: text("actor_email").notNull(),
+  targetBrokerId: uuid("target_broker_id").references(() => brokers.id),
+  action: text("action").notNull(), // ADD_CREDITS, BLOCK_USER, UPDATE_USAGE, etc.
+  metadata: text("metadata"), // JSON string for details
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`now()`),
+});
+
+export const adminAuditLogsRelations = relations(adminAuditLogs, ({ one }) => ({
+  actorBroker: one(brokers, {
+    fields: [adminAuditLogs.actorBrokerId],
+    references: [brokers.id],
+  }),
+}));
+
+// Promotions model
+export const promotions = pgTable("promotions", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  code: text("code").notNull().unique(),
+  description: text("description"),
+  discountType: text("discount_type").notNull(), // PERCENT, FIXED_LOAD_CREDITS
+  discountValue: integer("discount_value").notNull(),
+  active: boolean("active").notNull().default(true),
+  validFrom: timestamp("valid_from", { withTimezone: true }),
+  validTo: timestamp("valid_to", { withTimezone: true }),
+  maxRedemptions: integer("max_redemptions"),
+  redemptionCount: integer("redemption_count").notNull().default(0),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`now()`),
+});
+
+// Referrals model
+export const referrals = pgTable("referrals", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  referrerId: uuid("referrer_id").notNull().references(() => brokers.id),
+  referredId: uuid("referred_id").references(() => brokers.id),
+  code: text("code").notNull().unique(),
+  rewardLoads: integer("reward_loads").notNull().default(1),
+  status: text("status").notNull().default("PENDING"), // PENDING, CLAIMED, EXPIRED
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`now()`),
+});
+
+export const referralsRelations = relations(referrals, ({ one }) => ({
+  referrer: one(brokers, {
+    fields: [referrals.referrerId],
+    references: [brokers.id],
+  }),
+}));
 
 // Insert schemas
 export const insertBrokerSchema = createInsertSchema(brokers).pick({
@@ -411,4 +462,34 @@ export type InsertActivityLog = {
   previousValue?: string;
   newValue?: string;
   metadata?: string;
+};
+
+export type AdminAuditLog = typeof adminAuditLogs.$inferSelect;
+export type InsertAdminAuditLog = {
+  actorBrokerId?: string;
+  actorEmail: string;
+  targetBrokerId?: string;
+  action: string;
+  metadata?: string;
+};
+
+export type Promotion = typeof promotions.$inferSelect;
+export type InsertPromotion = {
+  code: string;
+  description?: string;
+  discountType: string;
+  discountValue: number;
+  active?: boolean;
+  validFrom?: Date;
+  validTo?: Date;
+  maxRedemptions?: number;
+};
+
+export type Referral = typeof referrals.$inferSelect;
+export type InsertReferral = {
+  referrerId: string;
+  referredId?: string;
+  code: string;
+  rewardLoads?: number;
+  status?: string;
 };

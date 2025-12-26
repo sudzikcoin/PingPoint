@@ -100,3 +100,39 @@ export async function getOrCreateTrustedDevice(
   // Create new trusted device
   return createTrustedDevice(req, res, brokerId);
 }
+
+// Admin detection via environment variable
+function getAdminEmails(): string[] {
+  const adminEmailsEnv = process.env.ADMIN_EMAILS || "";
+  return adminEmailsEnv
+    .split(",")
+    .map(e => e.trim().toLowerCase())
+    .filter(e => e.length > 0);
+}
+
+export function isAdminEmail(email: string): boolean {
+  const adminEmails = getAdminEmails();
+  return adminEmails.includes(email.toLowerCase());
+}
+
+export interface BrokerWithAdmin extends Broker {
+  isAdmin: boolean;
+}
+
+export async function getBrokerWithAdminFromRequest(req: Request): Promise<BrokerWithAdmin | null> {
+  const broker = await getBrokerFromRequest(req);
+  if (!broker) return null;
+  
+  return {
+    ...broker,
+    isAdmin: isAdminEmail(broker.email),
+  };
+}
+
+export async function requireAdmin(req: Request): Promise<BrokerWithAdmin | null> {
+  const broker = await getBrokerWithAdminFromRequest(req);
+  if (!broker || !broker.isAdmin) {
+    return null;
+  }
+  return broker;
+}

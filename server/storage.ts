@@ -9,6 +9,11 @@ import {
   brokerFieldHints,
   activityLogs,
   brokerDevices,
+  adminAuditLogs,
+  promotions,
+  referrals,
+  brokerEntitlements,
+  brokerCredits,
   type Broker,
   type InsertBroker,
   type Driver,
@@ -25,6 +30,14 @@ import {
   type ActivityLog,
   type InsertActivityLog,
   type BrokerDevice,
+  type AdminAuditLog,
+  type InsertAdminAuditLog,
+  type Promotion,
+  type InsertPromotion,
+  type Referral,
+  type InsertReferral,
+  type BrokerEntitlement,
+  type BrokerCredit,
 } from "@shared/schema";
 import { db } from "./db";
 import { eq, and, desc, ilike, sql, lt, gte } from "drizzle-orm";
@@ -85,6 +98,23 @@ export interface IStorage {
   getBrokerDevice(brokerId: string, deviceId: string): Promise<BrokerDevice | undefined>;
   createBrokerDevice(brokerId: string, deviceId: string, userAgent?: string): Promise<BrokerDevice>;
   updateBrokerDeviceLastUsed(id: string): Promise<BrokerDevice | undefined>;
+
+  // Admin operations
+  getAllBrokers(limit: number, offset: number): Promise<{ brokers: Broker[]; total: number }>;
+  getAllLoadsCount(brokerId: string): Promise<number>;
+  getBrokerEntitlement(brokerId: string): Promise<BrokerEntitlement | undefined>;
+  getBrokerCreditsBalance(brokerId: string): Promise<number>;
+  addBrokerCredits(brokerId: string, amount: number): Promise<BrokerCredit | undefined>;
+  createAdminAuditLog(log: InsertAdminAuditLog): Promise<AdminAuditLog>;
+  getAdminAuditLogs(limit?: number, offset?: number): Promise<{ logs: AdminAuditLog[]; total: number }>;
+  getActiveSubscriptions(): Promise<BrokerEntitlement[]>;
+  getPromotions(): Promise<Promotion[]>;
+  createPromotion(promo: InsertPromotion): Promise<Promotion>;
+  updatePromotion(id: string, data: Partial<Promotion>): Promise<Promotion | undefined>;
+  getBrokerCredits(brokerId: string): Promise<BrokerCredit | undefined>;
+  updateBrokerEntitlement(brokerId: string, data: Partial<BrokerEntitlement>): Promise<BrokerEntitlement | undefined>;
+  getReferrals(): Promise<Referral[]>;
+  createReferral(ref: InsertReferral): Promise<Referral>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -481,6 +511,161 @@ export class DatabaseStorage implements IStorage {
       .where(eq(brokerDevices.id, id))
       .returning();
     return device || undefined;
+  }
+
+  // Admin operations
+  async getAllLoadsCount(brokerId: string): Promise<number> {
+    const [result] = await db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(loads)
+      .where(eq(loads.brokerId, brokerId));
+    return result?.count || 0;
+  }
+
+  async getBrokerCreditsBalance(brokerId: string): Promise<number> {
+    const [credits] = await db
+      .select()
+      .from(brokerCredits)
+      .where(eq(brokerCredits.brokerId, brokerId));
+    return credits?.creditsBalance || 0;
+  }
+
+  async getAllBrokers(limit: number = 100, offset: number = 0): Promise<{ brokers: Broker[]; total: number }> {
+    const [countResult] = await db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(brokers);
+
+    const brokersList = await db
+      .select()
+      .from(brokers)
+      .orderBy(desc(brokers.createdAt))
+      .limit(limit)
+      .offset(offset);
+
+    return {
+      brokers: brokersList,
+      total: countResult?.count || 0,
+    };
+  }
+
+  async getBrokerEntitlement(brokerId: string): Promise<BrokerEntitlement | undefined> {
+    const [entitlement] = await db
+      .select()
+      .from(brokerEntitlements)
+      .where(eq(brokerEntitlements.brokerId, brokerId));
+    return entitlement || undefined;
+  }
+
+  async getBrokerCredits(brokerId: string): Promise<BrokerCredit | undefined> {
+    const [credits] = await db
+      .select()
+      .from(brokerCredits)
+      .where(eq(brokerCredits.brokerId, brokerId));
+    return credits || undefined;
+  }
+
+  async updateBrokerEntitlement(brokerId: string, data: Partial<BrokerEntitlement>): Promise<BrokerEntitlement | undefined> {
+    const [entitlement] = await db
+      .update(brokerEntitlements)
+      .set({ ...data, updatedAt: new Date() })
+      .where(eq(brokerEntitlements.brokerId, brokerId))
+      .returning();
+    return entitlement || undefined;
+  }
+
+  async addBrokerCredits(brokerId: string, credits: number): Promise<BrokerCredit | undefined> {
+    const existing = await this.getBrokerCredits(brokerId);
+    if (existing) {
+      const [updated] = await db
+        .update(brokerCredits)
+        .set({ 
+          creditsBalance: existing.creditsBalance + credits,
+          updatedAt: new Date() 
+        })
+        .where(eq(brokerCredits.brokerId, brokerId))
+        .returning();
+      return updated || undefined;
+    } else {
+      const [created] = await db
+        .insert(brokerCredits)
+        .values({ brokerId, creditsBalance: credits })
+        .returning();
+      return created;
+    }
+  }
+
+  async createAdminAuditLog(log: InsertAdminAuditLog): Promise<AdminAuditLog> {
+    const [auditLog] = await db
+      .insert(adminAuditLogs)
+      .values(log)
+      .returning();
+    return auditLog;
+  }
+
+  async getAdminAuditLogs(limit: number = 100, offset: number = 0): Promise<{ logs: AdminAuditLog[]; total: number }> {
+    const [countResult] = await db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(adminAuditLogs);
+
+    const logs = await db
+      .select()
+      .from(adminAuditLogs)
+      .orderBy(desc(adminAuditLogs.createdAt))
+      .limit(limit)
+      .offset(offset);
+
+    return {
+      logs,
+      total: countResult?.count || 0,
+    };
+  }
+
+  async getActiveSubscriptions(): Promise<BrokerEntitlement[]> {
+    return await db
+      .select()
+      .from(brokerEntitlements)
+      .where(eq(brokerEntitlements.plan, "PRO"));
+  }
+
+  // Promotions
+  async getPromotions(): Promise<Promotion[]> {
+    return await db
+      .select()
+      .from(promotions)
+      .orderBy(desc(promotions.createdAt));
+  }
+
+  async createPromotion(promo: InsertPromotion): Promise<Promotion> {
+    const [promotion] = await db
+      .insert(promotions)
+      .values(promo)
+      .returning();
+    return promotion;
+  }
+
+  async updatePromotion(id: string, data: Partial<Promotion>): Promise<Promotion | undefined> {
+    const [promotion] = await db
+      .update(promotions)
+      .set(data)
+      .where(eq(promotions.id, id))
+      .returning();
+    return promotion || undefined;
+  }
+
+  // Referrals
+  async getReferrals(): Promise<Referral[]> {
+    return await db
+      .select()
+      .from(referrals)
+      .orderBy(desc(referrals.createdAt));
+  }
+
+  async createReferral(ref: InsertReferral): Promise<Referral> {
+    const [referral] = await db
+      .insert(referrals)
+      .values(ref)
+      .returning();
+    return referral;
   }
 }
 

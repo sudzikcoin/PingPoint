@@ -1,16 +1,29 @@
 import { Link, useLocation } from "wouter";
 import { cn } from "@/lib/utils";
-import { LayoutDashboard, Plus, Truck, Package, LogOut } from "lucide-react";
+import { LayoutDashboard, Plus, Truck, Package, LogOut, Shield } from "lucide-react";
 import { ThemeToggle } from "@/components/ui/theme-toggle";
 import { useTheme } from "@/context/theme-context";
+import { useQuery } from "@tanstack/react-query";
+
+interface BrokerProfile {
+  id: string;
+  name: string;
+  email: string;
+  isAdmin?: boolean;
+}
 
 export function AppLayout({ children }: { children: React.ReactNode }) {
   const [location] = useLocation();
   const { theme } = useTheme();
 
+  const { data: profile } = useQuery<BrokerProfile>({
+    queryKey: ["/api/broker/profile"],
+  });
+
   const navItems = [
     { name: "Loads", href: "/app/loads", icon: Package },
-    { name: "Drivers", href: "/app/drivers", icon: Truck }, // Placeholder
+    { name: "Drivers", href: "/app/drivers", icon: Truck },
+    ...(profile?.isAdmin ? [{ name: "Admin", href: "/app/admin", icon: Shield }] : []),
   ];
 
   return (

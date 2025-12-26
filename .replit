@@ -51,3 +51,4 @@ integrations = ["javascript_database:1.0.0"]
 
 [userenv.shared]
 MAIL_FROM = "PingPoint <info@suverse.io>"
+ADMIN_EMAILS = "test@example.com"

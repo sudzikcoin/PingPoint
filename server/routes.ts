@@ -1,7 +1,7 @@
 import type { Express, Request, Response } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { createBrokerSession, getBrokerFromRequest, clearBrokerSession, getOrCreateTrustedDevice, getTrustedDevice } from "./auth";
+import { createBrokerSession, getBrokerFromRequest, clearBrokerSession, getOrCreateTrustedDevice, getTrustedDevice, requireAdmin, isAdminEmail, getBrokerWithAdminFromRequest } from "./auth";
 import { randomBytes } from "crypto";
 import { insertLoadSchema, insertStopSchema } from "@shared/schema";
 import { z } from "zod";
@@ -360,7 +360,7 @@ export async function registerRoutes(
   // GET /api/broker/profile - Get broker profile
   app.get("/api/broker/profile", async (req: Request, res: Response) => {
     try {
-      const broker = await getBrokerFromRequest(req);
+      const broker = await getBrokerWithAdminFromRequest(req);
       if (!broker) {
         return res.status(401).json({ error: "Unauthorized" });
       }
@@ -372,6 +372,7 @@ export async function registerRoutes(
         phone: broker.phone || "",
         timezone: broker.timezone || "Central (CT)",
         emailVerified: broker.emailVerified,
+        isAdmin: broker.isAdmin,
       });
     } catch (error) {
       console.error("Error in GET /api/broker/profile:", error);
@@ -1443,6 +1444,357 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Error fetching archived loads:", error);
       return res.status(500).json({ error: "Failed to fetch archived loads" });
+    }
+  });
+
+  // =============================================
+  // ADMIN API ROUTES
+  // =============================================
+
+  // GET /api/admin/users - List all brokers with billing info
+  app.get("/api/admin/users", async (req: Request, res: Response) => {
+    try {
+      const admin = await requireAdmin(req);
+      if (!admin) {
+        return res.status(403).json({ error: "Admin access required" });
+      }
+
+      const page = Math.max(1, parseInt(req.query.page as string) || 1);
+      const limit = Math.min(100, Math.max(1, parseInt(req.query.limit as string) || 25));
+      const offset = (page - 1) * limit;
+
+      const { brokers: brokersList, total } = await storage.getAllBrokers(limit, offset);
+
+      // Enrich with billing info (using count queries for performance)
+      const usersWithBilling = await Promise.all(
+        brokersList.map(async (broker) => {
+          const [entitlement, credits, totalLoads] = await Promise.all([
+            storage.getBrokerEntitlement(broker.id),
+            storage.getBrokerCredits(broker.id),
+            storage.getAllLoadsCount(broker.id),
+          ]);
+
+          return {
+            id: broker.id,
+            email: broker.email,
+            name: broker.name,
+            phone: broker.phone,
+            emailVerified: broker.emailVerified,
+            createdAt: broker.createdAt,
+            plan: entitlement?.plan || "FREE",
+            loadsUsed: entitlement?.loadsUsed || 0,
+            includedLoads: entitlement?.includedLoads || 3,
+            cycleStartAt: entitlement?.cycleStartAt,
+            cycleEndAt: entitlement?.cycleEndAt,
+            creditsBalance: credits?.creditsBalance || 0,
+            totalLoads,
+          };
+        })
+      );
+
+      return res.json({
+        items: usersWithBilling,
+        total,
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit),
+      });
+    } catch (error) {
+      console.error("Error in GET /api/admin/users:", error);
+      return res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  // GET /api/admin/users/:id - Get single user details
+  app.get("/api/admin/users/:id", async (req: Request, res: Response) => {
+    try {
+      const admin = await requireAdmin(req);
+      if (!admin) {
+        return res.status(403).json({ error: "Admin access required" });
+      }
+
+      const broker = await storage.getBroker(req.params.id);
+      if (!broker) {
+        return res.status(404).json({ error: "User not found" });
+      }
+
+      const [entitlement, credits, totalLoads] = await Promise.all([
+        storage.getBrokerEntitlement(broker.id),
+        storage.getBrokerCredits(broker.id),
+        storage.getAllLoadsCount(broker.id),
+      ]);
+
+      return res.json({
+        id: broker.id,
+        email: broker.email,
+        name: broker.name,
+        phone: broker.phone,
+        emailVerified: broker.emailVerified,
+        createdAt: broker.createdAt,
+        plan: entitlement?.plan || "FREE",
+        loadsUsed: entitlement?.loadsUsed || 0,
+        includedLoads: entitlement?.includedLoads || 3,
+        cycleStartAt: entitlement?.cycleStartAt,
+        cycleEndAt: entitlement?.cycleEndAt,
+        creditsBalance: credits?.creditsBalance || 0,
+        totalLoads,
+      });
+    } catch (error) {
+      console.error("Error in GET /api/admin/users/:id:", error);
+      return res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  // POST /api/admin/users/:id/update-usage - Update user billing/usage
+  app.post("/api/admin/users/:id/update-usage", async (req: Request, res: Response) => {
+    try {
+      const admin = await requireAdmin(req);
+      if (!admin) {
+        return res.status(403).json({ error: "Admin access required" });
+      }
+
+      const broker = await storage.getBroker(req.params.id);
+      if (!broker) {
+        return res.status(404).json({ error: "User not found" });
+      }
+
+      const { loadsUsed, plan, includedLoads, cycleEndAt } = req.body;
+
+      const updateData: any = {};
+      if (loadsUsed !== undefined) updateData.loadsUsed = loadsUsed;
+      if (plan !== undefined) updateData.plan = plan;
+      if (includedLoads !== undefined) updateData.includedLoads = includedLoads;
+      if (cycleEndAt !== undefined) updateData.cycleEndAt = new Date(cycleEndAt);
+
+      const entitlement = await storage.updateBrokerEntitlement(broker.id, updateData);
+
+      // Log admin action
+      await storage.createAdminAuditLog({
+        actorBrokerId: admin.id,
+        actorEmail: admin.email,
+        targetBrokerId: broker.id,
+        action: "UPDATE_USAGE",
+        metadata: JSON.stringify({ updates: updateData }),
+      });
+
+      return res.json({ ok: true, entitlement });
+    } catch (error) {
+      console.error("Error in POST /api/admin/users/:id/update-usage:", error);
+      return res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  // POST /api/admin/users/:id/add-credits - Add load credits
+  app.post("/api/admin/users/:id/add-credits", async (req: Request, res: Response) => {
+    try {
+      const admin = await requireAdmin(req);
+      if (!admin) {
+        return res.status(403).json({ error: "Admin access required" });
+      }
+
+      const broker = await storage.getBroker(req.params.id);
+      if (!broker) {
+        return res.status(404).json({ error: "User not found" });
+      }
+
+      const { credits } = req.body;
+      if (!credits || credits <= 0) {
+        return res.status(400).json({ error: "Credits must be a positive number" });
+      }
+
+      const updated = await storage.addBrokerCredits(broker.id, credits);
+
+      // Log admin action
+      await storage.createAdminAuditLog({
+        actorBrokerId: admin.id,
+        actorEmail: admin.email,
+        targetBrokerId: broker.id,
+        action: "ADD_CREDITS",
+        metadata: JSON.stringify({ credits, newBalance: updated?.creditsBalance }),
+      });
+
+      return res.json({ ok: true, credits: updated });
+    } catch (error) {
+      console.error("Error in POST /api/admin/users/:id/add-credits:", error);
+      return res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  // GET /api/admin/subscriptions - Get all active subscriptions
+  app.get("/api/admin/subscriptions", async (req: Request, res: Response) => {
+    try {
+      const admin = await requireAdmin(req);
+      if (!admin) {
+        return res.status(403).json({ error: "Admin access required" });
+      }
+
+      const subscriptions = await storage.getActiveSubscriptions();
+
+      // Enrich with broker info
+      const enriched = await Promise.all(
+        subscriptions.map(async (sub) => {
+          const broker = await storage.getBroker(sub.brokerId);
+          return {
+            ...sub,
+            brokerEmail: broker?.email,
+            brokerName: broker?.name,
+          };
+        })
+      );
+
+      return res.json({ subscriptions: enriched });
+    } catch (error) {
+      console.error("Error in GET /api/admin/subscriptions:", error);
+      return res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  // GET /api/admin/logs - Get admin audit logs
+  app.get("/api/admin/logs", async (req: Request, res: Response) => {
+    try {
+      const admin = await requireAdmin(req);
+      if (!admin) {
+        return res.status(403).json({ error: "Admin access required" });
+      }
+
+      const page = Math.max(1, parseInt(req.query.page as string) || 1);
+      const limit = Math.min(100, Math.max(1, parseInt(req.query.limit as string) || 50));
+      const offset = (page - 1) * limit;
+
+      const { logs, total } = await storage.getAdminAuditLogs(limit, offset);
+
+      return res.json({
+        items: logs,
+        total,
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit),
+      });
+    } catch (error) {
+      console.error("Error in GET /api/admin/logs:", error);
+      return res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  // GET /api/admin/promotions - Get all promotions
+  app.get("/api/admin/promotions", async (req: Request, res: Response) => {
+    try {
+      const admin = await requireAdmin(req);
+      if (!admin) {
+        return res.status(403).json({ error: "Admin access required" });
+      }
+
+      const promos = await storage.getPromotions();
+      return res.json({ promotions: promos });
+    } catch (error) {
+      console.error("Error in GET /api/admin/promotions:", error);
+      return res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  // POST /api/admin/promotions - Create promotion
+  app.post("/api/admin/promotions", async (req: Request, res: Response) => {
+    try {
+      const admin = await requireAdmin(req);
+      if (!admin) {
+        return res.status(403).json({ error: "Admin access required" });
+      }
+
+      const { code, description, discountType, discountValue, validFrom, validTo, maxRedemptions } = req.body;
+
+      if (!code || !discountType || discountValue === undefined) {
+        return res.status(400).json({ error: "Code, discountType, and discountValue are required" });
+      }
+
+      const promo = await storage.createPromotion({
+        code: code.toUpperCase(),
+        description,
+        discountType,
+        discountValue,
+        validFrom: validFrom ? new Date(validFrom) : undefined,
+        validTo: validTo ? new Date(validTo) : undefined,
+        maxRedemptions,
+      });
+
+      // Log admin action
+      await storage.createAdminAuditLog({
+        actorBrokerId: admin.id,
+        actorEmail: admin.email,
+        action: "CREATE_PROMOTION",
+        metadata: JSON.stringify({ code: promo.code, discountType, discountValue }),
+      });
+
+      return res.json({ ok: true, promotion: promo });
+    } catch (error) {
+      console.error("Error in POST /api/admin/promotions:", error);
+      return res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  // GET /api/admin/referrals - Get all referrals
+  app.get("/api/admin/referrals", async (req: Request, res: Response) => {
+    try {
+      const admin = await requireAdmin(req);
+      if (!admin) {
+        return res.status(403).json({ error: "Admin access required" });
+      }
+
+      const refs = await storage.getReferrals();
+
+      // Enrich with broker info
+      const enriched = await Promise.all(
+        refs.map(async (ref) => {
+          const referrer = await storage.getBroker(ref.referrerId);
+          const referred = ref.referredId ? await storage.getBroker(ref.referredId) : null;
+          return {
+            ...ref,
+            referrerEmail: referrer?.email,
+            referrerName: referrer?.name,
+            referredEmail: referred?.email,
+            referredName: referred?.name,
+          };
+        })
+      );
+
+      return res.json({ referrals: enriched });
+    } catch (error) {
+      console.error("Error in GET /api/admin/referrals:", error);
+      return res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  // POST /api/admin/referrals - Create referral code
+  app.post("/api/admin/referrals", async (req: Request, res: Response) => {
+    try {
+      const admin = await requireAdmin(req);
+      if (!admin) {
+        return res.status(403).json({ error: "Admin access required" });
+      }
+
+      const { referrerId, code, rewardLoads } = req.body;
+
+      if (!referrerId || !code) {
+        return res.status(400).json({ error: "referrerId and code are required" });
+      }
+
+      const referral = await storage.createReferral({
+        referrerId,
+        code: code.toUpperCase(),
+        rewardLoads: rewardLoads || 1,
+      });
+
+      // Log admin action
+      await storage.createAdminAuditLog({
+        actorBrokerId: admin.id,
+        actorEmail: admin.email,
+        action: "CREATE_REFERRAL",
+        metadata: JSON.stringify({ referrerId, code: referral.code }),
+      });
+
+      return res.json({ ok: true, referral });
+    } catch (error) {
+      console.error("Error in POST /api/admin/referrals:", error);
+      return res.status(500).json({ error: "Internal server error" });
     }
   });
 
