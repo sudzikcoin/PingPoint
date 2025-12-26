@@ -8,8 +8,24 @@ import { useLocation } from "wouter";
 import { useState, useEffect } from "react";
 import { useTheme } from "@/context/theme-context";
 import { cn } from "@/lib/utils";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, Plus, X } from "lucide-react";
 import { toast } from "sonner";
+
+interface StopForm {
+  name: string;
+  address: string;
+  city: string;
+  state: string;
+  zip: string;
+}
+
+const emptyStop: StopForm = {
+  name: "",
+  address: "",
+  city: "",
+  state: "",
+  zip: "",
+};
 
 export default function AppLoadNew() {
   const [, setLocation] = useLocation();
@@ -28,19 +44,9 @@ export default function AppLoadNew() {
   const [customerRef, setCustomerRef] = useState("");
   const [rateAmount, setRateAmount] = useState("");
 
-  // Pickup stop
-  const [pickupName, setPickupName] = useState("");
-  const [pickupAddress, setPickupAddress] = useState("");
-  const [pickupCity, setPickupCity] = useState("");
-  const [pickupState, setPickupState] = useState("");
-  const [pickupZip, setPickupZip] = useState("");
-
-  // Delivery stop
-  const [deliveryName, setDeliveryName] = useState("");
-  const [deliveryAddress, setDeliveryAddress] = useState("");
-  const [deliveryCity, setDeliveryCity] = useState("");
-  const [deliveryState, setDeliveryState] = useState("");
-  const [deliveryZip, setDeliveryZip] = useState("");
+  // Multi-stop arrays
+  const [pickups, setPickups] = useState<StopForm[]>([{ ...emptyStop }]);
+  const [deliveries, setDeliveries] = useState<StopForm[]>([{ ...emptyStop }]);
 
   // Fetch broker profile on mount to prefill form
   useEffect(() => {
@@ -60,6 +66,38 @@ export default function AppLoadNew() {
     fetchProfile();
   }, []);
 
+  const updateStop = (type: "pickups" | "deliveries", index: number, field: keyof StopForm, value: string) => {
+    if (type === "pickups") {
+      setPickups(prev => {
+        const arr = [...prev];
+        arr[index] = { ...arr[index], [field]: value };
+        return arr;
+      });
+    } else {
+      setDeliveries(prev => {
+        const arr = [...prev];
+        arr[index] = { ...arr[index], [field]: value };
+        return arr;
+      });
+    }
+  };
+
+  const addStop = (type: "pickups" | "deliveries") => {
+    if (type === "pickups") {
+      setPickups(prev => [...prev, { ...emptyStop }]);
+    } else {
+      setDeliveries(prev => [...prev, { ...emptyStop }]);
+    }
+  };
+
+  const removeStop = (type: "pickups" | "deliveries", index: number) => {
+    if (type === "pickups") {
+      setPickups(prev => (prev.length === 1 ? prev : prev.filter((_, i) => i !== index)));
+    } else {
+      setDeliveries(prev => (prev.length === 1 ? prev : prev.filter((_, i) => i !== index)));
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     setIsSubmitting(true);
@@ -77,6 +115,34 @@ export default function AppLoadNew() {
       return;
     }
 
+    // Build stops array from pickups and deliveries
+    const stops = [
+      ...pickups.map((stop, index) => ({
+        type: "PICKUP" as const,
+        sequence: index + 1,
+        name: stop.name,
+        addressLine1: stop.address,
+        city: stop.city,
+        state: stop.state,
+        zip: stop.zip,
+        windowStart: new Date().toISOString(),
+        windowEnd: new Date().toISOString(),
+        status: "PLANNED" as const,
+      })),
+      ...deliveries.map((stop, index) => ({
+        type: "DELIVERY" as const,
+        sequence: pickups.length + index + 1,
+        name: stop.name,
+        addressLine1: stop.address,
+        city: stop.city,
+        state: stop.state,
+        zip: stop.zip,
+        windowStart: new Date().toISOString(),
+        windowEnd: new Date().toISOString(),
+        status: "PLANNED" as const,
+      })),
+    ];
+
     try {
       // Create Load via API (backend handles broker creation/lookup)
       const newLoad = await api.loads.create({
@@ -89,32 +155,7 @@ export default function AppLoadNew() {
         equipmentType,
         rateAmount: Number(rateAmount) || 0,
         customerRef,
-        stops: [
-          {
-            type: "PICKUP",
-            sequence: 1,
-            name: pickupName,
-            addressLine1: pickupAddress,
-            city: pickupCity,
-            state: pickupState,
-            zip: pickupZip,
-            windowStart: new Date().toISOString(),
-            windowEnd: new Date().toISOString(),
-            status: "PLANNED"
-          },
-          {
-            type: "DELIVERY",
-            sequence: 2,
-            name: deliveryName,
-            addressLine1: deliveryAddress,
-            city: deliveryCity,
-            state: deliveryState,
-            zip: deliveryZip,
-            windowStart: new Date().toISOString(),
-            windowEnd: new Date().toISOString(),
-            status: "PLANNED"
-          }
-        ]
+        stops,
       });
 
       // UI Feedback & Redirect
@@ -174,6 +215,110 @@ export default function AppLoadNew() {
       </AppLayout>
     );
   }
+
+  const renderStopCard = (
+    type: "pickups" | "deliveries",
+    stop: StopForm,
+    index: number,
+    total: number
+  ) => {
+    const isPickup = type === "pickups";
+    const testIdPrefix = isPickup ? "pickup" : "delivery";
+    const fieldPrefix = isPickup ? "pickupName" : "deliveryName";
+    
+    return (
+      <div
+        key={`${type}-${index}`}
+        className={cn(
+          "rounded-md border p-4 space-y-4",
+          theme === "arcade90s" 
+            ? "border-arc-border bg-arc-bg/50" 
+            : "border-brand-border bg-brand-bg/30"
+        )}
+      >
+        <div className="flex items-center justify-between">
+          <span className={cn(
+            "text-sm font-semibold",
+            theme === "arcade90s" ? "text-arc-text arcade-pixel-font" : "text-white"
+          )}>
+            {isPickup ? "Pickup" : "Delivery"} #{index + 1}
+          </span>
+          {total > 1 && (
+            <button
+              type="button"
+              onClick={() => removeStop(type, index)}
+              className={cn(
+                "text-xs flex items-center gap-1 hover:opacity-80",
+                theme === "arcade90s" ? "text-red-400" : "text-red-400"
+              )}
+              data-testid={`button-remove-${testIdPrefix}-${index}`}
+            >
+              <X className="w-3 h-3" />
+              Remove
+            </button>
+          )}
+        </div>
+        
+        <div className="space-y-4">
+          <div className="space-y-1">
+            <label className={labelClasses}>Facility Name</label>
+            <TypeaheadInput 
+              data-testid={`input-${testIdPrefix}-name-${index}`}
+              fieldKey={fieldPrefix}
+              value={stop.name}
+              onValueChange={(val) => updateStop(type, index, "name", val)}
+              required 
+              className={inputClasses} 
+            />
+          </div>
+          <div className="space-y-1">
+            <label className={labelClasses}>Address</label>
+            <Input 
+              data-testid={`input-${testIdPrefix}-address-${index}`}
+              value={stop.address}
+              onChange={(e) => updateStop(type, index, "address", e.target.value)}
+              required 
+              className={inputClasses} 
+            />
+          </div>
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-1">
+              <label className={labelClasses}>City</label>
+              <TypeaheadInput 
+                data-testid={`input-${testIdPrefix}-city-${index}`}
+                fieldKey={`${testIdPrefix}City`}
+                value={stop.city}
+                onValueChange={(val) => updateStop(type, index, "city", val)}
+                required 
+                className={inputClasses} 
+              />
+            </div>
+            <div className="space-y-1">
+              <label className={labelClasses}>State</label>
+              <TypeaheadInput 
+                data-testid={`input-${testIdPrefix}-state-${index}`}
+                fieldKey={`${testIdPrefix}State`}
+                value={stop.state}
+                onValueChange={(val) => updateStop(type, index, "state", val)}
+                required 
+                className={inputClasses} 
+              />
+            </div>
+          </div>
+          <div className="space-y-1">
+            <label className={labelClasses}>ZIP</label>
+            <Input 
+              data-testid={`input-${testIdPrefix}-zip-${index}`}
+              value={stop.zip}
+              onChange={(e) => updateStop(type, index, "zip", e.target.value)}
+              required 
+              className={inputClasses} 
+            />
+          </div>
+        </div>
+      </div>
+    );
+  };
 
   return (
     <AppLayout>
@@ -327,139 +472,67 @@ export default function AppLoadNew() {
             </CardContent>
           </Card>
 
-          {/* Route */}
+          {/* Route - Pickup and Delivery sections */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            {/* Pickup */}
+            {/* Pickups */}
             <Card className={cn(theme === "arcade90s" ? "arcade-panel border-arc-secondary/30 rounded-none" : "bg-brand-card border-brand-border")}>
               <CardHeader className="pb-2">
-                <div className="flex items-center gap-2">
-                  <div className={cn("w-2 h-2 rounded-full", theme === "arcade90s" ? "bg-arc-primary" : "bg-emerald-500")} />
-                  <CardTitle className={cn("text-sm uppercase tracking-widest", theme === "arcade90s" ? "text-arc-text arcade-pixel-font" : "text-brand-text")}>Pickup</CardTitle>
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <div className={cn("w-2 h-2 rounded-full", theme === "arcade90s" ? "bg-arc-primary" : "bg-emerald-500")} />
+                    <CardTitle className={cn("text-sm uppercase tracking-widest", theme === "arcade90s" ? "text-arc-text arcade-pixel-font" : "text-brand-text")}>
+                      Pickups ({pickups.length})
+                    </CardTitle>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => addStop("pickups")}
+                    className={cn(
+                      "flex items-center gap-1 px-2 py-1 text-xs font-medium border rounded transition-colors",
+                      theme === "arcade90s"
+                        ? "border-arc-primary text-arc-primary hover:bg-arc-primary/10 rounded-none"
+                        : "border-emerald-500 text-emerald-400 hover:bg-emerald-500/10"
+                    )}
+                    data-testid="button-add-pickup"
+                  >
+                    <Plus className="w-3 h-3" />
+                    Add Pickup
+                  </button>
                 </div>
               </CardHeader>
               <CardContent className="space-y-4">
-                <div className="space-y-1">
-                  <label className={labelClasses}>Facility Name</label>
-                  <TypeaheadInput 
-                    data-testid="input-pickup-name"
-                    fieldKey="pickupName"
-                    value={pickupName}
-                    onValueChange={setPickupName}
-                    required 
-                    className={inputClasses} 
-                  />
-                </div>
-                <div className="space-y-1">
-                  <label className={labelClasses}>Address</label>
-                  <Input 
-                    data-testid="input-pickup-address"
-                    value={pickupAddress}
-                    onChange={(e) => setPickupAddress(e.target.value)}
-                    required 
-                    className={inputClasses} 
-                  />
-                </div>
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="space-y-1">
-                    <label className={labelClasses}>City</label>
-                    <TypeaheadInput 
-                      data-testid="input-pickup-city"
-                      fieldKey="pickupCity"
-                      value={pickupCity}
-                      onValueChange={setPickupCity}
-                      required 
-                      className={inputClasses} 
-                    />
-                  </div>
-                  <div className="space-y-1">
-                    <label className={labelClasses}>State</label>
-                    <TypeaheadInput 
-                      data-testid="input-pickup-state"
-                      fieldKey="pickupState"
-                      value={pickupState}
-                      onValueChange={setPickupState}
-                      required 
-                      className={inputClasses} 
-                    />
-                  </div>
-                </div>
-                <div className="space-y-1">
-                  <label className={labelClasses}>ZIP</label>
-                  <Input 
-                    data-testid="input-pickup-zip"
-                    value={pickupZip}
-                    onChange={(e) => setPickupZip(e.target.value)}
-                    required 
-                    className={inputClasses} 
-                  />
-                </div>
+                {pickups.map((stop, index) => renderStopCard("pickups", stop, index, pickups.length))}
               </CardContent>
             </Card>
 
-            {/* Delivery */}
+            {/* Deliveries */}
             <Card className={cn(theme === "arcade90s" ? "arcade-panel border-arc-secondary/30 rounded-none" : "bg-brand-card border-brand-border")}>
               <CardHeader className="pb-2">
-                <div className="flex items-center gap-2">
-                  <div className={cn("w-2 h-2 rounded-full", theme === "arcade90s" ? "bg-arc-secondary" : "bg-brand-gold")} />
-                  <CardTitle className={cn("text-sm uppercase tracking-widest", theme === "arcade90s" ? "text-arc-text arcade-pixel-font" : "text-brand-text")}>Delivery</CardTitle>
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <div className={cn("w-2 h-2 rounded-full", theme === "arcade90s" ? "bg-arc-secondary" : "bg-brand-gold")} />
+                    <CardTitle className={cn("text-sm uppercase tracking-widest", theme === "arcade90s" ? "text-arc-text arcade-pixel-font" : "text-brand-text")}>
+                      Deliveries ({deliveries.length})
+                    </CardTitle>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => addStop("deliveries")}
+                    className={cn(
+                      "flex items-center gap-1 px-2 py-1 text-xs font-medium border rounded transition-colors",
+                      theme === "arcade90s"
+                        ? "border-arc-secondary text-arc-secondary hover:bg-arc-secondary/10 rounded-none"
+                        : "border-brand-gold text-brand-gold hover:bg-brand-gold/10"
+                    )}
+                    data-testid="button-add-delivery"
+                  >
+                    <Plus className="w-3 h-3" />
+                    Add Delivery
+                  </button>
                 </div>
               </CardHeader>
               <CardContent className="space-y-4">
-                <div className="space-y-1">
-                  <label className={labelClasses}>Facility Name</label>
-                  <TypeaheadInput 
-                    data-testid="input-delivery-name"
-                    fieldKey="deliveryName"
-                    value={deliveryName}
-                    onValueChange={setDeliveryName}
-                    required 
-                    className={inputClasses} 
-                  />
-                </div>
-                <div className="space-y-1">
-                  <label className={labelClasses}>Address</label>
-                  <Input 
-                    data-testid="input-delivery-address"
-                    value={deliveryAddress}
-                    onChange={(e) => setDeliveryAddress(e.target.value)}
-                    required 
-                    className={inputClasses} 
-                  />
-                </div>
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="space-y-1">
-                    <label className={labelClasses}>City</label>
-                    <TypeaheadInput 
-                      data-testid="input-delivery-city"
-                      fieldKey="deliveryCity"
-                      value={deliveryCity}
-                      onValueChange={setDeliveryCity}
-                      required 
-                      className={inputClasses} 
-                    />
-                  </div>
-                  <div className="space-y-1">
-                    <label className={labelClasses}>State</label>
-                    <TypeaheadInput 
-                      data-testid="input-delivery-state"
-                      fieldKey="deliveryState"
-                      value={deliveryState}
-                      onValueChange={setDeliveryState}
-                      required 
-                      className={inputClasses} 
-                    />
-                  </div>
-                </div>
-                <div className="space-y-1">
-                  <label className={labelClasses}>ZIP</label>
-                  <Input 
-                    data-testid="input-delivery-zip"
-                    value={deliveryZip}
-                    onChange={(e) => setDeliveryZip(e.target.value)}
-                    required 
-                    className={inputClasses} 
-                  />
-                </div>
+                {deliveries.map((stop, index) => renderStopCard("deliveries", stop, index, deliveries.length))}
               </CardContent>
             </Card>
           </div>

@@ -1,0 +1,383 @@
+You are Replit Backend Agent working on the existing PingPoint (PingPoint / PinkPoint) project (Next.js App Router + TypeScript + Tailwind, Stripe billing etc.).
+
+GLOBAL RULES (VERY IMPORTANT — DO NOT IGNORE):
+- Make **minimal, localized changes** only. Do NOT refactor unrelated files.
+- Do NOT touch environment variables, Stripe/Billing code, database schema, Prisma migrations, or API routes that are not directly related to creating a new load.
+- Preserve all existing business logic, styling and copy. Only extend it to support multiple pickup/delivery stops.
+- If something is unclear, prefer to keep existing behaviour and just add the smallest amount of code to support the requested feature.
+
+GOAL:
+On the **New Load** page (the screen where there is a big heading “NEW LOAD – Create a new shipment” and sections “GENERAL INFORMATION”, “PICKUP”, “DELIVERY”), implement **multi-stop support**:
+- Broker can add **multiple pickup stops**.
+- Broker can add **multiple delivery stops**.
+- Each extra stop is added via a “+” / “Add pickup” or “Add delivery” button.
+- Existing logic (creating loads, saving stops, using them later on map/tracking, etc.) must keep working. Single pickup + single delivery should still behave exactly as before.
+
+The user is already happy with current design; just extend it. Keep all Tailwind styles in the same visual style (dark neon PingPoint UI).
+
+==================================================
+1. FIND CURRENT NEW LOAD FORM
+==================================================
+
+1. Locate the component that renders the **New Load** page. Typical paths to check:
+   - `app/(dashboard)/loads/new/page.tsx`
+   - OR a similar route under `app/(dashboard)` that renders the heading `NEW LOAD` or text `Create a new shipment`.
+2. Confirm you’ve found the right file by checking that it renders:
+   - “NEW LOAD” title
+   - Sections “GENERAL INFORMATION”, “PICKUP”, “DELIVERY”
+   - “CREATE LOAD” button at the bottom.
+
+Do NOT move this file or rename the route.
+
+==================================================
+2. INSPECT CURRENT FORM IMPLEMENTATION
+==================================================
+
+1. Check what form library is used:
+   - If you see `useForm` / `Controller` from `react-hook-form` and maybe `useFieldArray`, you MUST stick to react-hook-form.
+   - If the form is a simple React controlled form (`useState` + `<form onSubmit={...}>`), you can continue that pattern.
+2. Inspect how **pickup** and **delivery** are currently represented:
+   - Most likely there are objects like `pickup` and `delivery` in form values with fields:
+     - `facilityName`, `address`, `city`, `state`, `zip`
+     - maybe also `windowFrom`, `windowTo`, `reference`, etc.
+   - Identify EXACT field names being used right now; we must reuse them to not break backend.
+
+IMPORTANT:
+- Do NOT delete any existing fields from pickup/delivery blocks (for example time windows). If a field exists, it must remain present for each stop card.
+
+==================================================
+3. FRONTEND: MAKE PICKUP / DELIVERY ARRAYS
+==================================================
+
+GOAL: Instead of a single pickup and a single delivery, the form should maintain:
+
+- `pickups: StopForm[]`
+- `deliveries: StopForm[]`
+
+where `StopForm` contains all existing stop fields (facility name, address, city, state, zip, time windows, etc.).
+
+How to do this depends on current implementation.
+
+---------------------------------
+3A. If the form uses react-hook-form
+---------------------------------
+
+1. In the form schema / default values (where you call `useForm`), replace single stops with arrays:
+
+   - If you currently have something similar to:
+
+     ```ts
+     defaultValues: {
+       pickup: { ... },
+       delivery: { ... },
+       ...
+     }
+     ```
+
+     change it to:
+
+     ```ts
+     defaultValues: {
+       pickups: [ { ...same fields as old pickup defaults... } ],
+       deliveries: [ { ...same fields as old delivery defaults... } ],
+       ...
+     }
+     ```
+
+     Keep the exact field names inside (facilityName, address, city, state, zip, windowFrom, windowTo, etc.).
+
+2. Import `useFieldArray` from `react-hook-form` in this file.
+
+3. Create **two** field arrays:
+
+   ```ts
+   const { control, handleSubmit, watch, ... } = useForm<...>({ ... });
+
+   const {
+     fields: pickupFields,
+     append: appendPickup,
+     remove: removePickup,
+   } = useFieldArray({
+     control,
+     name: "pickups",
+   });
+
+   const {
+     fields: deliveryFields,
+     append: appendDelivery,
+     remove: removeDelivery,
+   } = useFieldArray({
+     control,
+     name: "deliveries",
+   });
+
+	4.	Replace the existing PICKUP section markup:
+	•	Currently there is probably one set of inputs like:
+
+<input {...register("pickup.facilityName")} ... />
+<input {...register("pickup.address")} ... />
+...
+
+
+	•	Refactor this section to map through pickupFields:
+
+<section>
+  <div className="flex items-center justify-between">
+    <h2 className="...">PICKUP</h2>
+    <button
+      type="button"
+      onClick={() =>
+        appendPickup({
+          facilityName: "",
+          address: "",
+          city: "",
+          state: "",
+          zip: "",
+          // include all other stop fields with suitable defaults (e.g. null / "" / undefined)
+        })
+      }
+      className="rounded border border-cyan-400 px-3 py-1 text-xs font-medium text-cyan-300 hover:bg-cyan-400/10"
+    >
+      + Add pickup
+    </button>
+  </div>
+
+  <div className="mt-4 space-y-6">
+    {pickupFields.map((field, index) => (
+      <div
+        key={field.id}
+        className="rounded-md border border-slate-700 bg-slate-900/60 p-4"
+      >
+        <div className="mb-2 flex items-center justify-between">
+          <span className="text-sm font-semibold text-slate-200">
+            Pickup #{index + 1}
+          </span>
+          {pickupFields.length > 1 && (
+            <button
+              type="button"
+              onClick={() => removePickup(index)}
+              className="text-xs text-red-400 hover:text-red-300"
+            >
+              Remove
+            </button>
+          )}
+        </div>
+
+        {/* Replace old single inputs with indexed ones */}
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <input
+            {...register(`pickups.${index}.facilityName` as const)}
+            className="bg-black/40 border border-slate-700 px-3 py-2 text-sm"
+            placeholder="Facility name"
+          />
+          <input
+            {...register(`pickups.${index}.address` as const)}
+            className="bg-black/40 border border-slate-700 px-3 py-2 text-sm sm:col-span-2"
+            placeholder="Address"
+          />
+          <input
+            {...register(`pickups.${index}.city` as const)}
+            className="bg-black/40 border border-slate-700 px-3 py-2 text-sm"
+            placeholder="City"
+          />
+          <input
+            {...register(`pickups.${index}.state` as const)}
+            className="bg-black/40 border border-slate-700 px-3 py-2 text-sm"
+            placeholder="State"
+          />
+          <input
+            {...register(`pickups.${index}.zip` as const)}
+            className="bg-black/40 border border-slate-700 px-3 py-2 text-sm sm:col-span-2"
+            placeholder="ZIP"
+          />
+          {/* If there are extra fields like windowFrom/windowTo – keep them here with the same names */}
+        </div>
+      </div>
+    ))}
+  </div>
+</section>
+
+
+	5.	Do the same for the DELIVERY section, using deliveryFields, appendDelivery, removeDelivery, and register("deliveries.${index}.…"), while keeping all field names identical to the existing ones.
+
+⸻
+
+3B. If the form uses plain React state (no react-hook-form)
+
+If there is no react-hook-form, instead:
+	1.	Replace single stop fields in state with arrays:
+
+const [pickups, setPickups] = useState<StopForm[]>([initialPickup]);
+const [deliveries, setDeliveries] = useState<StopForm[]>([initialDelivery]);
+
+
+	2.	Implement helper functions:
+
+const updateStop = (type: "pickups" | "deliveries", index: number, field: keyof StopForm, value: string) => {
+  if (type === "pickups") {
+    setPickups(prev => {
+      const arr = [...prev];
+      arr[index] = { ...arr[index], [field]: value };
+      return arr;
+    });
+  } else {
+    setDeliveries(prev => {
+      const arr = [...prev];
+      arr[index] = { ...arr[index], [field]: value };
+      return arr;
+    });
+  }
+};
+
+const addStop = (type: "pickups" | "deliveries") => {
+  const empty: StopForm = { facilityName: "", address: "", city: "", state: "", zip: "", /* other existing fields with defaults */ };
+  if (type === "pickups") setPickups(prev => [...prev, empty]);
+  else setDeliveries(prev => [...prev, empty]);
+};
+
+const removeStop = (type: "pickups" | "deliveries", index: number) => {
+  if (type === "pickups") {
+    setPickups(prev => (prev.length === 1 ? prev : prev.filter((_, i) => i !== index)));
+  } else {
+    setDeliveries(prev => (prev.length === 1 ? prev : prev.filter((_, i) => i !== index)));
+  }
+};
+
+
+	3.	Render pickup and delivery sections exactly as in 3A, but wiring value + onChange instead of register.
+	4.	In the form submit handler, use pickups and deliveries instead of single pickup / delivery.
+
+==================================================
+4. BACKEND / SUBMIT PAYLOAD: BUILD STOPS ARRAY
+
+The shipment creation endpoint is already used and must keep working. We will extend it to understand multiple stops, but keep behaviour identical for the simple case.
+	1.	Find the API route or server action that handles creating a new load:
+	•	Search for the fetch URL used in the New Load form submit (fetch("/api/loads", "POST /api/loads", etc.)
+	•	Open the corresponding file, probably under app/api/loads/route.ts or similar.
+	2.	Inspect how stops are currently created:
+	•	There is likely logic that converts one pickup and one delivery object into an array of stops with fields like:
+	•	type: "PICKUP" | "DELIVERY"
+	•	sequence
+	•	facilityName, address, city, state, zip, time windows and other metadata.
+	3.	Adjust the request body building in the frontend:
+	•	In the New Load submit handler (component side), do NOT change names/values of general fields (brokerName, equipmentType etc.).
+	•	Construct a stops array from the form values:
+
+const stops = [
+  ...data.pickups.map((stop, index) => ({
+    ...stop,
+    type: "PICKUP",
+    sequence: index + 1,
+  })),
+  ...data.deliveries.map((stop, index) => ({
+    ...stop,
+    type: "DELIVERY",
+    sequence: data.pickups.length + index + 1,
+  })),
+];
+
+	•	data here is the result from handleSubmit / form values.
+	•	Make sure you include ALL stop fields currently used in backend (windowFrom, windowTo, etc.). The spread ...stop will already include them.
+
+	•	Send this stops array to the backend, together with all other fields, for example:
+
+await fetch("/api/loads", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({
+    ...data,
+    stops,
+  }),
+});
+
+
+	•	If the backend previously expected pickup + delivery, you may keep them too for backward compatibility, but they are not required for the app to function if you fully switch to stops.
+
+	4.	On the backend, update the POST handler:
+	•	Parse body as before (const body = await req.json();).
+	•	Look for old logic like:
+
+const { pickup, delivery, ... } = body;
+
+const stopsData = [
+  { ...pickup, type: "PICKUP", sequence: 1 },
+  { ...delivery, type: "DELIVERY", sequence: 2 },
+];
+
+
+	•	Replace it with backwards-compatible logic:
+
+const {
+  stops: stopsFromClient,
+  pickup,
+  delivery,
+  ...rest
+} = body;
+
+let stopsData;
+
+if (Array.isArray(stopsFromClient) && stopsFromClient.length > 0) {
+  // New multi-stop mode
+  stopsData = stopsFromClient.map((s: any, index: number) => ({
+    ...s,
+    sequence: s.sequence ?? index + 1,
+  }));
+} else {
+  // Fallback to old behaviour (single pickup + single delivery)
+  const pickupStop = pickup
+    ? { ...pickup, type: "PICKUP", sequence: 1 }
+    : null;
+  const deliveryStop = delivery
+    ? { ...delivery, type: "DELIVERY", sequence: pickupStop ? 2 : 1 }
+    : null;
+
+  stopsData = [pickupStop, deliveryStop].filter(Boolean);
+}
+
+
+	•	Then use stopsData wherever old code previously used its stops array (for example in a Prisma create call: stops: { create: stopsData }).
+	•	Do not change the prisma schema or the names of stop fields.
+
+==================================================
+5. VALIDATION (OPTIONAL, ONLY IF ALREADY PRESENT)
+
+If there is Zod or other validation schema for the form payload:
+	1.	Update the schema to reflect arrays:
+	•	Replace:
+
+pickup: stopSchema,
+delivery: stopSchema,
+
+
+	•	With:
+
+pickups: z.array(stopSchema).min(1),
+deliveries: z.array(stopSchema).min(1),
+
+
+	2.	Keep all existing required fields and rules inside stopSchema.
+
+Do NOT introduce new mandatory fields, just keep the same ones for each stop.
+
+==================================================
+6. TESTING (IMPORTANT)
+
+After implementing the above:
+	1.	Run dev server.
+	2.	Open New Load page.
+	3.	Test cases:
+	•	Case 1: Single pickup & delivery (no extra stops)
+	•	Form should look almost exactly as before.
+	•	Submit; the load must be created successfully and appear wherever it was visible previously (loads list, map, tracking, etc.).
+	•	Case 2: Multiple pickups
+	•	Use “+ Add pickup” to add 2–3 pickup stops.
+	•	Submit; check in DB / dev logs that all pickup stops are saved with correct sequence and type "PICKUP".
+	•	Case 3: Multiple deliveries
+	•	Use “+ Add delivery” to add 2–3 deliveries.
+	•	Submit; verify stops created with correct sequence and type "DELIVERY".
+	•	Case 4: Remove extra stops
+	•	Add a stop, then remove it; form should not crash and at least one pickup and one delivery should always remain.
+	4.	Ensure that no Stripe / billing / webhook code is affected.
+
+When all tests pass and the page behaves as described, stop editing and leave everything else untouched.
+
