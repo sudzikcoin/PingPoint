@@ -1,0 +1,435 @@
+
+You are the Replit Backend Agent working on the **PingPoint** project (Next.js app router + TypeScript frontend, Node/Express backend, Drizzle + PostgreSQL in `shared/schema.ts`).
+
+The main app (brokers dashboard, loads, tracking, billing, Stripe, Solana etc.) **already works and MUST NOT be broken**. Your job is ONLY to finish and fix the **admin panel** implementation and wire it correctly to the existing schema and data.
+
+CONTEXT (VERY IMPORTANT):
+- The existing schema is in `shared/schema.ts`. There are tables such as:
+  - `brokers` – main table of broker accounts (email, name, phone, etc.).
+  - `brokerEntitlements` – per-broker billing limits and usage, defined roughly as:
+
+    ```ts
+    export const brokerEntitlements = pgTable("broker_entitlements", {
+      id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+      brokerId: uuid("broker_id").notNull().references(() => brokers.id).unique(),
+      plan: planEnum("plan").notNull().default("FREE"),
+      includedLoads: integer("included_loads").notNull().default(3),
+      extraCredits: integer("extra_credits").notNull().default(0),
+      loadsUsed: integer("loads_used").notNull().default(0),
+      status: entitlementStatusEnum("status").notNull().default("ACTIVE"),
+      cycleStartAt: timestamp("cycle_start_at", { withTimezone: true }).notNull(),
+      cycleEndAt: timestamp("cycle_end_at", { withTimezone: true }).notNull(),
+      createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+      updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+    });
+    ```
+
+  - Other billing tables (`loads`, `billing usage logs`, `stripeWebhookEvents`, etc.) ALREADY power the user-facing billing & Stripe logic and must be left as-is.
+- There is a Next.js admin panel UI under `/app/admin` with tabs:
+  - **Users**
+  - **Subscriptions**
+  - **Audit Logs**
+  - **Promotions**
+- After a previous change, the admin panel now shows:
+  - `Users`: **0 users**
+  - `Subscriptions`: **0 active subscriptions**
+  - `Audit Logs`: always empty
+  - `Promotions`: UI exists but not fully wired
+  even though real brokers and PRO subscriptions exist in the database.
+- Admin login screen is at `/app/admin/login` and already works using Replit secrets/configs:
+  - `ADMIN_EMAILS` (configuration; comma-separated list of allowed admin emails)
+  - `ADMIN_PASSWORD` (secret)
+  - `JWT_SECRET` (secret for admin JWT)
+- Normal broker login, loads creation, Stripe checkout, webhooks, billing summary, multi-stop load creation, driver app, geofences, etc. are ALREADY WORKING and **must not be touched except where absolutely needed for admin read-only purposes.**
+
+YOUR TASKS
+
+0) GENERAL RULES
+- Work inside the project root that contains `package.json` with the PingPoint app. In this description I’ll refer to files as if they are at the root (`shared/schema.ts`, `server/routes.ts`, `server/app.ts`, `app/admin/...`); if the code is under a subfolder (like `PingPoint/`), adjust the paths accordingly.
+- DO NOT change any existing business logic for:
+  - load creation and tracking,
+  - billing summaries,
+  - Stripe checkout sessions,
+  - Stripe webhooks,
+  - Solana billing endpoints,
+  - multi-stop load UI on `/app/(dashboard)/loads/new`.
+- Only extend what is needed for the admin panel and wire it to the existing data model.
+
+------------------------------------------------
+1) FIX ADMIN AUTH GUARD (if needed)
+------------------------------------------------
+There is already an admin login page and some backend auth code from the previous prompt. Verify that:
+
+- There is an endpoint like `POST /api/admin/login` that:
+  - checks `process.env.ADMIN_EMAILS` list and `process.env.ADMIN_PASSWORD`,
+  - on success issues a JWT signed with `process.env.JWT_SECRET` containing at least `{ email }`,
+  - returns this token to the frontend (either in JSON or as an httpOnly cookie – check current implementation and keep it consistent).
+- There is middleware / helper for admin routes that:
+  - extracts the token from:
+    - either `Authorization: Bearer <token>` header,
+    - OR from a cookie (if that is how it is currently implemented),
+  - verifies it with `JWT_SECRET`,
+  - checks that email is in `ADMIN_EMAILS`,
+  - on success attaches `req.adminEmail` and calls `next()`,
+  - otherwise returns `401` or `403`.
+
+If this logic already exists, **do not rewrite it from scratch** – only fix it if it’s broken. Reuse any existing `requireAdmin` / `withAdminAuth` middleware. All new admin API endpoints in this task MUST be protected by this middleware.
+
+------------------------------------------------
+2) FIX / IMPLEMENT ADMIN USERS API
+------------------------------------------------
+Goal: the **Users** tab in `/app/admin` must show all brokers with their plan and usage. It previously worked but now shows 0 users – fix that by using the existing Drizzle schema instead of any artificial “User” model that might have been created by the last prompt.
+
+Backend:
+- In `server/routes.ts` (or wherever admin routes live), add / fix an endpoint:
+
+  ```ts
+  // GET /api/admin/users
+  app.get("/api/admin/users", requireAdminAuth, async (req, res) => {
+    try {
+      const users = await db
+        .select({
+          id: brokers.id,
+          email: brokers.email,
+          name: brokers.name,
+          createdAt: brokers.createdAt,
+          plan: brokerEntitlements.plan,
+          includedLoads: brokerEntitlements.includedLoads,
+          extraCredits: brokerEntitlements.extraCredits,
+          loadsUsed: brokerEntitlements.loadsUsed,
+          status: brokerEntitlements.status,
+          cycleStartAt: brokerEntitlements.cycleStartAt,
+          cycleEndAt: brokerEntitlements.cycleEndAt,
+        })
+        .from(brokers)
+        .leftJoin(brokerEntitlements, eq(brokerEntitlements.brokerId, brokers.id))
+        .orderBy(asc(brokers.createdAt));
+
+      res.json({ users });
+    } catch (err) {
+      console.error("[Admin] Error fetching users", err);
+      res.status(500).json({ error: "Failed to fetch users" });
+    }
+  });
+
+	•	If the table / column names differ slightly, adjust to match the actual shared/schema.ts file. The important point: this must query brokers joined with brokerEntitlements so that brokers already using the app show up.
+	•	Add an endpoint to UPDATE a broker’s plan / entitlements manually, for example:
+
+// PATCH /api/admin/users/:id
+app.patch("/api/admin/users/:id", requireAdminAuth, async (req, res) => {
+  const brokerId = req.params.id;
+  const { plan, includedLoads, extraCredits, loadsUsed, status } = req.body ?? {};
+
+  try {
+    // Ensure entitlements row exists
+    const existing = await db
+      .select()
+      .from(brokerEntitlements)
+      .where(eq(brokerEntitlements.brokerId, brokerId));
+
+    if (existing.length === 0) {
+      // Create a basic entitlements record if missing
+      await db.insert(brokerEntitlements).values({
+        brokerId,
+        plan: plan ?? "FREE",
+        includedLoads: includedLoads ?? 3,
+        extraCredits: extraCredits ?? 0,
+        loadsUsed: loadsUsed ?? 0,
+        status: status ?? "ACTIVE",
+        cycleStartAt: new Date(),
+        cycleEndAt: addMonths(new Date(), 1), // import a helper or reuse existing logic
+      });
+    } else {
+      await db
+        .update(brokerEntitlements)
+        .set({
+          ...(plan ? { plan } : {}),
+          ...(includedLoads !== undefined ? { includedLoads } : {}),
+          ...(extraCredits !== undefined ? { extraCredits } : {}),
+          ...(loadsUsed !== undefined ? { loadsUsed } : {}),
+          ...(status ? { status } : {}),
+          updatedAt: new Date(),
+        })
+        .where(eq(brokerEntitlements.brokerId, brokerId));
+    }
+
+    // Log admin action (using the audit log in task 4)
+    await createAdminAuditLog(req.adminEmail, "UPDATE_USER_ENTITLEMENTS", { brokerId, plan, includedLoads, extraCredits, loadsUsed, status });
+
+    res.json({ ok: true });
+  } catch (err) {
+    console.error("[Admin] Error updating user", err);
+    res.status(500).json({ error: "Failed to update user" });
+  }
+});
+
+
+	•	Add a simple BLOCK / UNBLOCK endpoint by toggling brokerEntitlements.status between "ACTIVE" and "BLOCKED". Example:
+
+// POST /api/admin/users/:id/block
+// POST /api/admin/users/:id/unblock
+
+On block/unblock, write an entry to the audit log (see task 4).
+
+Frontend:
+	•	In /app/admin (or component files under it) update the Users tab to call the fixed /api/admin/users endpoint and display:
+	•	Email
+	•	Name
+	•	Plan (FREE / PRO)
+	•	Loads used (loadsUsed / includedLoads)
+	•	Extra credits
+	•	Status (ACTIVE / BLOCKED)
+	•	Actions:
+	•	“Edit” button → opens a modal / drawer with fields for plan, loadsUsed, includedLoads, extraCredits, status and a “Save” button that calls PATCH /api/admin/users/:id.
+	•	“Block”/“Unblock” toggle → calls the corresponding block/unblock endpoint.
+
+Keep the UI style consistent with the existing neon PingPoint design (black background, yellow labels, cyan buttons).
+
+⸻
+
+	3.	ADMIN VIEW OF SUBSCRIPTIONS
+
+⸻
+
+Goal: the Subscriptions tab must show a list of active PRO plans (and optionally FREE ones) based on existing billing data.
+	•	Inspect current billing implementation in server/routes.ts (look for /api/billing/summary, Stripe webhook handlers, etc.) and reuse the same queries to determine:
+	•	broker email and name,
+	•	current plan (FREE / PRO),
+	•	loads used / includedLoads,
+	•	cycle start / cycle end,
+	•	Stripe subscription status or a simple “active/inactive” flag.
+	•	Implement endpoint:
+
+// GET /api/admin/subscriptions
+app.get("/api/admin/subscriptions", requireAdminAuth, async (req, res) => {
+  try {
+    // Reuse or adapt the existing helper that builds billing summary for the current user,
+    // but instead run it for ALL brokers.
+    // If no helper exists, write a query that joins brokers + brokerEntitlements
+    // and filters plan = 'PRO' and status = 'ACTIVE'.
+
+    const subscriptions = await db
+      .select({
+        brokerId: brokers.id,
+        email: brokers.email,
+        name: brokers.name,
+        plan: brokerEntitlements.plan,
+        loadsUsed: brokerEntitlements.loadsUsed,
+        includedLoads: brokerEntitlements.includedLoads,
+        cycleStartAt: brokerEntitlements.cycleStartAt,
+        cycleEndAt: brokerEntitlements.cycleEndAt,
+      })
+      .from(brokers)
+      .innerJoin(brokerEntitlements, eq(brokerEntitlements.brokerId, brokers.id))
+      .where(eq(brokerEntitlements.plan, "PRO"));
+
+    res.json({ subscriptions });
+  } catch (err) {
+    console.error("[Admin] Error fetching subscriptions", err);
+    res.status(500).json({ error: "Failed to fetch subscriptions" });
+  }
+});
+
+
+	•	Hook the Subscriptions tab UI to this endpoint and render the table:
+	•	Email, Name, Loads Used, Cycle End, Plan.
+
+No editing is strictly required here yet (editing is done in the Users tab).
+
+⸻
+
+	4.	ADMIN AUDIT LOGS
+
+⸻
+
+Goal: whenever the admin performs important changes (like editing entitlements, blocking a user, manually adjusting credits, creating a promotion), this must be recorded and visible in the Audit Logs tab.
+
+Backend:
+	•	In shared/schema.ts, define a new table:
+
+export const adminAuditLogs = pgTable("admin_audit_logs", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  adminEmail: text("admin_email").notNull(),
+  action: text("action").notNull(),
+  details: jsonb("details").notNull().default(sql`'{}'::jsonb`),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+
+	•	Create a small helper function in a shared backend util file, e.g. server/admin/audit.ts:
+
+export async function createAdminAuditLog(
+  adminEmail: string,
+  action: string,
+  details: any
+) {
+  await db.insert(adminAuditLogs).values({
+    adminEmail,
+    action,
+    details,
+  });
+}
+
+
+	•	Use this helper in all admin mutating endpoints you implement in this prompt:
+	•	updating user entitlements,
+	•	blocking / unblocking users,
+	•	creating / updating promotions (see next section).
+	•	Implement endpoint:
+
+// GET /api/admin/audit-logs
+app.get("/api/admin/audit-logs", requireAdminAuth, async (req, res) => {
+  try {
+    const logs = await db
+      .select()
+      .from(adminAuditLogs)
+      .orderBy(desc(adminAuditLogs.createdAt))
+      .limit(200); // keep it reasonable
+
+    res.json({ logs });
+  } catch (err) {
+    console.error("[Admin] Error fetching audit logs", err);
+    res.status(500).json({ error: "Failed to fetch audit logs" });
+  }
+});
+
+
+
+Frontend:
+	•	Wire the Audit Logs tab to call /api/admin/audit-logs and show a table:
+	•	Time (human-friendly),
+	•	Admin email,
+	•	Action,
+	•	Short JSON-stringified details (or formatted key/value list).
+
+⸻
+
+	5.	PROMOTIONS (COUPON CODES) – BASIC IMPLEMENTATION
+
+⸻
+
+Goal: Make the Promotions tab functional so that in future we can wire promo codes into the billing flow. For now we just need the admin part: create, list, toggle active/inactive.
+
+Backend:
+	•	In shared/schema.ts, add:
+
+export const promotionTypeEnum = pgEnum("promotion_type", ["PERCENT_DISCOUNT", "EXTRA_CREDITS"]);
+
+export const promotions = pgTable("promotions", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  code: text("code").notNull().unique(), // e.g. "PING2025"
+  description: text("description"),
+  type: promotionTypeEnum("type").notNull(),
+  value: integer("value").notNull(), // percent for PERCENT_DISCOUNT, credits for EXTRA_CREDITS
+  maxRedemptions: integer("max_redemptions"),
+  redemptionsCount: integer("redemptions_count").notNull().default(0),
+  startsAt: timestamp("starts_at", { withTimezone: true }),
+  endsAt: timestamp("ends_at", { withTimezone: true }),
+  active: boolean("active").notNull().default(true),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+
+	•	You DON’T need to implement the actual “apply promo code” logic for checkout now – just the admin CRUD.
+	•	Implement endpoints:
+
+// GET /api/admin/promotions
+// POST /api/admin/promotions
+// PATCH /api/admin/promotions/:id
+
+Requirements:
+	•	GET returns all promotions ordered by createdAt desc.
+	•	POST creates a new promotion. Request body can include:
+	•	code, description, type, value, maxRedemptions, startsAt, endsAt.
+	•	Validate basic things (non-empty code, value > 0).
+	•	PATCH can:
+	•	toggle active,
+	•	update description, dates, maxRedemptions, etc.
+	•	Every create/update must call createAdminAuditLog with appropriate action name and details.
+
+Frontend:
+	•	Wire Promotions tab to:
+	•	list promotions in the table with columns:
+	•	Code, Description, Value, Redemptions, Status (Active/Inactive).
+	•	the “+ New Promo” button opens a small form to create a promo (code, description, type, value).
+	•	each row has:
+	•	“Activate”/“Deactivate” toggle button,
+	•	optional “Edit” / pencil button to change description, dates, etc.
+	•	Use the API above.
+
+You do NOT need to show redemptions for now beyond redemptionsCount from the table.
+
+⸻
+
+	6.	BLOCKING BY EMAIL / PHONE / IP – MINIMAL VERSION
+
+⸻
+
+The user wants a way to quickly block problematic accounts (by email / phone / IP) from the admin.
+
+To avoid breaking existing flows, implement a minimal blocking mechanism:
+
+Schema:
+	•	Extend brokerEntitlements.status enum (if not already) so it clearly has "BLOCKED".
+	•	Add a new table in shared/schema.ts:
+
+export const brokerBlocklist = pgTable("broker_blocklist", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  brokerId: uuid("broker_id").references(() => brokers.id),
+  email: text("email"),
+  phone: text("phone"),
+  ip: text("ip"),
+  reason: text("reason"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+
+
+Backend:
+	•	In admin routes, implement:
+
+// POST /api/admin/users/:id/block
+// POST /api/admin/users/:id/unblock
+
+Behavior:
+	•	block:
+	•	set brokerEntitlements.status = "BLOCKED" for that broker,
+	•	insert into brokerBlocklist a row with brokerId + email + phone (if available) and reason from body,
+	•	create audit log entry.
+	•	unblock:
+	•	set brokerEntitlements.status = "ACTIVE" (only if previously BLOCKED),
+	•	create audit log entry.
+
+	•	Hook this status into existing auth / load creation logic only via a simple guard:
+	•	Before allowing a broker to create a new load or access core dashboard routes, check if their entitlements status is "BLOCKED". If blocked, return a 403 with a clear message like "Your PingPoint account is blocked. Contact support.".
+	•	DO NOT change Stripe billing or session creation logic.
+
+Frontend:
+	•	In the Users tab, show a badge for status and allow toggling via block/unblock buttons.
+
+⸻
+
+	7.	ENSURE NOTHING ELSE IS BROKEN
+
+⸻
+
+	•	After implementing these changes, run the dev server and verify:
+	•	Regular broker flows still work:
+	•	login,
+	•	creating a new load (including multiple pickup/delivery stops – DO NOT BREAK this logic),
+	•	tracking,
+	•	billing page & Stripe checkout, Stripe webhooks.
+	•	Admin flows:
+	•	/app/admin/login works with ADMIN_EMAILS, ADMIN_PASSWORD, JWT_SECRET.
+	•	/app/admin after login:
+	•	Users tab shows all brokers with correct plan / usage.
+	•	Editing a user updates entitlements and is reflected on the broker’s billing page.
+	•	Blocking a user prevents them from creating new loads, unblocking restores access.
+	•	Subscriptions tab lists PRO subscriptions.
+	•	Audit Logs tab shows records for every admin action you performed during testing.
+	•	Promotions tab supports basic CRUD as described.
+
+If any previous “admin” code from the last prompt conflicts with this design (e.g. duplicate routes, unused models), clean it up, but ONLY in the admin-related parts. Do not touch non-admin features.
+
+Finally, format and type-check all modified TypeScript files.
+
