@@ -12,7 +12,6 @@ export const brokers = pgTable("brokers", {
   phone: text("phone"),
   timezone: text("timezone").default("Central (CT)"),
   emailVerified: boolean("email_verified").notNull().default(false),
-  isBlocked: boolean("is_blocked").notNull().default(false),
   referralCode: text("referral_code").unique(), // Personal referral code for sharing
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`now()`),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().default(sql`now()`),
@@ -349,27 +348,6 @@ export const adminAuditLogs = pgTable("admin_audit_logs", {
   metadata: text("metadata"), // JSON string for details
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`now()`),
 });
-
-// Blocked Entities - tracks block metadata for admin reference
-export const blockedEntities = pgTable("blocked_entities", {
-  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
-  brokerId: uuid("broker_id").notNull().references(() => brokers.id).unique(),
-  email: text("email").notNull(),
-  phone: text("phone"),
-  ip: text("ip"),
-  reason: text("reason"),
-  blockedBy: text("blocked_by").notNull(), // Admin email who blocked
-  active: boolean("active").notNull().default(true),
-  createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`now()`),
-  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().default(sql`now()`),
-});
-
-export const blockedEntitiesRelations = relations(blockedEntities, ({ one }) => ({
-  broker: one(brokers, {
-    fields: [blockedEntities.brokerId],
-    references: [brokers.id],
-  }),
-}));
 
 export const adminAuditLogsRelations = relations(adminAuditLogs, ({ one }) => ({
   actorBroker: one(brokers, {

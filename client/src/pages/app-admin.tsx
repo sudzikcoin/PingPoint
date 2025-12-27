@@ -25,7 +25,6 @@ interface AdminUser {
   name: string;
   phone: string | null;
   emailVerified: boolean;
-  blocked: boolean;
   createdAt: string;
   plan: string;
   loadsUsed: number;
@@ -121,66 +120,31 @@ export default function AppAdmin() {
     }
   };
 
-  // Custom query function for admin routes that handles 401
-  const adminQueryFn = async (url: string) => {
-    const res = await fetch(url, { credentials: "include" });
-    if (res.status === 401) {
-      setLocation("/app/admin/login");
-      throw new Error("Unauthorized");
-    }
-    if (!res.ok) {
-      throw new Error(`Failed to fetch: ${res.status}`);
-    }
-    return res.json();
-  };
-
   const { data: usersData, isLoading: usersLoading } = useQuery<{ items: AdminUser[]; total: number }>({
-    queryKey: ["admin", "users"],
-    queryFn: () => adminQueryFn("/api/admin/users"),
-    enabled: activeTab === "users" && authorized && !authChecking,
+    queryKey: ["/api/admin/users"],
+    enabled: activeTab === "users",
   });
 
   const { data: subscriptionsData } = useQuery<{ subscriptions: Subscription[] }>({
-    queryKey: ["admin", "subscriptions"],
-    queryFn: () => adminQueryFn("/api/admin/subscriptions"),
-    enabled: activeTab === "subscriptions" && authorized && !authChecking,
+    queryKey: ["/api/admin/subscriptions"],
+    enabled: activeTab === "subscriptions",
   });
 
   const { data: logsData } = useQuery<{ items: AuditLog[] }>({
-    queryKey: ["admin", "logs"],
-    queryFn: () => adminQueryFn("/api/admin/logs"),
-    enabled: activeTab === "logs" && authorized && !authChecking,
+    queryKey: ["/api/admin/logs"],
+    enabled: activeTab === "logs",
   });
 
   const { data: promotionsData } = useQuery<{ promotions: Promotion[] }>({
-    queryKey: ["admin", "promotions"],
-    queryFn: () => adminQueryFn("/api/admin/promotions"),
-    enabled: activeTab === "promotions" && authorized && !authChecking,
+    queryKey: ["/api/admin/promotions"],
+    enabled: activeTab === "promotions",
   });
-
-  // Helper to handle 401 responses by redirecting to login
-  const handleAdminFetch = async (url: string, options: RequestInit = {}) => {
-    const headers: HeadersInit = { ...options.headers };
-    // Only set Content-Type for requests with a body
-    if (options.body) {
-      (headers as Record<string, string>)["Content-Type"] = "application/json";
-    }
-    const res = await fetch(url, {
-      ...options,
-      credentials: "include",
-      headers,
-    });
-    if (res.status === 401) {
-      setLocation("/app/admin/login");
-      throw new Error("Unauthorized");
-    }
-    return res;
-  };
 
   const addCreditsMutation = useMutation({
     mutationFn: async ({ userId, credits }: { userId: string; credits: number }) => {
-      const res = await handleAdminFetch(`/api/admin/users/${userId}/add-credits`, {
+      const res = await fetch(`/api/admin/users/${userId}/add-credits`, {
         method: "POST",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ credits }),
       });
       if (!res.ok) throw new Error("Failed to add credits");
@@ -188,20 +152,19 @@ export default function AppAdmin() {
     },
     onSuccess: () => {
       toast.success("Credits added successfully");
-      queryClient.invalidateQueries({ queryKey: ["admin", "users"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/users"] });
       setSelectedUser(null);
     },
-    onError: (error) => {
-      if (error.message !== "Unauthorized") {
-        toast.error("Failed to add credits");
-      }
+    onError: () => {
+      toast.error("Failed to add credits");
     },
   });
 
   const createPromoMutation = useMutation({
     mutationFn: async (promo: { code: string; description: string; discountType: string; discountValue: number }) => {
-      const res = await handleAdminFetch("/api/admin/promotions", {
+      const res = await fetch("/api/admin/promotions", {
         method: "POST",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify(promo),
       });
       if (!res.ok) throw new Error("Failed to create promotion");
@@ -209,16 +172,14 @@ export default function AppAdmin() {
     },
     onSuccess: () => {
       toast.success("Promotion created");
-      queryClient.invalidateQueries({ queryKey: ["admin", "promotions"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/promotions"] });
       setShowPromoForm(false);
       setPromoCode("");
       setPromoDescription("");
       setPromoValue("1");
     },
-    onError: (error) => {
-      if (error.message !== "Unauthorized") {
-        toast.error("Failed to create promotion");
-      }
+    onError: () => {
+      toast.error("Failed to create promotion");
     },
   });
 
