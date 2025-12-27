@@ -5,7 +5,8 @@ import { Input } from "@/components/ui/input";
 import { useTheme } from "@/context/theme-context";
 import { cn } from "@/lib/utils";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { useLocation } from "wouter";
 import { toast } from "sonner";
 import { 
   Users, 
@@ -14,7 +15,8 @@ import {
   Gift, 
   Shield, 
   Plus,
-  RefreshCw
+  RefreshCw,
+  LogOut
 } from "lucide-react";
 
 interface AdminUser {
@@ -72,6 +74,7 @@ type Tab = "users" | "subscriptions" | "logs" | "promotions";
 export default function AppAdmin() {
   const { theme } = useTheme();
   const queryClient = useQueryClient();
+  const [, setLocation] = useLocation();
   const [activeTab, setActiveTab] = useState<Tab>("users");
   const [selectedUser, setSelectedUser] = useState<AdminUser | null>(null);
   const [creditsToAdd, setCreditsToAdd] = useState("1");
@@ -80,6 +83,42 @@ export default function AppAdmin() {
   const [promoDescription, setPromoDescription] = useState("");
   const [promoType, setPromoType] = useState("FIXED_LOAD_CREDITS");
   const [promoValue, setPromoValue] = useState("1");
+  const [authChecking, setAuthChecking] = useState(true);
+  const [authorized, setAuthorized] = useState(false);
+  const [adminEmail, setAdminEmail] = useState<string | null>(null);
+
+  useEffect(() => {
+    const checkAdmin = async () => {
+      try {
+        const res = await fetch("/api/admin/me", { credentials: "include" });
+        if (!res.ok) {
+          setLocation("/app/admin/login");
+          return;
+        }
+        const data = await res.json();
+        if (!data.isAdmin) {
+          setLocation("/app/admin/login");
+          return;
+        }
+        setAuthorized(true);
+        setAdminEmail(data.email);
+      } catch (err) {
+        setLocation("/app/admin/login");
+      } finally {
+        setAuthChecking(false);
+      }
+    };
+    checkAdmin();
+  }, [setLocation]);
+
+  const handleLogout = async () => {
+    try {
+      await fetch("/api/admin/logout", { method: "POST", credentials: "include" });
+      setLocation("/app/admin/login");
+    } catch (err) {
+      toast.error("Logout failed");
+    }
+  };
 
   const { data: usersData, isLoading: usersLoading } = useQuery<{ items: AdminUser[]; total: number }>({
     queryKey: ["/api/admin/users"],
@@ -173,14 +212,55 @@ export default function AppAdmin() {
       : "bg-brand-bg border-brand-border text-white"
   );
 
+  if (authChecking) {
+    return (
+      <AppLayout>
+        <div className={cn(
+          "flex items-center justify-center min-h-[50vh]",
+          theme === "arcade90s" ? "text-arc-muted" : "text-brand-muted"
+        )}>
+          Checking admin access...
+        </div>
+      </AppLayout>
+    );
+  }
+
+  if (!authorized) {
+    return null;
+  }
+
   return (
     <AppLayout>
       <div className="max-w-6xl mx-auto space-y-6">
-        <div className="flex items-center gap-3">
-          <Shield className={cn("w-6 h-6", theme === "arcade90s" ? "text-arc-primary" : "text-brand-gold")} />
-          <h1 className={cn("text-2xl font-bold", theme === "arcade90s" ? "arcade-title arcade-pixel-font" : "text-white")}>
-            Admin Panel
-          </h1>
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <Shield className={cn("w-6 h-6", theme === "arcade90s" ? "text-arc-primary" : "text-brand-gold")} />
+            <h1 className={cn("text-2xl font-bold", theme === "arcade90s" ? "arcade-title arcade-pixel-font" : "text-white")}>
+              Admin Panel
+            </h1>
+            {adminEmail && (
+              <span className={cn(
+                "text-xs px-2 py-1 rounded",
+                theme === "arcade90s" ? "bg-arc-bg border border-arc-border text-arc-muted" : "bg-brand-bg border border-brand-border text-brand-muted"
+              )}>
+                {adminEmail}
+              </span>
+            )}
+          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleLogout}
+            className={cn(
+              theme === "arcade90s"
+                ? "border-arc-border text-arc-muted hover:text-arc-text hover:bg-arc-bg rounded-none"
+                : "border-brand-border text-brand-muted hover:text-white hover:bg-brand-bg"
+            )}
+            data-testid="button-admin-logout"
+          >
+            <LogOut className="w-4 h-4 mr-2" />
+            Logout
+          </Button>
         </div>
 
         <div className={cn("flex gap-1 p-1 rounded", theme === "arcade90s" ? "bg-arc-bg border border-arc-border" : "bg-brand-bg border border-brand-border")}>

@@ -14,6 +14,7 @@ import AppBilling from "@/pages/app-billing";
 import AppSettings from "@/pages/app-settings";
 import AppIntegrations from "@/pages/app-integrations";
 import AppAdmin from "@/pages/app-admin";
+import AppAdminLogin from "@/pages/app-admin-login";
 import VerifyPage from "@/pages/verify";
 import LoginPage from "@/pages/login";
 import LandingPage from "@/pages/landing";
@@ -42,6 +43,7 @@ function Router() {
       <Route path="/app/billing" component={AppBilling} />
       <Route path="/app/settings" component={AppSettings} />
       <Route path="/app/integrations" component={AppIntegrations} />
+      <Route path="/app/admin/login" component={AppAdminLogin} />
       <Route path="/app/admin" component={AppAdmin} />
 
       {/* Public Tracking */}
