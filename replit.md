@@ -21,6 +21,7 @@ Preferred communication style: Simple, everyday language.
 - **Frontend**: React 18 with Vite, Wouter for routing, React Query for server state, and React Context for theme management.
 - **Backend**: Express.js with TypeScript, providing RESTful APIs for brokers, loads, drivers, and tracking.
 - **Authentication**: JWT-based sessions for brokers (HTTP-only cookies) and token-based access for drivers and public tracking. Email verification for broker access.
+- **Admin Authentication**: Separate JWT-based admin session (pingpoint_admin_session cookie). Requires ADMIN_EMAIL, ADMIN_PASSWORD, and JWT_SECRET environment variables. 24-hour session expiry. Admin panel at /app/admin/login with protected data routes.
 - **Build Process**: Custom esbuild for server bundling and Vite for client-side.
 - **PWA Support**: Manifest and a comprehensive icon set for installability on mobile devices.
 - **Driver Mobile App**: A separate Expo/React Native application (`apps/driver-mobile`) acts as a WebView wrapper for the driver interface, providing background GPS tracking, deep linking, and an offline ping queue.
@@ -47,6 +48,7 @@ Preferred communication style: Simple, everyday language.
     - **Migrations**: Drizzle Kit for schema-first migrations, with auto-migration on server startup.
 - **API Design**: RESTful endpoints under `/api/*`.
 - **Security**: JWT secret from environment variables, secure and HTTP-only cookies, SameSite: lax for CSRF protection, rate limiting on critical endpoints.
+- **Admin Panel**: Protected admin dashboard at /app/admin with tabs for Users, Subscriptions, Audit Logs, and Promotions. Requires separate admin auth (not broker auth). Admin login disabled if ADMIN_EMAIL, ADMIN_PASSWORD, or JWT_SECRET is missing.
 - **Error Handling**: Centralized error handling and structured request logging.
 - **Testing**: Vitest with Supertest for API testing, covering key workflows like authentication, load management, and driver tracking.
 
