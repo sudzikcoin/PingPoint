@@ -209,13 +209,6 @@ export async function registerRoutes(
 
       console.log(`[Verify] Token valid for brokerId: ${verificationToken.brokerId}`);
 
-      // Check if broker is blocked
-      const brokerToVerify = await storage.getBroker(verificationToken.brokerId);
-      if (brokerToVerify?.isBlocked) {
-        console.log("[Verify] Broker is blocked");
-        return res.status(403).json({ error: "Account blocked by admin" });
-      }
-
       await storage.markTokenUsed(verificationToken.id);
       await storage.updateBroker(verificationToken.brokerId, { emailVerified: true });
 
@@ -245,12 +238,6 @@ export async function registerRoutes(
 
       if (!verificationToken || verificationToken.used || verificationToken.expiresAt < new Date()) {
         return res.redirect('/verify?error=expired');
-      }
-
-      // Check if broker is blocked
-      const brokerToVerifyGet = await storage.getBroker(verificationToken.brokerId);
-      if (brokerToVerifyGet?.isBlocked) {
-        return res.redirect('/verify?error=blocked');
       }
 
       await storage.markTokenUsed(verificationToken.id);
@@ -538,19 +525,9 @@ export async function registerRoutes(
       broker = await getBrokerFromRequest(req);
       let needsVerificationEmail = false;
       
-      // Check if broker is blocked
-      if (broker?.isBlocked) {
-        return res.status(403).json({ error: "Account blocked by admin" });
-      }
-      
       if (!broker) {
         const emailNormalized = brokerEmail.trim().toLowerCase();
         broker = await storage.getBrokerByEmail(emailNormalized) || null;
-        
-        // Check if broker is blocked
-        if (broker?.isBlocked) {
-          return res.status(403).json({ error: "Account blocked by admin" });
-        }
         
         if (!broker) {
           // Create new broker
@@ -1732,7 +1709,6 @@ export async function registerRoutes(
             name: broker.name,
             phone: broker.phone,
             emailVerified: broker.emailVerified,
-            blocked: broker.isBlocked || false,
             createdAt: broker.createdAt,
             plan: entitlement?.plan || "FREE",
             loadsUsed: entitlement?.loadsUsed || 0,
@@ -1783,7 +1759,6 @@ export async function registerRoutes(
         name: broker.name,
         phone: broker.phone,
         emailVerified: broker.emailVerified,
-        blocked: broker.isBlocked || false,
         createdAt: broker.createdAt,
         plan: entitlement?.plan || "FREE",
         loadsUsed: entitlement?.loadsUsed || 0,
@@ -1795,167 +1770,6 @@ export async function registerRoutes(
       });
     } catch (error) {
       console.error("Error in GET /api/admin/users/:id:", error);
-      return res.status(500).json({ error: "Internal server error" });
-    }
-  });
-
-  // PATCH /api/admin/users/:id - Update user profile and status
-  app.patch("/api/admin/users/:id", async (req: Request, res: Response) => {
-    try {
-      const admin = await requireAdminAuth(req);
-      if (!admin) {
-        return res.status(401).json({ error: "Admin auth required" });
-      }
-
-      const broker = await storage.getBroker(req.params.id);
-      if (!broker) {
-        return res.status(404).json({ error: "User not found" });
-      }
-
-      const { name, plan, isBlocked, reason } = req.body;
-      const changes: string[] = [];
-
-      // Update broker fields
-      const brokerUpdates: any = {};
-      if (name !== undefined && name !== broker.name) {
-        brokerUpdates.name = name;
-        changes.push(`name: ${broker.name} → ${name}`);
-      }
-      if (isBlocked !== undefined && isBlocked !== broker.isBlocked) {
-        brokerUpdates.isBlocked = isBlocked;
-        changes.push(`blocked: ${broker.isBlocked} → ${isBlocked}`);
-        
-        // Handle blocked entity tracking
-        if (isBlocked) {
-          await storage.upsertBlockedEntity({
-            brokerId: broker.id,
-            email: broker.email,
-            phone: broker.phone || undefined,
-            ip: req.ip || undefined,
-            reason: reason || undefined,
-            blockedBy: admin.email,
-          });
-        } else {
-          await storage.deactivateBlockedEntity(broker.id);
-        }
-      }
-
-      if (Object.keys(brokerUpdates).length > 0) {
-        await storage.updateBroker(broker.id, brokerUpdates);
-      }
-
-      // Update plan if specified
-      if (plan !== undefined) {
-        const entitlement = await storage.getBrokerEntitlement(broker.id);
-        if (entitlement && entitlement.plan !== plan) {
-          const includedLoads = plan === "PRO" ? 200 : 3;
-          await storage.updateBrokerEntitlement(broker.id, { plan, includedLoads });
-          changes.push(`plan: ${entitlement.plan} → ${plan}`);
-        }
-      }
-
-      // Log admin action
-      await storage.createAdminAuditLog({
-        actorBrokerId: null, // Admin is system-level, not a broker
-        actorEmail: admin.email,
-        targetBrokerId: broker.id,
-        action: isBlocked !== undefined ? (isBlocked ? "USER_BLOCK" : "USER_UNBLOCK") : "USER_UPDATE",
-        metadata: JSON.stringify({ changes, reason, adminIp: req.ip }),
-      });
-
-      // Return updated user data
-      const updatedBroker = await storage.getBroker(req.params.id);
-      const [entitlement, credits] = await Promise.all([
-        storage.getBrokerEntitlement(broker.id),
-        storage.getBrokerCredits(broker.id),
-      ]);
-
-      return res.json({
-        ok: true,
-        user: {
-          id: updatedBroker?.id,
-          email: updatedBroker?.email,
-          name: updatedBroker?.name,
-          blocked: updatedBroker?.isBlocked || false,
-          plan: entitlement?.plan || "FREE",
-          loadsUsed: entitlement?.loadsUsed || 0,
-          includedLoads: entitlement?.includedLoads || 3,
-          creditsBalance: credits?.creditsBalance || 0,
-        },
-      });
-    } catch (error) {
-      console.error("Error in PATCH /api/admin/users/:id:", error);
-      return res.status(500).json({ error: "Internal server error" });
-    }
-  });
-
-  // POST /api/admin/users/:id/credits - Adjust user credits (delta can be negative)
-  app.post("/api/admin/users/:id/credits", async (req: Request, res: Response) => {
-    try {
-      const admin = await requireAdminAuth(req);
-      if (!admin) {
-        return res.status(401).json({ error: "Admin auth required" });
-      }
-
-      const broker = await storage.getBroker(req.params.id);
-      if (!broker) {
-        return res.status(404).json({ error: "User not found" });
-      }
-
-      const { deltaCredits, reason } = req.body;
-      if (deltaCredits === undefined || deltaCredits === 0) {
-        return res.status(400).json({ error: "deltaCredits is required and cannot be zero" });
-      }
-
-      const updated = await storage.addBrokerCredits(broker.id, deltaCredits);
-
-      // Log admin action
-      await storage.createAdminAuditLog({
-        actorBrokerId: null,
-        actorEmail: admin.email,
-        targetBrokerId: broker.id,
-        action: "CREDITS_ADJUST",
-        metadata: JSON.stringify({ deltaCredits, reason, newBalance: updated?.creditsBalance, adminIp: req.ip }),
-      });
-
-      return res.json({ ok: true, credits: updated });
-    } catch (error) {
-      console.error("Error in POST /api/admin/users/:id/credits:", error);
-      return res.status(500).json({ error: "Internal server error" });
-    }
-  });
-
-  // POST /api/admin/users/:id/loads/reset - Reset user's loads used to 0
-  app.post("/api/admin/users/:id/loads/reset", async (req: Request, res: Response) => {
-    try {
-      const admin = await requireAdminAuth(req);
-      if (!admin) {
-        return res.status(401).json({ error: "Admin auth required" });
-      }
-
-      const broker = await storage.getBroker(req.params.id);
-      if (!broker) {
-        return res.status(404).json({ error: "User not found" });
-      }
-
-      const { reason } = req.body;
-      const entitlement = await storage.getBrokerEntitlement(broker.id);
-      const previousLoadsUsed = entitlement?.loadsUsed || 0;
-
-      const updated = await storage.resetBrokerLoadsUsed(broker.id);
-
-      // Log admin action
-      await storage.createAdminAuditLog({
-        actorBrokerId: null,
-        actorEmail: admin.email,
-        targetBrokerId: broker.id,
-        action: "LOADS_RESET",
-        metadata: JSON.stringify({ previousLoadsUsed, reason, adminIp: req.ip }),
-      });
-
-      return res.json({ ok: true, entitlement: updated });
-    } catch (error) {
-      console.error("Error in POST /api/admin/users/:id/loads/reset:", error);
       return res.status(500).json({ error: "Internal server error" });
     }
   });

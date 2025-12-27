@@ -10,7 +10,6 @@ import {
   activityLogs,
   brokerDevices,
   adminAuditLogs,
-  blockedEntities,
   promotions,
   promotionRedemptions,
   referrals,
@@ -131,13 +130,6 @@ export interface IStorage {
   getReferralByReferredId(referredId: string): Promise<Referral | undefined>;
   updateReferral(id: string, data: Partial<Referral>): Promise<Referral | undefined>;
   getReferralStats(brokerId: string): Promise<{ totalReferred: number; proSubscribed: number; loadsEarned: number }>;
-  
-  // Blocked entities operations
-  upsertBlockedEntity(data: { brokerId: string; email: string; phone?: string; ip?: string; reason?: string; blockedBy: string }): Promise<void>;
-  deactivateBlockedEntity(brokerId: string): Promise<void>;
-  
-  // Admin loads operations
-  resetBrokerLoadsUsed(brokerId: string): Promise<BrokerEntitlement | undefined>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -779,48 +771,6 @@ export class DatabaseStorage implements IStorage {
     const loadsEarned = allReferrals.reduce((sum, r) => sum + (r.referrerLoadsGranted || 0), 0);
     
     return { totalReferred, proSubscribed, loadsEarned };
-  }
-
-  async upsertBlockedEntity(data: { brokerId: string; email: string; phone?: string; ip?: string; reason?: string; blockedBy: string }): Promise<void> {
-    await db
-      .insert(blockedEntities)
-      .values({
-        brokerId: data.brokerId,
-        email: data.email,
-        phone: data.phone || null,
-        ip: data.ip || null,
-        reason: data.reason || null,
-        blockedBy: data.blockedBy,
-        active: true,
-      })
-      .onConflictDoUpdate({
-        target: blockedEntities.brokerId,
-        set: {
-          email: data.email,
-          phone: data.phone || null,
-          ip: data.ip || null,
-          reason: data.reason || null,
-          blockedBy: data.blockedBy,
-          active: true,
-          updatedAt: new Date(),
-        },
-      });
-  }
-
-  async deactivateBlockedEntity(brokerId: string): Promise<void> {
-    await db
-      .update(blockedEntities)
-      .set({ active: false, updatedAt: new Date() })
-      .where(eq(blockedEntities.brokerId, brokerId));
-  }
-
-  async resetBrokerLoadsUsed(brokerId: string): Promise<BrokerEntitlement | undefined> {
-    const [entitlement] = await db
-      .update(brokerEntitlements)
-      .set({ loadsUsed: 0 })
-      .where(eq(brokerEntitlements.brokerId, brokerId))
-      .returning();
-    return entitlement || undefined;
   }
 }
 
