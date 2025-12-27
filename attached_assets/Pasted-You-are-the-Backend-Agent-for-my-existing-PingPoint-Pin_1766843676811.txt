@@ -1,0 +1,141 @@
+You are the Backend Agent for my existing PingPoint (PinkPoint) project on Replit. The app, billing, and the admin panel UI at `/app/admin` are ALREADY WORKING and show correct lists of users and subscriptions. 
+
+I have just reverted the project to the version where:
+- The Users tab in `/app/admin` shows all users with their plan and credits.
+- The Subscriptions tab shows active PRO subscriptions.
+- The Promotions tab (if present) works as before.
+- The only thing missing is **real editing actions** for the admin.
+
+YOUR TASK
+Implement **admin editing functionality** for users (and log these actions), WITHOUT breaking existing listing logic or any non-admin flows.
+
+VERY IMPORTANT CONSTRAINTS
+- Do NOT change how the user and subscription lists are loaded if they already work. Keep the current queries and filters that populate the tables.
+- Do NOT remove or modify billing logic, Stripe integration, webhooks, or normal user flows (sign in, create load, buy plan/credits).
+- Do NOT change the admin authentication mechanism. It already works via `ADMIN_EMAILS` / `ADMIN_PASSWORD` / `JWT_SECRET`. Keep it exactly as is.
+- Prefer small, localized changes. No big refactors.
+
+GOAL FOR ADMIN PANEL
+From `/app/admin` an authenticated admin must be able to:
+1. Open the **Users** tab and for each user:
+   - Manually adjust extra load credits (e.g. +1, +10, or any custom number).
+   - Manually reset loads used for the current cycle to 0.
+   - Manually change the plan between FREE and PRO (for emergency corrections only).
+   - Optionally block/unblock a user (e.g. prevent login / usage) via a boolean flag.
+2. See these actions recorded in **Audit Logs**.
+3. Keep the **Subscriptions** and **Promotions** tabs working as before.
+
+STEP 1 — FIND MODELS / FIELDS
+1. Locate the ORM (Prisma or similar) schema file, e.g. `prisma/schema.prisma`.
+2. Identify:
+   - The user model (likely `User`).
+   - Fields used by billing such as:
+     - plan (FREE/PRO/etc.)
+     - loadsUsed or similar
+     - extraCredits or similar field for additional load credits
+     - any `blocked` / `isBlocked` field (if it exists).
+3. If there is no `blocked` field and it is easy to add, then:
+   - Add `blocked` Boolean field (default false) to the user model.
+   - Apply the usual migration command used in this project (e.g. `npx prisma migrate dev --name add_user_blocked`), using the existing DATABASE_URL.
+   - Do NOT remove or rename any existing fields.
+
+STEP 2 — ADMIN API ENDPOINTS FOR USER ACTIONS
+Create or update dedicated admin endpoints for user edits. For example, under `/api/admin/users` (or equivalent structure already used):
+
+1. `POST /api/admin/users/:userId/credits`
+   - Body: `{ "delta": number }` where delta can be positive or negative.
+   - Checks admin auth (reuse existing admin auth middleware).
+   - Loads the user by id.
+   - Updates the user’s extra credits field by adding `delta`.
+   - Returns updated user data.
+   - Writes an audit log entry: action `ADJUST_CREDITS`, with details like `user=<email>, delta=<delta>, newCredits=<value>`.
+
+2. `POST /api/admin/users/:userId/reset-loads`
+   - Body: `{}` (no additional data needed).
+   - Sets the user’s `loadsUsed` (or equivalent field used by the app) to 0 for the current cycle.
+   - Returns updated user data.
+   - Audit log action `RESET_LOADS`, details `user=<email>`.
+
+3. `POST /api/admin/users/:userId/plan`
+   - Body: `{ "plan": "FREE" | "PRO" }`.
+   - Updates the user’s plan field only.
+   - Does NOT automatically create or cancel Stripe subscriptions (this is for manual emergency corrections only).
+   - Returns updated user.
+   - Audit log action `CHANGE_PLAN`, details `user=<email>, plan=<plan>`.
+
+4. `POST /api/admin/users/:userId/block`
+   - Body: `{ "blocked": boolean }`.
+   - If `blocked` is true, mark the user as blocked; false = unblocked.
+   - Returns updated user.
+   - Audit log action `SET_BLOCKED`, details `user=<email>, blocked=<true|false>`.
+
+For all these endpoints:
+- Require admin auth.
+- Validate inputs and send clear JSON errors on bad data.
+- Use consistent JSON response structure that matches what the admin UI will consume.
+- Wrap DB operations in try/catch and log errors to the console without crashing the server.
+
+STEP 3 — AUDIT LOG MODEL AND API
+If an `AuditLog` model already exists, reuse it. If not, add a minimal one:
+
+- `id` (string/UUID/cuid, primary key)
+- `createdAt` DateTime default now
+- `adminEmail` string
+- `action` string
+- `details` string (optional but recommended)
+
+Then:
+
+1. Create a helper function, e.g. `recordAuditLog(adminEmail, action, details)` that:
+   - Inserts an `AuditLog` record.
+   - Is called by all admin user-edit endpoints above.
+
+2. Ensure there is a `GET /api/admin/audit-logs` endpoint that:
+   - Requires admin auth.
+   - Returns the last N (e.g. 100) logs ordered by `createdAt desc`.
+   - The existing Audit Logs tab already calls some endpoint; adapt this handler to what the UI expects, instead of changing the UI if possible.
+
+STEP 4 — WIRE FRONTEND ADMIN UI TO THE NEW ENDPOINTS
+Focus on `app/admin` (or equivalent) React/Next components. The list views ALREADY WORK; don’t break them.
+
+1. In the **Users** tab component:
+   - Keep the existing fetch that loads the user list.
+   - For each row, add an **Actions** UI:
+     - This can be a small button “Manage” that opens a modal, OR a simple dropdown menu next to the user row.
+   - In that UI allow:
+     - Input field to add/subtract credits and a button “Apply”.
+     - Buttons:
+       - “Reset loads”
+       - “Set plan FREE”
+       - “Set plan PRO”
+       - “Block user” / “Unblock user” (depending on current state).
+   - On click, call the corresponding admin endpoints from Step 2 using `fetch` or the existing API helper.
+   - After a successful response, refresh the users list in the table so the changes are visible immediately.
+
+2. In the **Audit Logs** tab:
+   - Ensure it calls the `GET /api/admin/audit-logs` endpoint and displays returned logs (Time, Admin, Action, Details).
+   - If the tab is already implemented, just make sure the endpoint path and response shape match what it expects.
+
+3. Make sure admin-only UI (buttons, modals) is NOT rendered or usable outside the `/app/admin` context.
+
+STEP 5 — NON-ADMIN FLOW SAFETY CHECK
+After you implement everything:
+
+1. Start the dev server and test as a **regular user**:
+   - Sign in, open billing, create a load, etc. Everything must still work exactly as before.
+2. Then log out and log in as admin at `/app/admin/login`:
+   - Open `/app/admin`:
+     - Users list appears as before.
+     - Click “Manage” on some test user:
+       - Add +5 credits → table updates and credits field increases.
+       - Reset loads → loads used becomes 0.
+       - Change plan FREE/PRO → table shows updated plan.
+       - Block user → some indicator in the row that user is blocked.
+     - Go to Audit Logs tab → log entries appear for each action above with correct admin email and details.
+3. Confirm that calling admin endpoints without admin token returns 401/403.
+
+Do NOT touch any Stripe webhook handlers, subscription creation logic, or existing non-admin APIs unless there is an obvious compile/runtime error.
+
+Finally, print a short summary to the console of:
+- Which files you changed.
+- Which admin actions are now available from the Users table.

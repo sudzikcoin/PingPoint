@@ -16,7 +16,10 @@ import {
   Shield, 
   Plus,
   RefreshCw,
-  LogOut
+  LogOut,
+  Ban,
+  RotateCcw,
+  Settings
 } from "lucide-react";
 
 interface AdminUser {
@@ -222,6 +225,69 @@ export default function AppAdmin() {
     },
   });
 
+  const resetLoadsMutation = useMutation({
+    mutationFn: async ({ userId }: { userId: string }) => {
+      const res = await handleAdminFetch(`/api/admin/users/${userId}/loads/reset`, {
+        method: "POST",
+        body: JSON.stringify({}),
+      });
+      if (!res.ok) throw new Error("Failed to reset loads");
+      return res.json();
+    },
+    onSuccess: () => {
+      toast.success("Loads reset successfully");
+      queryClient.invalidateQueries({ queryKey: ["admin", "users"] });
+      setSelectedUser(null);
+    },
+    onError: (error) => {
+      if (error.message !== "Unauthorized") {
+        toast.error("Failed to reset loads");
+      }
+    },
+  });
+
+  const changePlanMutation = useMutation({
+    mutationFn: async ({ userId, plan }: { userId: string; plan: string }) => {
+      const res = await handleAdminFetch(`/api/admin/users/${userId}`, {
+        method: "PATCH",
+        body: JSON.stringify({ plan }),
+      });
+      if (!res.ok) throw new Error("Failed to change plan");
+      return res.json();
+    },
+    onSuccess: () => {
+      toast.success("Plan updated successfully");
+      queryClient.invalidateQueries({ queryKey: ["admin", "users"] });
+      setSelectedUser(null);
+    },
+    onError: (error) => {
+      if (error.message !== "Unauthorized") {
+        toast.error("Failed to change plan");
+      }
+    },
+  });
+
+  const blockUserMutation = useMutation({
+    mutationFn: async ({ userId, isBlocked, reason }: { userId: string; isBlocked: boolean; reason?: string }) => {
+      const res = await handleAdminFetch(`/api/admin/users/${userId}`, {
+        method: "PATCH",
+        body: JSON.stringify({ isBlocked, reason }),
+      });
+      if (!res.ok) throw new Error("Failed to update block status");
+      return res.json();
+    },
+    onSuccess: (_, variables) => {
+      toast.success(variables.isBlocked ? "User blocked" : "User unblocked");
+      queryClient.invalidateQueries({ queryKey: ["admin", "users"] });
+      setSelectedUser(null);
+    },
+    onError: (error) => {
+      if (error.message !== "Unauthorized") {
+        toast.error("Failed to update block status");
+      }
+    },
+  });
+
   const cardClasses = cn(
     theme === "arcade90s" 
       ? "arcade-panel border-arc-border rounded-none" 
@@ -351,6 +417,7 @@ export default function AppAdmin() {
                         <th className="text-left py-2 px-2">Plan</th>
                         <th className="text-left py-2 px-2">Loads Used</th>
                         <th className="text-left py-2 px-2">Credits</th>
+                        <th className="text-left py-2 px-2">Status</th>
                         <th className="text-left py-2 px-2">Actions</th>
                       </tr>
                     </thead>
@@ -384,6 +451,17 @@ export default function AppAdmin() {
                             {user.creditsBalance}
                           </td>
                           <td className="py-2 px-2">
+                            {user.blocked ? (
+                              <span className="px-2 py-0.5 rounded text-xs font-medium bg-red-500/20 text-red-400">
+                                Blocked
+                              </span>
+                            ) : (
+                              <span className="px-2 py-0.5 rounded text-xs font-medium bg-green-500/20 text-green-400">
+                                Active
+                              </span>
+                            )}
+                          </td>
+                          <td className="py-2 px-2">
                             <Button
                               size="sm"
                               variant="outline"
@@ -394,10 +472,10 @@ export default function AppAdmin() {
                                   ? "border-arc-secondary text-arc-secondary hover:bg-arc-secondary/10 rounded-none" 
                                   : "border-brand-gold text-brand-gold hover:bg-brand-gold/10"
                               )}
-                              data-testid={`button-add-credits-${user.id}`}
+                              data-testid={`button-manage-user-${user.id}`}
                             >
-                              <Plus className="w-3 h-3 mr-1" />
-                              Add Credits
+                              <Settings className="w-3 h-3 mr-1" />
+                              Manage
                             </Button>
                           </td>
                         </tr>
