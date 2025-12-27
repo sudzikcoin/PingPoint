@@ -55,7 +55,7 @@ export function isAdminSession(req: Request): boolean {
   return getAdminFromRequest(req) !== null;
 }
 
-export function requireAdmin(req: Request, res: Response, next: NextFunction): void {
+export function requireAdminMiddleware(req: Request, res: Response, next: NextFunction): void {
   if (!isAdminConfigured()) {
     res.status(503).json({ error: "Admin login not configured" });
     return;
@@ -76,4 +76,23 @@ export function validateAdminCredentials(email: string, password: string): boole
     email.toLowerCase() === adminConfig.ADMIN_EMAIL.toLowerCase() &&
     password === adminConfig.ADMIN_PASSWORD
   );
+}
+
+export interface AdminInfo {
+  id: string;
+  email: string;
+  isAdmin: boolean;
+}
+
+export async function requireAdminAuth(req: Request): Promise<AdminInfo | null> {
+  if (!isAdminConfigured()) return null;
+  
+  const session = getAdminFromRequest(req);
+  if (!session) return null;
+  
+  return {
+    id: "admin",
+    email: session.email,
+    isAdmin: true,
+  };
 }

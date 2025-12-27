@@ -1,7 +1,9 @@
 import type { Express, Request, Response } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { createBrokerSession, getBrokerFromRequest, clearBrokerSession, getOrCreateTrustedDevice, getTrustedDevice, requireAdmin, isAdminEmail, getBrokerWithAdminFromRequest } from "./auth";
+import { createBrokerSession, getBrokerFromRequest, clearBrokerSession, getOrCreateTrustedDevice, getTrustedDevice, isAdminEmail, getBrokerWithAdminFromRequest } from "./auth";
+import { requireAdminAuth, createAdminSession, clearAdminSession, getAdminFromRequest, validateAdminCredentials } from "./admin/adminAuth";
+import { isAdminConfigured } from "./config/env";
 import { randomBytes } from "crypto";
 import { insertLoadSchema, insertStopSchema } from "@shared/schema";
 import { z } from "zod";
@@ -1626,15 +1628,62 @@ export async function registerRoutes(
   });
 
   // =============================================
-  // ADMIN API ROUTES
+  // ADMIN AUTH ROUTES
+  // =============================================
+
+  // POST /api/admin/login
+  app.post("/api/admin/login", async (req: Request, res: Response) => {
+    try {
+      const { email, password } = req.body || {};
+
+      if (!isAdminConfigured()) {
+        return res.status(503).json({ error: "Admin login not configured" });
+      }
+
+      if (!email || !password) {
+        return res.status(400).json({ error: "Email and password are required" });
+      }
+
+      if (validateAdminCredentials(email, password)) {
+        createAdminSession(email, res);
+        return res.json({ ok: true, email });
+      }
+
+      return res.status(401).json({ error: "Invalid admin credentials" });
+    } catch (error) {
+      console.error("Error in POST /api/admin/login:", error);
+      return res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  // POST /api/admin/logout
+  app.post("/api/admin/logout", (req: Request, res: Response) => {
+    clearAdminSession(res);
+    return res.json({ ok: true });
+  });
+
+  // GET /api/admin/me
+  app.get("/api/admin/me", (req: Request, res: Response) => {
+    const admin = getAdminFromRequest(req);
+    if (admin) {
+      return res.json({
+        isAdmin: true,
+        email: admin.email,
+      });
+    }
+    return res.status(401).json({ isAdmin: false });
+  });
+
+  // =============================================
+  // ADMIN DATA ROUTES (Protected)
   // =============================================
 
   // GET /api/admin/users - List all brokers with billing info
   app.get("/api/admin/users", async (req: Request, res: Response) => {
     try {
-      const admin = await requireAdmin(req);
+      const admin = await requireAdminAuth(req);
       if (!admin) {
-        return res.status(403).json({ error: "Admin access required" });
+        return res.status(401).json({ error: "Admin auth required" });
       }
 
       const page = Math.max(1, parseInt(req.query.page as string) || 1);
@@ -1686,7 +1735,7 @@ export async function registerRoutes(
   // GET /api/admin/users/:id - Get single user details
   app.get("/api/admin/users/:id", async (req: Request, res: Response) => {
     try {
-      const admin = await requireAdmin(req);
+      const admin = await requireAdminAuth(req);
       if (!admin) {
         return res.status(403).json({ error: "Admin access required" });
       }
@@ -1726,7 +1775,7 @@ export async function registerRoutes(
   // POST /api/admin/users/:id/update-usage - Update user billing/usage
   app.post("/api/admin/users/:id/update-usage", async (req: Request, res: Response) => {
     try {
-      const admin = await requireAdmin(req);
+      const admin = await requireAdminAuth(req);
       if (!admin) {
         return res.status(403).json({ error: "Admin access required" });
       }
@@ -1765,7 +1814,7 @@ export async function registerRoutes(
   // POST /api/admin/users/:id/add-credits - Add load credits
   app.post("/api/admin/users/:id/add-credits", async (req: Request, res: Response) => {
     try {
-      const admin = await requireAdmin(req);
+      const admin = await requireAdminAuth(req);
       if (!admin) {
         return res.status(403).json({ error: "Admin access required" });
       }
@@ -1801,7 +1850,7 @@ export async function registerRoutes(
   // GET /api/admin/subscriptions - Get all active subscriptions
   app.get("/api/admin/subscriptions", async (req: Request, res: Response) => {
     try {
-      const admin = await requireAdmin(req);
+      const admin = await requireAdminAuth(req);
       if (!admin) {
         return res.status(403).json({ error: "Admin access required" });
       }
@@ -1830,7 +1879,7 @@ export async function registerRoutes(
   // GET /api/admin/logs - Get admin audit logs
   app.get("/api/admin/logs", async (req: Request, res: Response) => {
     try {
-      const admin = await requireAdmin(req);
+      const admin = await requireAdminAuth(req);
       if (!admin) {
         return res.status(403).json({ error: "Admin access required" });
       }
@@ -1857,7 +1906,7 @@ export async function registerRoutes(
   // GET /api/admin/promotions - Get all promotions
   app.get("/api/admin/promotions", async (req: Request, res: Response) => {
     try {
-      const admin = await requireAdmin(req);
+      const admin = await requireAdminAuth(req);
       if (!admin) {
         return res.status(403).json({ error: "Admin access required" });
       }
@@ -1873,7 +1922,7 @@ export async function registerRoutes(
   // POST /api/admin/promotions - Create promotion
   app.post("/api/admin/promotions", async (req: Request, res: Response) => {
     try {
-      const admin = await requireAdmin(req);
+      const admin = await requireAdminAuth(req);
       if (!admin) {
         return res.status(403).json({ error: "Admin access required" });
       }
@@ -1912,7 +1961,7 @@ export async function registerRoutes(
   // GET /api/admin/referrals - Get all referrals
   app.get("/api/admin/referrals", async (req: Request, res: Response) => {
     try {
-      const admin = await requireAdmin(req);
+      const admin = await requireAdminAuth(req);
       if (!admin) {
         return res.status(403).json({ error: "Admin access required" });
       }
@@ -1944,7 +1993,7 @@ export async function registerRoutes(
   // POST /api/admin/referrals - Create referral code
   app.post("/api/admin/referrals", async (req: Request, res: Response) => {
     try {
-      const admin = await requireAdmin(req);
+      const admin = await requireAdminAuth(req);
       if (!admin) {
         return res.status(403).json({ error: "Admin access required" });
       }
