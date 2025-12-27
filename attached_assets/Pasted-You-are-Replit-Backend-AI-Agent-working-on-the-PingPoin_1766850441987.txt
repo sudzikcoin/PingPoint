@@ -1,0 +1,255 @@
+You are Replit Backend AI Agent working on the PingPoint project (Next.js App Router + TypeScript + Tailwind + Prisma + Express/Node backend, Stripe billing, Admin panel at /app/admin). Your goal: ADD a full admin “User details / editor” flow WITHOUT breaking existing logic (billing, Stripe webhooks, normal broker flows, existing admin list pages).
+
+GENERAL RULES
+- Make minimal, localized changes. Re-use existing models, helpers and styles.
+- Do NOT change any Stripe keys, prices, webhooks, or subscription logic.
+- Keep existing admin login (ADMIN_EMAIL(S)/ADMIN_PASSWORD/JWT_SECRET) exactly as it is.
+- If something already exists (models/routes/helpers) – extend it instead of creating duplicates.
+- TypeScript must compile, Prisma generate must succeed, and the app must run with `npm run dev`.
+
+==================================================
+1. UNDERSTAND CURRENT ADMIN IMPLEMENTATION
+==================================================
+1.1. Find the current admin files. Look for:
+- `app/admin/page.tsx`
+- any subroutes like `app/admin/(...)`
+- API routes under `app/api/admin/**` or `pages/api/admin/**`
+- existing Audit Logs implementation and Promotions.
+
+1.2. Find how users and billing are represented:
+- Prisma models for broker users, e.g. `User`, `Broker`, `Account`, `BillingSummary`, or similar.
+- Look at route used by admin Users tab (search for `ALL USERS`, `PRO subscriptions`, `Active Pro Subscriptions`, etc.).
+- Look at `/api/billing/summary` (or similar) to understand how `includedLoads`, `loadsUsed`, `creditsBalance`, `plan`, `cycleStartAt`, `cycleEndAt` are stored or computed.
+
+1.3. Find where “loads” / “shipments” / “routes” are stored:
+- Prisma models for loads (e.g. `Load`, `Shipment`, `Stop`, `Location`).
+- Relation between loads and broker user (likely `userId` or `brokerId`).
+- Confirm which tables you will need for “view loads of this broker”.
+
+Do NOT modify schemas until you understand what already exists.
+
+==================================================
+2. PRISMA MODEL UPDATES (MINIMAL)
+==================================================
+2.1. If not already present, extend the main user/broker model to support blocking:
+- Add a boolean flag with default false, e.g.:
+
+  - If model is `User`:
+    ```prisma
+    model User {
+      id          String   @id @default(cuid())
+      email       String   @unique
+      name        String?
+      phone       String?
+      // ...
+      isBlocked   Boolean  @default(false)
+      // ...
+    }
+    ```
+  - If there is already some status field (e.g. `status`, `disabled`, `isActive`), REUSE that instead of creating a new one.
+
+2.2. Create or re-use an admin audit log model.
+- If a model like `AdminAuditLog` already exists, use it.
+- Otherwise add:
+
+  ```prisma
+  model AdminAuditLog {
+    id        String   @id @default(cuid())
+    createdAt DateTime @default(now())
+    adminEmail String
+    action     String   // short key: "BLOCK_USER", "UNBLOCK_USER", "UPDATE_LOAD_LIMITS", "UPDATE_PROFILE", "EXPORT_CSV"
+    details    String   // JSON string or human readable description
+    targetUserId String?
+    targetUser  User? @relation(fields: [targetUserId], references: [id])
+  }
+
+2.3. Run npx prisma migrate dev --name admin_user_controls and npx prisma generate.
+
+==================================================
+3. API LAYER – ADMIN USER MANAGEMENT
+
+Create typed admin API routes to support the new UI. Use the existing auth middleware for admin (JWT / cookie) if present.
+
+3.1. Admin – list users (if already exists, just extend)
+	•	Locate the route that powers the “All Users” list (Users tab).
+	•	Ensure it returns for each user:
+	•	id, email, name, phone (if exists)
+	•	plan / subscription type
+	•	loadsUsed, includedLoads, creditsBalance (from billing system)
+	•	isBlocked flag
+	•	Do NOT change the current response shape used by the table; only ADD fields used for actions/labels.
+
+3.2. Admin – get single user
+	•	Create app/api/admin/users/[userId]/route.ts (or pages/api/admin/users/[userId].ts if still on pages router) with at least GET and PATCH:
+
+GET:
+	•	Validate admin auth.
+	•	userId from route param.
+	•	Fetch:
+	•	user (id, email, name, phone, createdAt, isBlocked, any profile fields).
+	•	billing summary used in the dashboard (plan, cycleStartAt, cycleEndAt, includedLoads, loadsUsed, creditsBalance).
+	•	list of loads/shipments associated with this user (limit 100, order by createdAt desc). For each load return:
+	•	id
+	•	reference/rate confirmation #
+	•	createdAt
+	•	pickup city/state/zip
+	•	delivery city/state/zip
+	•	total rate / rpm if available
+	•	status
+
+Return JSON:
+
+{
+  user: {...},
+  billing: {...},
+  loads: [...],
+}
+
+PATCH:
+	•	Validate admin auth.
+	•	Accept partial payload:
+
+{
+  name?: string;
+  phone?: string;
+  email?: string; // optional, handle carefully if unique
+  isBlocked?: boolean;
+  loadsUsed?: number;          // override current loads used
+  includedLoads?: number;      // override included loads in cycle if supported by billing model
+  creditsBalance?: number;     // override extra credits
+}
+
+
+	•	ONLY apply fields that are present.
+	•	If email changes, enforce uniqueness and also update any dependent tables if needed (e.g. if you index by email in billing).
+	•	When loads/billing values are updated, use whatever model is used in /api/billing/summary to persist those numbers (e.g. update UserBilling, LoadCounter, etc.).
+	•	Create an AdminAuditLog entry describing what changed, including old vs new values and targetUserId.
+
+3.3. Admin – export broker CSV
+	•	Add GET handler at app/api/admin/users/[userId]/export/route.ts (or similar).
+	•	Validate admin auth.
+	•	Fetch user + all loads/shipments for that user.
+	•	Build CSV string with headers like:
+Load ID,Created At,Pickup Facility,Pickup City,Pickup State,Pickup ZIP,Delivery Facility,Delivery City,Delivery State,Delivery ZIP,Rate,Total Miles,RPM,Status
+	•	Use Content-Type: text/csv and Content-Disposition: attachment; filename="broker-<sanitized-email>-loads.csv".
+	•	Log the action in AdminAuditLog with action EXPORT_CSV.
+
+3.4. Admin – audit log API
+	•	If not yet implemented, create /api/admin/audit-logs:
+	•	GET: list last N entries (e.g. 100) ordered by createdAt desc.
+	•	Return: createdAt, adminEmail, action, details, targetUserId (+ target user email if joined).
+	•	Use this route to feed the Audit Logs tab.
+
+==================================================
+4. FRONTEND – ADMIN USER DETAIL PAGE
+
+We need a dedicated page that opens when clicking a user in the Users table.
+
+4.1. Routing
+	•	Under app/admin, create a dynamic route folder:
+	•	app/admin/users/[userId]/page.tsx using Next App Router conventions.
+	•	Keep styling in the same neon/black PingPoint theme (reuse existing components, typography, tables, buttons).
+
+4.2. Navigation from User list
+	•	In the Users table (on /app/admin in the Users tab):
+	•	Add an “Actions” column (if not already).
+	•	For each user row, add a small button/link “Manage” that routes to /app/admin/users/{id}.
+	•	Do NOT make the whole row clickable if that breaks current UX; button is safer.
+	•	Do not break current Users tab layout.
+
+4.3. User detail UI – layout
+In app/admin/users/[userId]/page.tsx:
+
+Sections:
+
+(A) Header
+	•	Show email + plan badge (FREE/PRO).
+	•	Show status chip: “Active” or “Blocked”.
+	•	Show short summary line: “Loads used: X / Y · Extra credits: Z”.
+
+(B) Profile card
+	•	Editable fields:
+	•	Name (text input)
+	•	Email (text input – optional, show warning “Changing email may affect login; use carefully”)
+	•	Phone (text input)
+	•	“Save profile” button.
+	•	On submit, call PATCH /api/admin/users/[userId] with updated fields; show success/error toast.
+	•	All requests must include admin auth token (reuse existing admin fetch hook or just rely on HTTP-only cookie/JWT used elsewhere in admin).
+
+(C) Account controls card
+	•	Controls:
+	•	Toggle “Blocked / Active”:
+	•	Switch or button: if active, show “Block user”; if blocked, show “Unblock user”.
+	•	Confirm via small modal before blocking.
+	•	On change, call PATCH with isBlocked.
+	•	Load / credits editor:
+	•	Inputs:
+	•	Loads used (number)
+	•	Included loads (number)
+	•	Extra credits (number)
+	•	Prefill with current values from backend.
+	•	Buttons:
+	•	“Save load limits” → PATCH with loadsUsed, includedLoads, creditsBalance.
+	•	Optionally a “Reset loads for current cycle” button that sets loadsUsed = 0 (but do not change cycle dates).
+	•	Show createdAt and last login (if available from schema; if not, omit).
+
+(D) Loads table
+	•	Table listing last ~50 loads for this broker:
+	•	Columns: ID, Created At, Pickup → Delivery (city, state), Rate, Status.
+	•	Data from GET /api/admin/users/[userId] (loads array).
+	•	Use existing table components if available.
+
+(E) CSV export
+	•	Button “Export loads CSV” at the top of the Loads section.
+	•	On click, call /api/admin/users/[userId]/export and trigger file download (in browser: window.location.href = ... or fetch + blob).
+	•	No special UI beyond a toast (“Export started” / error).
+
+==================================================
+5. FRONTEND – AUDIT LOGS & SUBSCRIPTIONS TABS
+
+5.1. Audit Logs tab
+	•	Wire existing “Audit Logs” tab UI to the new /api/admin/audit-logs route.
+	•	Display:
+	•	Time (formatted)
+	•	Admin email
+	•	Action (humanized: “Blocked user”, “Unblocked user”, “Updated load limits”, “Exported CSV”, etc.)
+	•	Details (truncate long strings, with tooltip / click to expand).
+	•	Every admin action implemented above must create a log entry.
+
+5.2. Subscriptions tab (NO MAJOR CHANGES)
+	•	Keep current list of active PRO subscriptions as is.
+	•	Optionally, add a “Manage” button in each row that routes to /app/admin/users/{userId} (if userId is available; otherwise leave as is).
+
+==================================================
+6. RESPECT EXISTING BUSINESS LOGIC
+
+6.1. Do NOT change:
+	•	How billing cycles are computed.
+	•	How Stripe webhooks write subscription/credit data.
+	•	How normal brokers create and use loads.
+
+6.2. Blocking behaviour
+	•	If isBlocked (or equivalent) is true:
+	•	Prevent broker from creating new loads and from upgrading subscription (wherever it makes sense).
+	•	Do NOT break existing sessions; just show clear error message on restricted actions.
+	•	Keep user data intact; blocking is soft.
+
+==================================================
+7. TESTING & CLEANUP
+
+7.1. Testing scenarios
+	•	Log in as admin and:
+	•	Open /app/admin → Users → click “Manage” → verify detail page loads with data.
+	•	Edit name/phone → Save → refresh → values persist.
+	•	Block user → then try to perform broker actions as that user (creating loads); confirm blocked behaviour (use existing auth flows).
+	•	Adjust loads / credits → verify the main Billing page for that broker reflects updated values.
+	•	Export CSV → file downloads with correct headers and values.
+	•	Check Audit Logs tab → see entries for all above actions.
+
+7.2. Ensure:
+	•	TypeScript builds: npm run lint / npm run build (if present).
+	•	npm run dev runs with no runtime errors on basic flows:
+	•	Broker signup/login, create load, Billing page, Admin panel.
+
+Do all of the above now, using the existing codebase as the source of truth for naming, paths, and models. Keep changes minimal and consistent with current PingPoint style and architecture.
+

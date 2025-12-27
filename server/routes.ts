@@ -1734,7 +1734,7 @@ export async function registerRoutes(
     }
   });
 
-  // GET /api/admin/users/:id - Get single user details
+  // GET /api/admin/users/:id - Get single user details with loads
   app.get("/api/admin/users/:id", async (req: Request, res: Response) => {
     try {
       const admin = await requireAdminAuth(req);
@@ -1747,29 +1747,206 @@ export async function registerRoutes(
         return res.status(404).json({ error: "User not found" });
       }
 
-      const [entitlement, credits, totalLoads] = await Promise.all([
+      const [entitlement, credits, totalLoads, loadsResult] = await Promise.all([
         storage.getBrokerEntitlement(broker.id),
         storage.getBrokerCredits(broker.id),
         storage.getAllLoadsCount(broker.id),
+        storage.getLoadsByBrokerPaginated(broker.id, { limit: 50, offset: 0 }),
       ]);
 
+      const loadsWithStops = await Promise.all(
+        loadsResult.loads.map(async (load) => {
+          const stopsData = await storage.getStopsByLoad(load.id);
+          const pickup = stopsData.find(s => s.type === "PICKUP");
+          const delivery = stopsData.find(s => s.type === "DELIVERY");
+          return {
+            id: load.id,
+            loadNumber: load.loadNumber,
+            createdAt: load.createdAt,
+            status: load.status,
+            rateAmount: load.rateAmount,
+            pickupCity: pickup?.city,
+            pickupState: pickup?.state,
+            deliveryCity: delivery?.city,
+            deliveryState: delivery?.state,
+          };
+        })
+      );
+
       return res.json({
-        id: broker.id,
-        email: broker.email,
-        name: broker.name,
-        phone: broker.phone,
-        emailVerified: broker.emailVerified,
-        createdAt: broker.createdAt,
-        plan: entitlement?.plan || "FREE",
-        loadsUsed: entitlement?.loadsUsed || 0,
-        includedLoads: entitlement?.includedLoads || 3,
-        cycleStartAt: entitlement?.cycleStartAt,
-        cycleEndAt: entitlement?.cycleEndAt,
-        creditsBalance: credits?.creditsBalance || 0,
+        user: {
+          id: broker.id,
+          email: broker.email,
+          name: broker.name,
+          phone: broker.phone,
+          emailVerified: broker.emailVerified,
+          isBlocked: broker.isBlocked || false,
+          createdAt: broker.createdAt,
+        },
+        billing: {
+          plan: entitlement?.plan || "FREE",
+          loadsUsed: entitlement?.loadsUsed || 0,
+          includedLoads: entitlement?.includedLoads || 3,
+          cycleStartAt: entitlement?.cycleStartAt,
+          cycleEndAt: entitlement?.cycleEndAt,
+          creditsBalance: credits?.creditsBalance || 0,
+        },
+        loads: loadsWithStops,
         totalLoads,
       });
     } catch (error) {
       console.error("Error in GET /api/admin/users/:id:", error);
+      return res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  // PATCH /api/admin/users/:id - Update user profile
+  app.patch("/api/admin/users/:id", async (req: Request, res: Response) => {
+    try {
+      const admin = await requireAdminAuth(req);
+      if (!admin) {
+        return res.status(403).json({ error: "Admin access required" });
+      }
+
+      const broker = await storage.getBroker(req.params.id);
+      if (!broker) {
+        return res.status(404).json({ error: "User not found" });
+      }
+
+      const { name, phone, email } = req.body;
+      const updates: Partial<{ name: string; phone: string; email: string }> = {};
+      const changes: string[] = [];
+
+      if (name !== undefined && name !== broker.name) {
+        updates.name = name;
+        changes.push(`name: "${broker.name}" → "${name}"`);
+      }
+      if (phone !== undefined && phone !== broker.phone) {
+        updates.phone = phone;
+        changes.push(`phone: "${broker.phone || ''}" → "${phone || ''}"`);
+      }
+      if (email !== undefined && email !== broker.email) {
+        const existing = await storage.getBrokerByEmail(email);
+        if (existing && existing.id !== broker.id) {
+          return res.status(400).json({ error: "Email already in use by another user" });
+        }
+        updates.email = email;
+        changes.push(`email: "${broker.email}" → "${email}"`);
+      }
+
+      if (Object.keys(updates).length === 0) {
+        return res.json({ ok: true, message: "No changes" });
+      }
+
+      const updated = await storage.updateBroker(broker.id, updates);
+
+      await storage.createAdminAuditLog({
+        actorBrokerId: admin.id,
+        actorEmail: admin.email,
+        targetBrokerId: broker.id,
+        action: "UPDATE_PROFILE",
+        metadata: JSON.stringify({ changes }),
+      });
+
+      return res.json({ ok: true, user: updated });
+    } catch (error) {
+      console.error("Error in PATCH /api/admin/users/:id:", error);
+      return res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  // POST /api/admin/users/:id/block - Toggle user block status
+  app.post("/api/admin/users/:id/block", async (req: Request, res: Response) => {
+    try {
+      const admin = await requireAdminAuth(req);
+      if (!admin) {
+        return res.status(403).json({ error: "Admin access required" });
+      }
+
+      const broker = await storage.getBroker(req.params.id);
+      if (!broker) {
+        return res.status(404).json({ error: "User not found" });
+      }
+
+      const { isBlocked } = req.body;
+      if (typeof isBlocked !== "boolean") {
+        return res.status(400).json({ error: "isBlocked must be a boolean" });
+      }
+
+      const updated = await storage.updateBroker(broker.id, { isBlocked });
+
+      await storage.createAdminAuditLog({
+        actorBrokerId: admin.id,
+        actorEmail: admin.email,
+        targetBrokerId: broker.id,
+        action: isBlocked ? "BLOCK_USER" : "UNBLOCK_USER",
+        metadata: JSON.stringify({ previousStatus: broker.isBlocked, newStatus: isBlocked }),
+      });
+
+      return res.json({ ok: true, isBlocked: updated?.isBlocked });
+    } catch (error) {
+      console.error("Error in POST /api/admin/users/:id/block:", error);
+      return res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  // GET /api/admin/users/:id/export - Export user loads as CSV
+  app.get("/api/admin/users/:id/export", async (req: Request, res: Response) => {
+    try {
+      const admin = await requireAdminAuth(req);
+      if (!admin) {
+        return res.status(403).json({ error: "Admin access required" });
+      }
+
+      const broker = await storage.getBroker(req.params.id);
+      if (!broker) {
+        return res.status(404).json({ error: "User not found" });
+      }
+
+      const allLoads = await storage.getLoadsByBroker(broker.id);
+
+      const loadsWithStops = await Promise.all(
+        allLoads.map(async (load) => {
+          const stopsData = await storage.getStopsByLoad(load.id);
+          const pickup = stopsData.find(s => s.type === "PICKUP");
+          const delivery = stopsData.find(s => s.type === "DELIVERY");
+          return {
+            loadId: load.id,
+            loadNumber: load.loadNumber,
+            createdAt: load.createdAt?.toISOString() || "",
+            pickupName: pickup?.name || "",
+            pickupCity: pickup?.city || "",
+            pickupState: pickup?.state || "",
+            deliveryName: delivery?.name || "",
+            deliveryCity: delivery?.city || "",
+            deliveryState: delivery?.state || "",
+            rate: load.rateAmount,
+            status: load.status,
+          };
+        })
+      );
+
+      const csvHeaders = "Load ID,Load Number,Created At,Pickup Facility,Pickup City,Pickup State,Delivery Facility,Delivery City,Delivery State,Rate,Status";
+      const csvRows = loadsWithStops.map(l =>
+        `"${l.loadId}","${l.loadNumber}","${l.createdAt}","${l.pickupName}","${l.pickupCity}","${l.pickupState}","${l.deliveryName}","${l.deliveryCity}","${l.deliveryState}","${l.rate}","${l.status}"`
+      );
+      const csv = [csvHeaders, ...csvRows].join("\n");
+
+      const sanitizedEmail = broker.email.replace(/[^a-zA-Z0-9]/g, "_");
+
+      await storage.createAdminAuditLog({
+        actorBrokerId: admin.id,
+        actorEmail: admin.email,
+        targetBrokerId: broker.id,
+        action: "EXPORT_CSV",
+        metadata: JSON.stringify({ totalLoads: loadsWithStops.length }),
+      });
+
+      res.setHeader("Content-Type", "text/csv");
+      res.setHeader("Content-Disposition", `attachment; filename="broker-${sanitizedEmail}-loads.csv"`);
+      return res.send(csv);
+    } catch (error) {
+      console.error("Error in GET /api/admin/users/:id/export:", error);
       return res.status(500).json({ error: "Internal server error" });
     }
   });

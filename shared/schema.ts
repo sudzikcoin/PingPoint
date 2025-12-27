@@ -12,6 +12,7 @@ export const brokers = pgTable("brokers", {
   phone: text("phone"),
   timezone: text("timezone").default("Central (CT)"),
   emailVerified: boolean("email_verified").notNull().default(false),
+  isBlocked: boolean("is_blocked").notNull().default(false),
   referralCode: text("referral_code").unique(), // Personal referral code for sharing
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`now()`),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().default(sql`now()`),

@@ -345,21 +345,37 @@ export default function AppAdmin() {
                             {user.creditsBalance}
                           </td>
                           <td className="py-2 px-2">
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              onClick={() => setSelectedUser(user)}
-                              className={cn(
-                                "text-xs",
-                                theme === "arcade90s" 
-                                  ? "border-arc-secondary text-arc-secondary hover:bg-arc-secondary/10 rounded-none" 
-                                  : "border-brand-gold text-brand-gold hover:bg-brand-gold/10"
-                              )}
-                              data-testid={`button-add-credits-${user.id}`}
-                            >
-                              <Plus className="w-3 h-3 mr-1" />
-                              Add Credits
-                            </Button>
+                            <div className="flex gap-1">
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => setLocation(`/app/admin/users/${user.id}`)}
+                                className={cn(
+                                  "text-xs",
+                                  theme === "arcade90s" 
+                                    ? "border-arc-primary text-arc-primary hover:bg-arc-primary/10 rounded-none" 
+                                    : "border-brand-gold text-brand-gold hover:bg-brand-gold/10"
+                                )}
+                                data-testid={`button-manage-${user.id}`}
+                              >
+                                Manage
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => setSelectedUser(user)}
+                                className={cn(
+                                  "text-xs",
+                                  theme === "arcade90s" 
+                                    ? "border-arc-secondary text-arc-secondary hover:bg-arc-secondary/10 rounded-none" 
+                                    : "border-emerald-500 text-emerald-400 hover:bg-emerald-500/10"
+                                )}
+                                data-testid={`button-add-credits-${user.id}`}
+                              >
+                                <Plus className="w-3 h-3 mr-1" />
+                                Credits
+                              </Button>
+                            </div>
                           </td>
                         </tr>
                       ))}
