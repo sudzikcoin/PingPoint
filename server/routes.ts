@@ -2,8 +2,7 @@ import type { Express, Request, Response } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import { createBrokerSession, getBrokerFromRequest, clearBrokerSession, getOrCreateTrustedDevice, getTrustedDevice, isAdminEmail, getBrokerWithAdminFromRequest } from "./auth";
-import { requireAdminAuth, createAdminSession, clearAdminSession, getAdminFromRequest, validateAdminCredentials } from "./admin/adminAuth";
-import { isAdminConfigured } from "./config/env";
+import { requireAdminAuth, createAdminSession, clearAdminSession, getAdminFromRequest, validateAdminCredentials, isAdminFullyConfigured } from "./admin/adminAuth";
 import { randomBytes } from "crypto";
 import { insertLoadSchema, insertStopSchema } from "@shared/schema";
 import { z } from "zod";
@@ -1636,8 +1635,8 @@ export async function registerRoutes(
     try {
       const { email, password } = req.body || {};
 
-      if (!isAdminConfigured()) {
-        return res.status(503).json({ error: "Admin login not configured" });
+      if (!isAdminFullyConfigured()) {
+        return res.status(503).json({ error: "Admin login not configured. Set ADMIN_EMAIL, ADMIN_PASSWORD, and JWT_SECRET." });
       }
 
       if (!email || !password) {
@@ -1645,7 +1644,10 @@ export async function registerRoutes(
       }
 
       if (validateAdminCredentials(email, password)) {
-        createAdminSession(email, res);
+        const sessionCreated = createAdminSession(email, res);
+        if (!sessionCreated) {
+          return res.status(503).json({ error: "Admin session creation failed. JWT_SECRET may be missing." });
+        }
         return res.json({ ok: true, email });
       }
 

@@ -101,8 +101,12 @@ export function isAdminConfigured(): boolean {
 }
 
 export function logAdminStatus(): void {
+  const jwtSecret = process.env.ADMIN_JWT_SECRET || process.env.JWT_SECRET;
+  
   if (!isAdminConfigured()) {
     console.warn("[ADMIN] ADMIN_EMAIL or ADMIN_PASSWORD is not set – admin login will be disabled");
+  } else if (!jwtSecret) {
+    console.warn("[ADMIN] ADMIN_EMAIL/PASSWORD set but JWT_SECRET is missing – admin login will be disabled");
   } else {
     console.log("[ADMIN] Admin login: ENABLED");
   }

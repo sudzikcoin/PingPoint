@@ -4,8 +4,14 @@ import { adminConfig, isAdminConfigured } from "../config/env";
 
 const ADMIN_COOKIE_NAME = "pingpoint_admin_session";
 
-function getAdminSecret(): string {
-  return process.env.ADMIN_JWT_SECRET || process.env.JWT_SECRET || "admin_dev_secret_change_me";
+function getAdminSecret(): string | null {
+  const secret = process.env.ADMIN_JWT_SECRET || process.env.JWT_SECRET;
+  if (!secret) return null;
+  return secret;
+}
+
+export function isAdminSecretConfigured(): boolean {
+  return getAdminSecret() !== null;
 }
 
 export interface AdminSession {
@@ -13,8 +19,11 @@ export interface AdminSession {
   email: string;
 }
 
-export function createAdminSession(email: string, res: Response): void {
-  const token = jwt.sign({ isAdmin: true, email }, getAdminSecret(), {
+export function createAdminSession(email: string, res: Response): boolean {
+  const secret = getAdminSecret();
+  if (!secret) return false;
+
+  const token = jwt.sign({ isAdmin: true, email }, secret, {
     expiresIn: "24h",
   });
 
@@ -25,6 +34,7 @@ export function createAdminSession(email: string, res: Response): void {
     path: "/",
     maxAge: 60 * 60 * 24 * 1000, // 24 hours
   });
+  return true;
 }
 
 export function clearAdminSession(res: Response): void {
@@ -37,11 +47,14 @@ export function clearAdminSession(res: Response): void {
 }
 
 export function getAdminFromRequest(req: Request): AdminSession | null {
+  const secret = getAdminSecret();
+  if (!secret) return null;
+
   const token = req.cookies?.[ADMIN_COOKIE_NAME];
   if (!token) return null;
 
   try {
-    const decoded = jwt.verify(token, getAdminSecret()) as AdminSession;
+    const decoded = jwt.verify(token, secret) as AdminSession;
     if (decoded.isAdmin && decoded.email) {
       return decoded;
     }
@@ -55,8 +68,12 @@ export function isAdminSession(req: Request): boolean {
   return getAdminFromRequest(req) !== null;
 }
 
+export function isAdminFullyConfigured(): boolean {
+  return isAdminConfigured() && isAdminSecretConfigured();
+}
+
 export function requireAdminMiddleware(req: Request, res: Response, next: NextFunction): void {
-  if (!isAdminConfigured()) {
+  if (!isAdminFullyConfigured()) {
     res.status(503).json({ error: "Admin login not configured" });
     return;
   }
@@ -85,7 +102,7 @@ export interface AdminInfo {
 }
 
 export async function requireAdminAuth(req: Request): Promise<AdminInfo | null> {
-  if (!isAdminConfigured()) return null;
+  if (!isAdminFullyConfigured()) return null;
   
   const session = getAdminFromRequest(req);
   if (!session) return null;
