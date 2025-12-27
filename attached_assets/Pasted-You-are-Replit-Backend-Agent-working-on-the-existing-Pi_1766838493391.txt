@@ -1,0 +1,330 @@
+You are Replit Backend Agent working on the existing PingPoint project (Express backend + React frontend with /app/* routes, billing, Stripe, etc.). DO NOT rewrite existing logic, billing, or auth. Only ADD the minimal code needed to create a secure admin account with email+password and protect the admin panel.
+
+GOAL
+Implement a simple, secure admin authentication system with:
+- ENV-based admin credentials (ADMIN_EMAIL, ADMIN_PASSWORD)
+- Admin login page at /app/admin/login
+- Protected admin panel at /app/admin (redirects to /app/admin/login if not logged in as admin)
+- Express middleware requireAdmin that protects all /api/admin/* endpoints
+- Simple "who am I" endpoint for admin (GET /api/admin/me)
+
+Important constraints:
+- Do NOT break or change the existing user/broker auth and sessions.
+- Do NOT change billing, Stripe, loads logic, or database schema unless absolutely necessary.
+- Prefer adding new files / small targeted edits.
+- Keep all existing admin UI tabs (Users, Subscriptions, Audit Logs, Promotions) working as they are, just make them accessible only for logged-in admin.
+
+────────────────────────────────────
+1. ENV VARIABLES
+────────────────────────────────────
+Add support for two new environment variables:
+
+- ADMIN_EMAIL
+- ADMIN_PASSWORD
+
+Use them as the only valid admin credentials.
+
+Implementation details:
+- In the config/env module (or wherever other env variables like STRIPE_SECRET_KEY and SESSION_SECRET are defined), read:
+
+  const ADMIN_EMAIL = process.env.ADMIN_EMAIL;
+  const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
+
+- If either is missing, log a clear warning in the server startup log: 
+  "[ADMIN] ADMIN_EMAIL or ADMIN_PASSWORD is not set – admin login will be disabled".
+
+- Export these constants so other modules can import them, e.g.:
+
+  export const adminConfig = { ADMIN_EMAIL, ADMIN_PASSWORD };
+
+Do NOT hardcode credentials in the code. Use only env values.
+
+────────────────────────────────────
+2. ADMIN SESSION FLAG + MIDDLEWARE
+────────────────────────────────────
+The backend already uses sessions/cookies (SESSION_SECRET etc.). Extend that session to support an "admin logged in" flag.
+
+2.1. Session typing (if TypeScript is used)
+- Find where the Express Request type is extended for "session" or "user".
+- Add:
+
+  declare module "express-session" {
+    interface SessionData {
+      isAdmin?: boolean;
+      adminEmail?: string;
+    }
+  }
+
+(Adjust import path if needed.)
+
+2.2. Helper: isAdminSession
+Create a helper function in a new file, e.g. src/admin/adminAuth.ts (or similar):
+
+  import { Request, Response, NextFunction } from "express";
+  import { adminConfig } from "../config/env"; // adjust path
+
+  export function isAdminSession(req: Request): boolean {
+    return !!req.session?.isAdmin && !!req.session?.adminEmail;
+  }
+
+  export function requireAdmin(req: Request, res: Response, next: NextFunction) {
+    if (!adminConfig.ADMIN_EMAIL || !adminConfig.ADMIN_PASSWORD) {
+      return res.status(503).json({ error: "Admin login not configured" });
+    }
+    if (isAdminSession(req)) {
+      return next();
+    }
+    return res.status(401).json({ error: "Admin auth required" });
+  }
+
+Export requireAdmin for use in routes.
+
+────────────────────────────────────
+3. ADMIN LOGIN/LOGOUT API
+────────────────────────────────────
+Create a new Express router for admin auth, e.g. src/routes/adminAuth.ts (names can be adjusted to existing structure):
+
+  import { Router } from "express";
+  import { adminConfig } from "../config/env";
+  import { isAdminSession } from "../admin/adminAuth";
+
+  const router = Router();
+
+  // POST /api/admin/login
+  router.post("/login", async (req, res) => {
+    const { email, password } = req.body || {};
+
+    if (!adminConfig.ADMIN_EMAIL || !adminConfig.ADMIN_PASSWORD) {
+      return res.status(503).json({ error: "Admin login not configured" });
+    }
+
+    if (!email || !password) {
+      return res.status(400).json({ error: "Email and password are required" });
+    }
+
+    if (
+      email.toLowerCase() === adminConfig.ADMIN_EMAIL.toLowerCase() &&
+      password === adminConfig.ADMIN_PASSWORD
+    ) {
+      // mark admin as logged in in session
+      req.session.isAdmin = true;
+      req.session.adminEmail = email;
+      return res.json({ ok: true, email });
+    }
+
+    return res.status(401).json({ error: "Invalid admin credentials" });
+  });
+
+  // POST /api/admin/logout
+  router.post("/logout", (req, res) => {
+    if (req.session) {
+      req.session.isAdmin = false;
+      req.session.adminEmail = undefined;
+    }
+    return res.json({ ok: true });
+  });
+
+  // GET /api/admin/me  (for frontend to check current admin session)
+  router.get("/me", (req, res) => {
+    if (isAdminSession(req)) {
+      return res.json({
+        isAdmin: true,
+        email: req.session.adminEmail,
+      });
+    }
+    return res.status(401).json({ isAdmin: false });
+  });
+
+  export default router;
+
+Then, in the main server file (e.g. src/server.ts or index.ts), mount this router with prefix /api/admin:
+
+  import adminAuthRouter from "./routes/adminAuth";
+
+  app.use("/api/admin", adminAuthRouter);
+
+Important: mount adminAuthRouter BEFORE attaching requireAdmin to /api/admin/*, so that /api/admin/login and /api/admin/me work without already being logged in. The protection of other admin APIs is next.
+
+────────────────────────────────────
+4. PROTECT EXISTING /api/admin/* ROUTES
+────────────────────────────────────
+Find where the existing API routes for admin panel live. In the previous step, we added /api/admin/login, /me, /logout.
+
+Now:
+- Any routes that return data for the admin panel (users list, subscriptions, audit logs, promotions, etc.) must be protected with requireAdmin.
+
+Example:
+
+  import { requireAdmin } from "../admin/adminAuth";
+
+  const adminDataRouter = Router();
+
+  adminDataRouter.get("/users", requireAdmin, async (req, res) => {
+    // existing logic that returns all users
+  });
+
+  adminDataRouter.get("/subscriptions", requireAdmin, async (req, res) => {
+    // existing logic
+  });
+
+  adminDataRouter.get("/audit-logs", requireAdmin, async (req, res) => {
+    // existing logic
+  });
+
+  adminDataRouter.post("/promotions", requireAdmin, async (req, res) => {
+    // existing logic
+  });
+
+Mount this router as:
+
+  app.use("/api/admin", adminDataRouter);
+
+If you already have a router for admin data, just import requireAdmin and add it as the first middleware argument to each handler (GET/POST/etc).
+
+Rule: every admin data endpoint except /api/admin/login, /api/admin/logout, /api/admin/me must use requireAdmin.
+
+────────────────────────────────────
+5. FRONTEND: ADMIN LOGIN PAGE
+────────────────────────────────────
+Implement a simple admin login screen at /app/admin/login without breaking the existing UI style.
+
+5.1. New route/component
+Create a React page component for /app/admin/login (in the same folder structure where /app/admin index page currently lives).
+
+UI requirements:
+- Title: "Admin Login"
+- Two inputs:
+  - Email
+  - Password (type="password")
+- "Sign in as Admin" button
+- Show error message from the API if login failed.
+- On successful login, redirect to /app/admin.
+
+TypeScript-ish pseudocode:
+
+  const AdminLoginPage = () => {
+    const [email, setEmail] = useState("");
+    const [password, setPassword] = useState("");
+    const [loading, setLoading] = useState(false);
+    const [error, setError] = useState<string | null>(null);
+    const navigate = useNavigate(); // or Next.js router, depending on project
+
+    const handleSubmit = async (e: FormEvent) => {
+      e.preventDefault();
+      setLoading(true);
+      setError(null);
+      try {
+        const res = await fetch("/api/admin/login", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email, password }),
+        });
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          setError(data.error || "Login failed");
+        } else {
+          navigate("/app/admin");
+        }
+      } catch (err) {
+        setError("Network error");
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    // Render dark theme card with inputs and button consistent with PingPoint style
+  };
+
+Ensure styling matches the existing neon/dark PingPoint UI (reusing existing Button/Input components if present).
+
+5.2. Link "Admin Login"
+Optionally, add a small text link "Admin" somewhere in the footer or hidden from regular users, pointing to /app/admin/login. This is optional; the main requirement is that the route exists.
+
+────────────────────────────────────
+6. FRONTEND: PROTECT /app/admin PAGE
+────────────────────────────────────
+Now make the main admin panel page (/app/admin) behave like this:
+- On mount, call GET /api/admin/me.
+- If response is 401 or { isAdmin: false }, redirect to /app/admin/login.
+- Otherwise, render the admin dashboard as it is now.
+
+Implementation outline:
+
+  const AdminPanelPage = () => {
+    const [loading, setLoading] = useState(true);
+    const [authorized, setAuthorized] = useState(false);
+    const navigate = useNavigate();
+
+    useEffect(() => {
+      const checkAdmin = async () => {
+        try {
+          const res = await fetch("/api/admin/me");
+          if (!res.ok) {
+            navigate("/app/admin/login");
+            return;
+          }
+          const data = await res.json();
+          if (!data.isAdmin) {
+            navigate("/app/admin/login");
+            return;
+          }
+          setAuthorized(true);
+        } catch (err) {
+          navigate("/app/admin/login");
+        } finally {
+          setLoading(false);
+        }
+      };
+      checkAdmin();
+    }, [navigate]);
+
+    if (loading) {
+      return <div className="...">Checking admin access...</div>;
+    }
+
+    if (!authorized) {
+      return null;
+    }
+
+    // EXISTING admin UI code goes here: Users, Subscriptions, Audit Logs, Promotions tabs etc.
+  };
+
+Make sure not to break the existing internal logic of loading users/subscriptions/etc. Just wrap the page with the admin check.
+
+────────────────────────────────────
+7. ADMIN LOGOUT BUTTON
+────────────────────────────────────
+Inside the admin panel UI (e.g. top-right corner), add a "Logout" button:
+
+- On click, POST /api/admin/logout.
+- Then redirect to /app/admin/login.
+
+Example:
+
+  const handleLogout = async () => {
+    await fetch("/api/admin/logout", { method: "POST" });
+    navigate("/app/admin/login");
+  };
+
+Render as a small neon outline button "Logout".
+
+────────────────────────────────────
+8. TEST PLAN (run after changes)
+────────────────────────────────────
+1) With ADMIN_EMAIL and ADMIN_PASSWORD set in Replit secrets:
+   - Try to open /app/admin directly in browser as a fresh session.
+     EXPECT: immediate redirect to /app/admin/login.
+2) On /app/admin/login:
+   - Enter wrong email or password.
+     EXPECT: error message "Invalid admin credentials" and stay on login.
+   - Enter correct ADMIN_EMAIL + ADMIN_PASSWORD.
+     EXPECT: redirected to /app/admin and admin tabs load successfully.
+3) Once logged in:
+   - Refresh /app/admin.
+     EXPECT: still logged in (because of session), no redirect to login.
+4) Click "Logout".
+   EXPECT: session cleared and redirected to /app/admin/login.
+5) Direct calls to /api/admin/users (or any other protected admin endpoint) from a non-admin session:
+   EXPECT: HTTP 401 with { error: "Admin auth required" }.
+
+Apply these changes carefully, keep all non-admin logic intact, and ensure there are no TypeScript errors or failing imports.

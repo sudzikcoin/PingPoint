@@ -1,10 +1,11 @@
 import { createApp, log } from "./app";
 import { serveStatic } from "./static";
-import { logEnvStatus } from "./config/env";
+import { logEnvStatus, logAdminStatus } from "./config/env";
 import { ensureDatabase } from "./migrate";
 
 (async () => {
   logEnvStatus();
+  logAdminStatus();
   
   try {
     await ensureDatabase();

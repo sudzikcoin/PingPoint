@@ -89,3 +89,21 @@ export function logEnvStatus(): void {
 export function isEmailConfigured(): boolean {
   return validateEnv().emailConfigured;
 }
+
+// Admin configuration
+export const adminConfig = {
+  ADMIN_EMAIL: process.env.ADMIN_EMAIL || "",
+  ADMIN_PASSWORD: process.env.ADMIN_PASSWORD || "",
+};
+
+export function isAdminConfigured(): boolean {
+  return !!(adminConfig.ADMIN_EMAIL && adminConfig.ADMIN_PASSWORD);
+}
+
+export function logAdminStatus(): void {
+  if (!isAdminConfigured()) {
+    console.warn("[ADMIN] ADMIN_EMAIL or ADMIN_PASSWORD is not set – admin login will be disabled");
+  } else {
+    console.log("[ADMIN] Admin login: ENABLED");
+  }
+}
