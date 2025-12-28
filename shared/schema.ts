@@ -411,6 +411,44 @@ export const referralsRelations = relations(referrals, ({ one }) => ({
   }),
 }));
 
+// Webhook Config - per-user webhook configuration
+export const webhookConfigs = pgTable("webhook_configs", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  brokerId: uuid("broker_id").notNull().references(() => brokers.id).unique(),
+  url: text("url"),
+  secret: text("secret").notNull(),
+  enabled: boolean("enabled").notNull().default(false),
+  lastDeliveryAt: timestamp("last_delivery_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`now()`),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().default(sql`now()`),
+});
+
+export const webhookConfigsRelations = relations(webhookConfigs, ({ one }) => ({
+  broker: one(brokers, {
+    fields: [webhookConfigs.brokerId],
+    references: [brokers.id],
+  }),
+}));
+
+// Webhook Delivery Log - tracks webhook delivery attempts
+export const webhookDeliveryLogs = pgTable("webhook_delivery_logs", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  brokerId: uuid("broker_id").notNull().references(() => brokers.id),
+  eventType: text("event_type").notNull(),
+  targetUrl: text("target_url").notNull(),
+  statusCode: integer("status_code"),
+  errorMessage: text("error_message"),
+  durationMs: integer("duration_ms").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`now()`),
+});
+
+export const webhookDeliveryLogsRelations = relations(webhookDeliveryLogs, ({ one }) => ({
+  broker: one(brokers, {
+    fields: [webhookDeliveryLogs.brokerId],
+    references: [brokers.id],
+  }),
+}));
+
 // Insert schemas
 export const insertBrokerSchema = createInsertSchema(brokers).pick({
   name: true,
@@ -534,4 +572,22 @@ export type InsertReferral = {
   referrerLoadsGranted?: number;
   referredLoadsGranted?: number;
   status?: string;
+};
+
+export type WebhookConfig = typeof webhookConfigs.$inferSelect;
+export type InsertWebhookConfig = {
+  brokerId: string;
+  url?: string | null;
+  secret: string;
+  enabled?: boolean;
+};
+
+export type WebhookDeliveryLog = typeof webhookDeliveryLogs.$inferSelect;
+export type InsertWebhookDeliveryLog = {
+  brokerId: string;
+  eventType: string;
+  targetUrl: string;
+  statusCode?: number | null;
+  errorMessage?: string | null;
+  durationMs: number;
 };

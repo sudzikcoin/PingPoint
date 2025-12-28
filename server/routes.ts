@@ -17,6 +17,7 @@ import { createCheckoutSession, createSubscriptionCheckoutSession, createBilling
 import { incrementLoadsCreated, getUsageSummary } from "./billing/usage";
 import { createProPaymentIntent, checkAndConfirmIntent, getMerchantInfo } from "./billing/solana";
 import { evaluateGeofencesForActiveLoad, getGeofenceDebugInfo } from "./geofence";
+import { getOrCreateWebhookConfigForUser, updateWebhookConfigForUser, emitLoadEvent } from "./webhooks/webhookService";
 
 const uploadsDir = path.join(process.cwd(), "uploads", "rate-confirmations");
 if (!fs.existsSync(uploadsDir)) {
@@ -734,6 +735,13 @@ export async function registerRoutes(
         console.error("Error tracking usage:", err)
       );
 
+      // Emit webhook event (non-blocking)
+      emitLoadEvent({
+        brokerId: broker.id,
+        loadId: load.id,
+        eventType: "pingpoint.load.created",
+      }).catch(err => console.error("Error emitting webhook:", err));
+
       return res.status(201).json({
         id: load.id,
         loadNumber: load.loadNumber,
@@ -1046,12 +1054,28 @@ export async function registerRoutes(
       if (existingStop.type === 'DELIVERY' && departedAt && !existingStop.departedAt) {
         const now = new Date();
         const trackingEndTime = new Date(now.getTime() + 60000); // 60 seconds from now
+        const previousStatus = load.status;
         
         await storage.updateLoad(load.id, {
           status: 'DELIVERED',
           deliveredAt: now,
           trackingEndedAt: trackingEndTime,
         });
+
+        // Emit webhook events for status change and load completion
+        emitLoadEvent({
+          brokerId: load.brokerId,
+          loadId: load.id,
+          eventType: "pingpoint.status.changed",
+          previousStatus,
+        }).catch(err => console.error("Error emitting webhook:", err));
+
+        emitLoadEvent({
+          brokerId: load.brokerId,
+          loadId: load.id,
+          eventType: "pingpoint.load.completed",
+          previousStatus,
+        }).catch(err => console.error("Error emitting webhook:", err));
 
         return res.json({ 
           ok: true, 
@@ -1100,6 +1124,54 @@ export async function registerRoutes(
       return res.json(summary);
     } catch (error) {
       console.error("Error in GET /api/billing/summary:", error);
+      return res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  // =============================================
+  // WEBHOOK INTEGRATION ENDPOINTS
+  // =============================================
+
+  // GET /api/integrations/webhook - Get webhook config
+  app.get("/api/integrations/webhook", async (req: Request, res: Response) => {
+    try {
+      const broker = await getBrokerFromRequest(req);
+      if (!broker) {
+        return res.status(401).json({ error: "Unauthorized" });
+      }
+
+      const config = await getOrCreateWebhookConfigForUser(broker.id);
+      return res.json({
+        enabled: config.enabled,
+        url: config.url,
+      });
+    } catch (error) {
+      console.error("Error in GET /api/integrations/webhook:", error);
+      return res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  // POST /api/integrations/webhook - Update webhook config
+  app.post("/api/integrations/webhook", async (req: Request, res: Response) => {
+    try {
+      const broker = await getBrokerFromRequest(req);
+      if (!broker) {
+        return res.status(401).json({ error: "Unauthorized" });
+      }
+
+      const { enabled, url } = req.body;
+
+      try {
+        const config = await updateWebhookConfigForUser(broker.id, { enabled, url });
+        return res.json({
+          enabled: config.enabled,
+          url: config.url,
+        });
+      } catch (validationErr: any) {
+        return res.status(400).json({ error: validationErr.message });
+      }
+    } catch (error) {
+      console.error("Error in POST /api/integrations/webhook:", error);
       return res.status(500).json({ error: "Internal server error" });
     }
   });

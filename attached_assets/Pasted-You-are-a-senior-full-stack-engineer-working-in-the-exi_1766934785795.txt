@@ -1,0 +1,278 @@
+You are a senior full-stack engineer working in the existing PingPoint project running on Replit. Your task is to implement **outbound Webhooks for load events** and wire them to the existing "Integrations → Webhooks" UI, WITHOUT breaking any current logic (billing, loads, tracking, admin, etc.).
+
+High-level goal
+---------------
+Add a minimal, production-ready webhook system so that each broker (logged-in user) can configure a single Webhook URL in the "Integrations" page. When important events happen with their loads, PingPoint will POST a signed JSON payload to that URL.
+
+Important constraints
+---------------------
+- Do NOT remove or rename any existing routes, models, env vars or logic.
+- Keep Stripe billing, load creation, tracking, and admin panel fully working.
+- Reuse the existing auth/session mechanism to get the current user.
+- Keep changes as localized as possible: new models, new small service module, minimal wiring in existing handlers.
+- If the project already uses Prisma, extend `schema.prisma`. If another ORM is used, adapt similarly but keep the same logical structure.
+- All new code should follow the existing TypeScript/Node/Express style in this repo.
+
+Step 1 – Inspect the current codebase
+-------------------------------------
+1. Find:
+   - The server entry (Express or Next custom server) that wires `/api/*` routes.
+   - The data layer (likely Prisma) and existing `User` / `Load` / `Stop` models.
+   - The current Integrations page component (the one that shows "INTEGRATIONS" and the "Webhooks" card with "(Coming soon)").
+   - The code where:
+     - loads are created (New Load wizard submit handler, API route),
+     - loads are updated (editing loads, if exists),
+     - load status is changed / tracking events are processed (driver actions, geofencing, "all_stops_arrived" etc).
+
+2. Do NOT change anything yet; just locate these pieces for later wiring.
+
+Step 2 – Add DB models for webhooks
+-----------------------------------
+Extend the DB schema with two new models:
+
+1) A per-user webhook configuration:
+
+   - `WebhookConfig`
+     - `id`               – string/uuid, primary key
+     - `userId`           – FK → `User` (required, unique; one config per user)
+     - `url`              – string, nullable (no URL means disabled)
+     - `secret`           – string, required, random secure token generated server-side
+     - `enabled`          – boolean, default `false`
+     - `lastDeliveryAt`   – DateTime, nullable
+     - `createdAt`        – DateTime, default now
+     - `updatedAt`        – DateTime, updated timestamp
+
+2) A log table for webhook deliveries (for future admin UI & debugging):
+
+   - `WebhookDeliveryLog`
+     - `id`           – string/uuid, primary key
+     - `userId`       – FK → `User`
+     - `eventType`    – string (e.g. "pingpoint.status.changed")
+     - `targetUrl`    – string
+     - `statusCode`   – int, nullable (HTTP response)
+     - `errorMessage` – string, nullable, short text with error or timeout info
+     - `durationMs`   – int, duration of HTTP call
+     - `createdAt`    – DateTime, default now
+
+Run the appropriate migration command for the existing ORM (e.g. for Prisma, `npx prisma migrate dev --name add_webhook_models`). Make sure no existing models are modified in a breaking way.
+
+Step 3 – Create a webhook service module
+----------------------------------------
+Create a new server-side module, for example at:
+
+   `src/server/webhooks/pingpointWebhookService.ts`
+(or another path consistent with this project).
+
+This module should export a small, focused API:
+
+1) `async getOrCreateWebhookConfigForUser(userId: string): Promise<WebhookConfig>`
+   - Fetches the `WebhookConfig` for this user.
+   - If it does not exist, creates it with:
+     - `enabled = false`
+     - `url = null`
+     - `secret` = a newly generated secure random token (use `crypto.randomBytes(32).toString("hex")` or similar).
+   - Returns the config.
+
+2) `async updateWebhookConfigForUser(userId: string, updates: { enabled?: boolean; url?: string | null; }): Promise<WebhookConfig>`
+   - Fetches existing config (calling `getOrCreateWebhookConfigForUser` if needed).
+   - Validates `url` (if provided and non-empty) to be a valid `http` or `https` URL.
+   - If `enabled === true` but `url` is empty/null, throw a validation error.
+   - If `url` changes from a previous non-empty value to a new one, you MAY regenerate a new `secret` to avoid sharing the old secret with a new endpoint (optional but recommended).
+   - Persists changes and returns the updated config.
+
+3) `async emitLoadEvent(params: { userId: string; loadId: string; eventType: "pingpoint.load.created" | "pingpoint.load.updated" | "pingpoint.status.changed" | "pingpoint.load.completed"; previousStatus?: string | null; }): Promise<void>`
+   - This is the main function to be called by business logic whenever we want to send a webhook.
+   - Internal behaviour:
+     a) Look up the user and their `WebhookConfig`. If:
+        - no config,
+        - `enabled` is false,
+        - or `url` is null/empty,
+        then **silently return** (do not throw, do not break main flow).
+     b) Fetch the relevant `Load` and its `Stops` (or the equivalent models in this project) by `loadId`.
+        - If the load does not exist, log to console and return silently.
+     c) Build a JSON payload with this structure:
+
+        {
+          event: eventType,                        // e.g. "pingpoint.status.changed"
+          version: "1.0",
+          id: "<uuid>",                            // generate a v4 uuid
+          createdAt: new Date().toISOString(),
+          account: {
+            userId: user.id,
+            email: user.email,
+            name: user.name ?? user.companyName ?? null
+          },
+          data: {
+            loadId: load.id,
+            reference: load.reference ?? load.customerRef ?? null,
+            status: load.status ?? null,
+            previousStatus: params.previousStatus ?? null,
+            driverPhone: load.driverPhone ?? null,
+            rateAmount: load.rateAmount ?? null,
+            currency: "USD",                       // or from load if stored
+            equipmentType: load.equipmentType ?? null,
+            stops: [
+              // Map over load stops in sequence order:
+              // {
+              //   sequence,
+              //   type,           // "PICKUP" / "DELIVERY"
+              //   facilityName,
+              //   city,
+              //   state,
+              //   windowFrom,     // ISO strings or null
+              //   windowTo,
+              //   status          // if status per stop exists
+              // }
+            ]
+          }
+        }
+
+        Use whatever actual Load/Stop field names exist in this project, but keep the shape as close as reasonably possible to the above JSON.
+
+     d) Stringify the payload: `const body = JSON.stringify(payload)`.
+
+     e) Compute a signature using Node's `crypto`:
+
+        - `const signature = crypto.createHmac("sha256", config.secret).update(body).digest("hex");`
+
+     f) Send an HTTP POST to `config.url` with:
+        - Method: `POST`
+        - Headers:
+          - `"Content-Type": "application/json"`
+          - `"User-Agent": "PingPoint Webhook/1.0"`
+          - `"X-PingPoint-Event": eventType`
+          - `"X-PingPoint-Signature": signature`
+        - Body: `body`
+        - A reasonable timeout (e.g. 5 seconds). Use either `node-fetch` / `undici` / built-in fetch, depending on what the project already uses.
+
+     g) Log a `WebhookDeliveryLog` record with:
+        - `userId`
+        - `eventType`
+        - `targetUrl`
+        - `statusCode` (or null if request failed before getting a response)
+        - `errorMessage` (exception message / timeout, truncated to e.g. 500 chars)
+        - `durationMs`
+        - `createdAt` automatic
+
+     h) Errors during delivery **must not throw** out of `emitLoadEvent`; they should be caught, logged (console + DB), and then function should return.
+
+Step 4 – API routes for managing webhook config
+----------------------------------------------
+Create or update API routes under `/api/integrations/webhook` (or similar) so the front-end Integrations page can configure webhooks.
+
+Assuming existing Express style:
+
+1) `GET /api/integrations/webhook`
+   - Requires authentication (use existing middleware / session checks).
+   - Gets the current user id.
+   - Calls `getOrCreateWebhookConfigForUser(userId)`.
+   - Returns JSON like:
+
+     {
+       "enabled": boolean,
+       "url": string | null
+     }
+
+   - Do NOT return the secret.
+
+2) `POST /api/integrations/webhook`
+   - Requires authentication.
+   - Accepts JSON body with:
+     - `enabled?: boolean`
+     - `url?: string | null`
+   - Calls `updateWebhookConfigForUser(userId, { enabled, url })`.
+   - Returns updated config (only `enabled` and `url` fields).
+   - On validation errors (e.g. invalid URL), return HTTP 400 with `{ error: "message" }`.
+
+Wire these routes into the main server/router without breaking existing endpoints.
+
+Step 5 – Wire webhook emission into load lifecycle
+--------------------------------------------------
+Now hook `emitLoadEvent` into the main workflows. You must NOT change existing behaviour (no changes to responses or DB logic), only add side-effect calls after successful operations.
+
+1) Load creation
+   - Locate the handler that creates a new load (the API endpoint used by the New Load wizard).
+   - After the load has been successfully created and committed to the DB:
+     - Call:
+
+       `await emitLoadEvent({ userId: currentUserId, loadId: newLoad.id, eventType: "pingpoint.load.created" });`
+
+   - Make sure this call does NOT prevent load creation from succeeding; wrap in `try/catch` and ignore failures (they are already logged inside `emitLoadEvent`).
+
+2) Load update
+   - Find where loads can be updated (if such functionality exists).
+   - After a successful update, call:
+
+       `await emitLoadEvent({ userId: currentUserId, loadId: load.id, eventType: "pingpoint.load.updated" });`
+
+3) Status changes
+   - Identify the central place where load status is changed (e.g. "ENROUTE", "AT_PICKUP", "POD_RECEIVED", etc.).
+   - Refactor very lightly (if needed) to capture `previousStatus` before updating.
+   - After a successful status update, call:
+
+       `await emitLoadEvent({
+         userId: load.userId ?? currentUserId,
+         loadId: load.id,
+         eventType: "pingpoint.status.changed",
+         previousStatus
+       });`
+
+   - Again, do not let webhook errors bubble up.
+
+4) Load completed
+   - Locate the logic that marks a load as fully completed when all stops are finished (e.g. when reason `"all_stops_arrived"` is detected or status becomes `"COMPLETED"/"DELIVERED"`).
+   - Immediately after that logic succeeds (and the new status is stored), call:
+
+       `await emitLoadEvent({
+         userId: load.userId ?? currentUserId,
+         loadId: load.id,
+         eventType: "pingpoint.load.completed",
+         previousStatus
+       });`
+
+Step 6 – Update the Integrations → Webhooks UI
+----------------------------------------------
+Edit the existing Integrations page component (the one that currently shows "Webhooks" with "(Coming soon)") so that:
+
+1) It fetches webhook config on mount:
+   - On page load, call `GET /api/integrations/webhook`.
+   - Populate local state: `enabled`, `url`, `isLoading`, `isSaving`, `error`, `saved` etc.
+
+2) UI elements:
+   - A toggle switch "Enable webhooks" bound to `enabled`.
+   - A text input "Your webhook URL" bound to `url`.
+   - A small helper text explaining:
+     - "PingPoint will send signed JSON POST requests to this URL when your loads are created, updated or completed."
+   - A primary button "Save" that triggers `POST /api/integrations/webhook` with the current state.
+   - A small inline feedback area:
+     - On success: "Webhook settings saved."
+     - On error: show the error message from the API.
+
+3) Keep the existing styling:
+   - Use the same typography, spacing and colors as other settings cards.
+   - Do NOT modify other sections (Telematics providers, TMS integrations, etc.).
+
+4) Optional: Show a small read-only block with example JSON (using a `<pre>`), but this is optional. Main focus is enabling storage of URL and toggle.
+
+Step 7 – Basic tests / sanity checks
+------------------------------------
+After implementing:
+
+1) Start the dev server in Replit.
+2) Log in as a normal broker user.
+3) Go to Integrations → Webhooks:
+   - Enable toggle, set a test URL (e.g. a public request bin / webhook.site URL).
+   - Save settings and verify the API responds with success and DB row is created/updated.
+4) Create a new load via the New Load wizard:
+   - Verify that the external URL receives a POST with `event: "pingpoint.load.created"`.
+5) Trigger a status update for that load (via whatever UI/driver actions exist):
+   - Verify `pingpoint.status.changed` is delivered with old/new status.
+6) Complete all stops so that the load is considered done:
+   - Verify `pingpoint.load.completed` is delivered.
+7) Confirm that:
+   - If the webhook URL is disabled or empty, no outbound calls are made.
+   - Existing features (billing, tracking, admin panel) still work exactly as before.
+
+If any of these steps require small adjustments, make them without changing public APIs or breaking current behaviour.
+
+End of instructions.
