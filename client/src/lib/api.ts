@@ -26,11 +26,11 @@ export interface FieldHint {
 
 export const api = {
   brokers: {
-    ensure: async (email: string, name: string): Promise<BrokerWorkspace> => {
+    ensure: async (email: string, name: string, referralCode?: string): Promise<BrokerWorkspace & { isNewBroker?: boolean }> => {
       const res = await fetch('/api/brokers/ensure', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, name }),
+        body: JSON.stringify({ email, name, referralCode }),
       });
       
       if (!res.ok) {

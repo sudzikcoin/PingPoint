@@ -108,7 +108,13 @@ export default function AppBilling() {
       const res = await fetch("/api/broker/referral", { credentials: "include" });
       if (res.ok) {
         const data = await res.json();
-        setReferralData(data);
+        setReferralData({
+          referralCode: data.code,
+          referralLink: data.link,
+          totalReferrals: data.stats?.totalReferred || 0,
+          activeReferrals: data.stats?.proSubscribed || 0,
+          totalRewardsEarned: data.stats?.loadsEarned || 0,
+        });
       }
     } catch (error) {
       console.error("Error fetching referral data:", error);

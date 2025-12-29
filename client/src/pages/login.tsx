@@ -1,8 +1,8 @@
-import { useState } from "react";
-import { useLocation } from "wouter";
+import { useState, useEffect } from "react";
+import { useLocation, useSearch } from "wouter";
 import { cn } from "@/lib/utils";
 import { useTheme } from "@/context/theme-context";
-import { LogIn, Mail, Loader2, CheckCircle2, ArrowRight } from "lucide-react";
+import { LogIn, Mail, Loader2, CheckCircle2, ArrowRight, Gift } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { api } from "@/lib/api";
@@ -12,10 +12,26 @@ type LoginStatus = "idle" | "loading" | "magic_link_sent" | "success";
 export default function LoginPage() {
   const { theme } = useTheme();
   const [, setLocation] = useLocation();
+  const searchString = useSearch();
   const [email, setEmail] = useState("");
   const [status, setStatus] = useState<LoginStatus>("idle");
   const [errorMessage, setErrorMessage] = useState("");
   const [successMessage, setSuccessMessage] = useState("");
+  const [referralCode, setReferralCode] = useState<string | null>(null);
+
+  useEffect(() => {
+    const params = new URLSearchParams(searchString);
+    const ref = params.get("ref");
+    if (ref) {
+      setReferralCode(ref.toUpperCase());
+      localStorage.setItem("pingpoint_referral_code", ref.toUpperCase());
+    } else {
+      const storedRef = localStorage.getItem("pingpoint_referral_code");
+      if (storedRef) {
+        setReferralCode(storedRef);
+      }
+    }
+  }, [searchString]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -28,6 +44,7 @@ export default function LoginPage() {
       if (result.code === "LOGIN_SUCCESS") {
         setStatus("success");
         setSuccessMessage(result.message);
+        localStorage.removeItem("pingpoint_referral_code");
         setTimeout(() => {
           setLocation(result.redirect || "/app/loads");
         }, 1500);
@@ -36,8 +53,25 @@ export default function LoginPage() {
         setSuccessMessage(result.message);
       }
     } catch (err: any) {
-      setStatus("idle");
-      setErrorMessage(err.message || "Login failed. Please try again.");
+      if (err.code === "ACCOUNT_NOT_FOUND") {
+        try {
+          const broker = await api.brokers.ensure(
+            email.trim().toLowerCase(),
+            "Broker",
+            referralCode || undefined
+          );
+          await api.brokers.sendVerification(broker.id);
+          setStatus("magic_link_sent");
+          setSuccessMessage("Account created! Check your email for a verification link.");
+          localStorage.removeItem("pingpoint_referral_code");
+        } catch (signupErr: any) {
+          setStatus("idle");
+          setErrorMessage(signupErr.message || "Failed to create account. Please try again.");
+        }
+      } else {
+        setStatus("idle");
+        setErrorMessage(err.message || "Login failed. Please try again.");
+      }
     }
   };
 
@@ -73,6 +107,18 @@ export default function LoginPage() {
             )}>
               Enter your email to sign in to your console
             </p>
+
+            {referralCode && (
+              <div className={cn(
+                "flex items-center justify-center gap-2 p-3 rounded-lg mb-4 border",
+                theme === "arcade90s" 
+                  ? "bg-arc-secondary/10 border-arc-secondary/30 text-arc-secondary" 
+                  : "bg-brand-gold/10 border-brand-gold/30 text-brand-gold"
+              )} data-testid="referral-banner">
+                <Gift className="w-4 h-4" />
+                <span className="text-sm font-medium">You'll get 10 free loads when you subscribe to PRO!</span>
+              </div>
+            )}
 
             <form onSubmit={handleSubmit} className="space-y-4">
               <div>

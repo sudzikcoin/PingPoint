@@ -106,7 +106,7 @@ export async function registerRoutes(
   // POST /api/brokers/ensure - Find or create broker
   app.post("/api/brokers/ensure", async (req: Request, res: Response) => {
     try {
-      const { email, name } = req.body;
+      const { email, name, referralCode } = req.body;
       
       if (!email) {
         return res.status(400).json({ error: "Email is required" });
@@ -116,12 +116,33 @@ export async function registerRoutes(
       const brokerName = (name || "Broker").trim();
 
       let broker = await storage.getBrokerByEmail(emailNormalized);
+      let isNewBroker = false;
       
       if (!broker) {
         broker = await storage.createBroker({
           email: emailNormalized,
           name: brokerName,
         });
+        isNewBroker = true;
+        
+        // Only create referral relationship for NEW brokers
+        if (referralCode) {
+          try {
+            const referrer = await storage.getBrokerByReferralCode(referralCode.toUpperCase());
+            if (referrer && referrer.id !== broker.id) {
+              await storage.createReferral({
+                referrerId: referrer.id,
+                referredId: broker.id,
+                referredEmail: emailNormalized,
+                referrerCode: referralCode.toUpperCase(),
+                status: "REGISTERED",
+              });
+              console.log(`[Referral] Created referral for new broker: referrer=${referrer.email}, referred=${emailNormalized}`);
+            }
+          } catch (refErr: any) {
+            console.error(`[Referral] Error creating referral:`, refErr.message);
+          }
+        }
       }
 
       return res.json({
@@ -131,6 +152,7 @@ export async function registerRoutes(
         emailVerified: broker.emailVerified,
         createdAt: broker.createdAt,
         updatedAt: broker.updatedAt,
+        isNewBroker,
       });
     } catch (error) {
       console.error("Error in /api/brokers/ensure:", error);

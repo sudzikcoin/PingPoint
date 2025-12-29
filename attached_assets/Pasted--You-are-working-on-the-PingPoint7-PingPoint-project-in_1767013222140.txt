@@ -1,0 +1,213 @@
+
+You are working on the PingPoint7 (PingPoint) project in this Replit. Tech stack: Next.js 14 App Router + TypeScript + Tailwind for the frontend, and a TypeScript backend with Drizzle + Postgres + Stripe. Most of the app is already working (billing, load credits, Stripe webhooks, admin panel, etc.) and MUST NOT be broken.
+
+The user wants to turn the existing “Refer & Earn” block on the Billing page into a REAL referral program with minimal, focused changes.
+
+================================================
+BUSINESS RULES FOR REFERRALS
+================================================
+1) Each broker has a personal REFERRAL CODE and REFERRAL LINK.
+   - The Billing page already shows a “Your referral code” area with a Copy Link button and three buttons: REFERRALS, ACTIVE, LOADS EARNED.
+   - We must wire this UI to real data.
+
+2) Referral reward logic:
+   - Text already says: “Earn 20 free loads for each friend who subscribes to PRO! They get 10 free loads too.”
+   - Implement it exactly like this:
+     * When a NEW broker signs up using someone’s referral code AND later successfully activates a PRO subscription (first time), then:
+       - Referrer receives +20 load credits.
+       - Referred broker receives +10 load credits.
+   - Rewards apply only once per referred broker (on their first PRO activation).
+
+3) Single-referrer rule:
+   - A new broker may be attached to at most ONE referrer (whoever’s code was used first). Do not support multi-level MLM; keep it simple.
+
+4) Idempotency:
+   - Make sure Stripe webhooks or retries cannot double-reward. Use status fields and unique constraints so that each referred broker can be rewarded only once.
+
+================================================
+STEP 1 – Examine existing schema and reuse whenever possible
+================================================
+1) Inspect Drizzle schema (db models) to see what already exists:
+   - There is already a `referrals` table and probably tables like:
+     - `brokers`
+     - `broker_credits` (or similar for extra load credits)
+     - `broker_entitlements` / `broker_usage` for load limits
+     - `stripe_payments`, `stripe_webhook_events`, etc.
+   - Reuse these tables if they are already partially prepared for a referral system.
+
+2) If there is already:
+   - a `referrals` table: inspect its columns.
+   - a `referralCode` column on `brokers`: reuse it.
+   - generic “promotion” or “credits” helpers: reuse them to grant extra loads instead of duplicating logic.
+
+3) If some required fields do NOT exist, create minimal, focused Drizzle migrations:
+   - Ensure we have:
+     a) A way to store a broker’s personal referral code.
+        - Preferred: a `referral_code` (string, unique) column on `brokers`.
+        - If there is another reasonable place already defined (e.g. a dedicated `referral_codes` table), then reuse that instead.
+     b) A table (or existing `referrals` table) to represent a REFERRAL RELATION between referrer and referred broker.
+
+   A good minimal schema for a referral relation (adapt to existing structures):
+
+   - Table: `referrals`
+     * `id` (primary key, uuid or serial)
+     * `referrerBrokerId` → references `brokers.id`
+     * `referredBrokerId` → references `brokers.id` (nullable until signup is completed)
+     * `referredEmail` (string) – optional, can store the email used at signup if needed
+     * `status` (string enum: 'pending', 'signed_up', 'pro_rewarded')
+     * `bonusGrantedReferrer` (boolean, default false)
+     * `bonusGrantedReferred` (boolean, default false)
+     * `createdAt`, `updatedAt`, `rewardedAt` timestamps
+
+   - Add a unique constraint on `referredBrokerId` in `referrals` (where not null) to guarantee each referred broker is rewarded at most once.
+
+4) Keep migrations backwards-compatible and do not rename or drop existing columns unless absolutely necessary.
+
+================================================
+STEP 2 – Generate and expose referral codes for each broker
+================================================
+1) Decide where the broker’s referral code lives:
+   - Preferred approach: add `referralCode` (string, unique) to the `brokers` table if not present.
+   - Format: short, shareable, case-insensitive (e.g. 8–10 chars like `AGIP-7F3D`).
+     You can implement a helper like `generateReferralCode(brokerId)` that produces a unique code (e.g. base36 of broker ID plus random suffix).
+
+2) When a broker is created (signup / first login), ensure they get a referral code:
+   - Locate the registration / “ensure broker record” logic (where a new broker row is inserted based on email).
+   - If `referralCode` is null at creation time, generate one and save it.
+
+3) Create/reuse an API endpoint for Billing referral data:
+   - Example: `GET /api/billing/referral` or similar.
+   - It should:
+     * Read the current broker from the session/auth context (reuse existing auth).
+     * Return:
+       - `referralCode`
+       - `referralLink` (base URL + path + `?ref=<code>`, use whatever signup path exists in this app, e.g. `/app?ref=CODE` or dedicated `/auth/login?ref=CODE`)
+       - Basic stats:
+         · `totalReferred`
+         · `activeProReferred`
+         · `loadsEarnedFromReferrals`
+
+4) On the frontend Billing page:
+   - Find the component that renders the “Refer & Earn” block (where the Copy Link button and buttons REFERRALS/ACTIVE/LOADS EARNED are).
+   - Replace any hard-coded placeholder with real data from the new referral API.
+   - Implement the Copy Link button using `navigator.clipboard.writeText(referralLink)` with proper success / failure feedback (toast or subtle message).
+
+================================================
+STEP 3 – Capture referral code during signup/onboarding
+================================================
+1) Identify which route acts as the main entry for a new broker:
+   - For example, the magic-link login or email-based login page (where `verification_tokens` are used).
+   - Determine where the app creates or finds the `broker` record based on email.
+
+2) Read `ref` (or similar) from the query string:
+   - If the entry page path is `/app` or `/auth/login`, then the referral link should look like `/app?ref=XXXX`.
+   - When the page loads, grab `ref` from URL.
+
+3) Persist who invited this broker:
+   - When creating the broker record, if:
+     * there is a `ref` query param
+     * and it matches an existing broker’s `referralCode`
+     * and the newly created broker doesn’t yet have a referrer recorded
+   - then:
+     * Create a `referrals` row linking `referrerBrokerId` and `referredBrokerId`.
+       - Set `status = 'signed_up'` (or 'pending' if you prefer to track until PRO subscription).
+       - Optionally store `referredEmail`.
+   - Make sure:
+     * A broker cannot refer themself (ignore if code belongs to same email).
+     * A broker can only have one referrer (if a referral record already exists for this broker, do not create another).
+
+================================================
+STEP 4 – Hook into Stripe webhooks to grant rewards
+================================================
+1) Find the Stripe webhook handler:
+   - There is already a handler for events like `checkout.session.completed`, `customer.subscription.created/updated`, or a custom "PRO subscription activated" handler.
+   - Identify the exact place where:
+     * the broker subscription is set to PRO, and
+     * monthly load credits are assigned to the broker.
+
+2) After confirming PRO activation for a broker for the FIRST TIME:
+   - Implement the referral reward logic:
+
+   Pseudocode logic (adapted to actual code):
+
+   ```ts
+   const broker = // broker associated with this Stripe customer/subscription
+   const hasEverHadPro = // use existing fields or logic to detect if this is their first PRO activation
+
+   if (isNowPro && !hasEverHadPro) {
+     // Find referral link, if any
+     const referral = await db.query.referrals.findFirst({
+       where: (r, { eq }) => eq(r.referredBrokerId, broker.id)
+     });
+
+     if (referral && !referral.bonusGrantedReferrer && !referral.bonusGrantedReferred) {
+       // 1) grant 20 bonus loads to referrer
+       // 2) grant 10 bonus loads to referred
+       // Use the existing "broker_credits" / "grantLoadCredits" helper,
+       // so that it integrates with the existing load-limit system.
+       await grantLoadCredits(referral.referrerBrokerId, 20, 'referral_bonus_referrer', referral.id);
+       await grantLoadCredits(broker.id, 10, 'referral_bonus_referred', referral.id);
+
+       // Mark rewarded to ensure idempotency
+       await db.update(referrals)
+         .set({
+           status: 'pro_rewarded',
+           bonusGrantedReferrer: true,
+           bonusGrantedReferred: true,
+           rewardedAt: new Date(),
+         })
+         .where(eq(referrals.id, referral.id));
+     }
+   }
+
+	•	Make sure the webhook handler is idempotent:
+	•	If Stripe retries the same event, your code should see bonusGrantedReferrer = true and do nothing.
+
+	3.	Optionally, log an admin audit entry (admin_audit_logs or similar) whenever referral bonuses are granted, so the admin can see it.
+
+================================================
+STEP 5 – Referral stats API (for Billing UI)
+	1.	Create an endpoint like GET /api/billing/referral/stats OR extend the existing GET /api/billing endpoint if that’s cleaner.
+	2.	For the current broker:
+	•	totalReferred:
+	•	count of referrals rows where referrerBrokerId = currentBrokerId.
+	•	activeProReferred:
+	•	count of referrals where the referred broker currently has an active PRO subscription (reuse existing subscription state fields).
+	•	loadsEarnedFromReferrals:
+	•	sum of all load credits granted to this broker with reason = ‘referral_bonus_referrer’ (or whatever enum/string you chose).
+	3.	Add data for the 3 buttons:
+	•	If the UI already expects modals or drawers when clicking “Referrals / Active / Loads earned”, wire them:
+	•	“Referrals” – list referred brokers (email, name, status: signed up / not PRO / PRO active).
+	•	“Active” – list only those whose PRO is active.
+	•	“Loads earned” – show total bonus loads and a list of referral bonus transactions (optional).
+	•	If no such modals are implemented yet, at minimum:
+	•	show numeric badges on the buttons with the counts,
+	•	or show the stats inline under the “Your referral code” block.
+
+================================================
+STEP 6 – Admin visibility (minimal)
+	1.	In the Admin Panel (already exists with tabs Users, Subscriptions, Audit Logs, Promotions), add minimal support for referrals WITHOUT overhauling the UI:
+	•	For example:
+	•	Under “Audit Logs” or “Promotions”, show rows when referral bonuses are granted (action: ‘referral_bonus’, details: referrer email, referred email, loads given).
+	•	Do NOT build a complex UI if not necessary; just ensure there is at least some visibility for the admin.
+
+================================================
+STEP 7 – Manual checks
+
+Please manually verify behavior after changes:
+	1.	Create Broker A (no PRO yet) → open Billing:
+	•	Billing “Refer & Earn” shows a real referral code and Copy Link that copies a URL with ?ref=CODE.
+	2.	In another browser/incognito, open that URL:
+	•	Sign up / log in as Broker B using this link.
+	•	Ensure in the database that:
+	•	a referrals row exists linking Broker A (referrer) and Broker B (referred).
+	3.	As Broker B, purchase PRO:
+	•	Ensure Stripe webhook runs without errors.
+	•	Verify in DB:
+	•	Broker A got +20 extra load credits.
+	•	Broker B got +10 extra load credits.
+	•	The referrals row for Broker B is marked as rewarded (status ‘pro_rewarded’, bonus booleans true).
+	4.	Back on Billing for Broker A:
+	•	“Referrals”, “Active”, “Loads earned” counters/stats reflect the new referral and bonuses.
+
+Ensure no existing functionality (billing, loads, credits, Stripe, admin panel) is broken.
