@@ -1,0 +1,349 @@
+You are a senior full-stack engineer working on the PingPoint (PingPoint8.zip) project in Replit.
+
+Goal: **Fix and finalize the referral program so that it actually works end-to-end**, without breaking existing subscription / billing logic.
+
+Business rules (must be enforced in code):
+
+1. Each broker has a stable **referral code** (e.g. `DNF3S37N`) displayed on the Billing page, plus a “Copy link” button that copies `https://<app-origin>/login?ref=<CODE>`.
+2. New brokers can be referred in two ways:
+   a) They visit `/login?ref=<CODE>` and register.
+   b) They already registered, then enter a referral code once in a dedicated “Referral code” input and press **Apply**.
+3. A broker can be associated with **only one** referrer.
+4. When a referred broker upgrades to **PRO** the first time:
+   - The referrer gets **+20 free loads**.
+   - The referred broker gets **+10 free loads**.
+   Free loads should use the same mechanism as “extra credits / extra load credits” that are already shown and used in billing.
+5. Billing screen “Refer & Earn” must show **real stats**:
+   - `REFERRALS` – total number of brokers who used this broker’s referral code.
+   - `ACTIVE` – number of those referrals that currently have an active PRO subscription.
+   - `LOADS EARNED` – total referral bonus loads that have been granted to this referrer.
+6. Admin panel should be able to see referrals later via database, but do **not** build a special admin UI now.
+7. Do not break existing Stripe subscription & extra credits flows. Minimize invasive changes.
+
+Important: the user reported that currently:
+- The Billing page shows a referral code & copy link.
+- Opening the copied link, registering a new user and buying PRO does **not** change any counters or extra credits.
+- There is an “Apply” button under billing that currently does nothing useful for referrals.
+
+We must fix the implementation once and for all.
+
+================================================================================
+STEP 1 – Inspect existing referral and billing implementation
+================================================================================
+
+1. Search for these terms in the codebase:
+   - `referral` (functions, DB schema, routes, React components).
+   - `Refer & Earn` (Billing page).
+   - `pingpoint_referral_code` (localStorage / URL param handling).
+   - `grantReferralRewards` and any other referral-related helper.
+   - `extraCredits`, `extra_credits`, `buy extra load credits` – to reuse same mechanism for adding loads.
+
+2. Identify:
+   - The Drizzle schema / tables related to referrals (likely `referrals` table).
+   - Where broker’s **own referral code** is stored (probably a column in `brokers` table like `referralCode`).
+   - Where a new broker is created from the login/registration flow (the function that “ensures” broker).
+   - Where a broker’s subscription is set to PRO after Stripe checkout (either in Stripe webhook handler, or in a success handler after redirect).
+   - The current backend route used by the Billing page to fetch referral info and update counters.
+
+3. Do **not** remove existing code blindly. Instead, we will:
+   - Reuse the schema and most helpers if possible.
+   - Replace the fragile “only webhook grants rewards” flow with a more robust flow that triggers when the subscription is upgraded to PRO.
+
+================================================================================
+STEP 2 – DB schema: normalize/refine the referrals table
+================================================================================
+
+1. Open the Drizzle schema file(s) where the `referrals` table is defined (search `referrals =` or similar).
+2. Ensure that the `referrals` table has, at minimum, these fields (names can be adapted to project style, but the semantics must match):
+
+   - `id` – primary key (UUID or serial).
+   - `referrerBrokerId` – FK to `brokers.id` (the broker whose code was used).
+   - `referredBrokerId` – FK to `brokers.id` (the broker who was invited).
+   - `referralCode` – text, the code that was used (copy of the referrer’s code for history).
+   - `status` – text / enum, values at least:
+       * `'REGISTERED'` – referred broker created but not PRO yet.
+       * `'REWARDED'` – PRO subscription activated and bonus granted.
+   - `loadsRewardedToReferrer` – integer, default 0 (e.g. 20).
+   - `loadsRewardedToReferred` – integer, default 0 (e.g. 10).
+   - `createdAt` – timestamp.
+   - `updatedAt` – timestamp.
+
+3. If some columns are missing or named differently:
+   - Create a non-destructive migration using Drizzle migration conventions (do not drop existing data; migrate in place).
+   - Keep backward compatibility where possible (e.g., if there is already a `rewardedAt` field, you can keep it but also add the new numeric fields).
+
+4. Also ensure that the `brokers` table has:
+   - `referralCode` (string, unique, nullable for old rows) – the personal code used in links.
+   - If it doesn’t exist yet, add it and then backfill for existing brokers by generating unique codes (7–8 uppercase alphanumeric chars) for each broker that has `referralCode` NULL.
+
+================================================================================
+STEP 3 – Implement robust referral helper layer on the backend
+================================================================================
+
+Create (or update) a dedicated module, e.g. `server/referrals.ts` or extend existing `server/storage.ts` with clearly named functions.
+
+Implement these TypeScript helpers (adapt types to actual code style):
+
+1) `async getOrCreateBrokerReferralCode(brokerId: string): Promise<string>`
+
+   - If `brokers.referralCode` is already set, return it.
+   - Otherwise generate a new unique uppercase code (7–8 chars) and save it in the brokers table, then return it.
+   - Ensure uniqueness by checking existing codes and retrying on collision.
+
+2) `async registerReferralFromCode(referralCode: string, referredBrokerId: string): Promise<void>`
+
+   Behavior:
+   - Lookup broker with that `referralCode`. If not found → silently ignore (invalid code).
+   - If `referrerBrokerId === referredBrokerId` → avoid self-referral, ignore.
+   - Check if there is already a `referrals` row where `referredBrokerId` equals this broker:
+       * If exists and already has `status = 'REWARDED'` → do nothing.
+       * If exists with `status = 'REGISTERED'` → ensure `referrerBrokerId` is set correctly; keep one row only.
+   - If no referral row exists for this referred broker → create a new row:
+       * `referrerBrokerId`: id of the referrer broker.
+       * `referredBrokerId`: id of the new broker.
+       * `referralCode`: the used code.
+       * `status`: `'REGISTERED'`.
+       * `loadsRewardedToReferrer`: 0.
+       * `loadsRewardedToReferred`: 0.
+       * timestamps.
+
+3) `async grantReferralRewardsIfEligible(brokerId: string): Promise<void>`
+
+   Behavior:
+   - This function will be called **after** a broker successfully upgrades to PRO.
+   - Query `referrals` table for row with `referredBrokerId = brokerId`.
+   - If none found → nothing to do.
+   - If found and `status === 'REWARDED'` → already rewarded, do nothing (idempotent).
+   - Otherwise:
+     - Confirm that this broker truly has an active PRO plan (check existing billing/entitlements tables; reuse existing helpers that decide plan type & status).
+     - If not PRO → do nothing yet (maybe they paid for something else).
+     - If PRO:
+       * Use existing billing helpers to add **20 extra load credits** to the referrer broker.
+         - Reuse the same mechanism used when user buys extra credits. For example, if there is a function like `addExtraCredits(brokerId, count, reason)`, call it with 20 and reason `'REFERRAL_REFERRER_BONUS'`.
+       * Add **10 extra load credits** to the referred broker using the same helper with reason `'REFERRAL_REFERRED_BONUS'`.
+       * Update the referral row:
+         - `status = 'REWARDED'`
+         - `loadsRewardedToReferrer = 20`
+         - `loadsRewardedToReferred = 10`
+         - `updatedAt` now.
+       * Optionally log an entry into `admin_audit_logs` with action `"REFERRAL_REWARDED"` and details `{ referrerBrokerId, referredBrokerId, referrerBonus: 20, referredBonus: 10 }`.
+
+4) `async getReferralStatsForBroker(brokerId: string)`
+
+   Behavior:
+   - Compute for a given `brokerId` (the referrer):
+     - `referrals` – count of referral rows where `referrerBrokerId = brokerId`.
+     - `active` – count of those referral rows where the referred broker currently has an active PRO subscription (reuse existing entitlements/billing state to check).
+     - `loadsEarned` – sum of `loadsRewardedToReferrer` across those rows.
+   - Also return broker’s own referral code via `getOrCreateBrokerReferralCode`.
+   - Return shape:
+
+     ```ts
+     {
+       referralCode: string;
+       referrals: number;
+       active: number;
+       loadsEarned: number;
+     }
+     ```
+
+================================================================================
+STEP 4 – Wire referral flows into existing backend routes
+================================================================================
+
+1. **Handling links `/login?ref=CODE` for NEW users**
+
+   - Find the existing code that reads `ref` from the URL and stores it (search `pingpoint_referral_code` in the client).
+   - Make sure this code still:
+     - Reads the `ref` query param from `/login`.
+     - Stores it in localStorage or cookie until broker creation.
+   - On the backend, in the place where a new broker is “ensured”/created after login (search for the function that upserts brokers, something like `ensureBroker`, `api.brokers.ensure`, or similar):
+     - Add logic:
+       * Accept an optional `referralCode` parameter from the client request body.
+       * After creating the broker, if `referralCode` is present, call `registerReferralFromCode(referralCode, createdBroker.id)`.
+
+   - On the frontend, when calling the backend to create/ensure the broker during login/signup, include the stored `referralCode` (if present).
+
+2. **Handling manual entry of referral code via Billing “Apply”**
+
+   - On the Billing page, there is currently a field with button “Apply” that the user tried to paste the referral link into.
+   - Replace the logic for this button so that it:
+     - Accepts either a full link (`https://.../login?ref=DNF3S37N`) or just the bare code `DNF3S37N`.
+     - Extracts the code on the client:
+       * If string contains `ref=` → take substring after `ref=` up to `&` or end.
+       * Else use the string as code.
+     - Sends `POST` to a new backend endpoint, e.g. `/api/billing/referrals/apply` with JSON `{ code: "<CODE>" }`.
+
+   - Implement backend route (in `server/routes.ts` or equivalent):
+
+     ```ts
+     app.post("/api/billing/referrals/apply", authMiddleware, async (req, res) => {
+       const brokerId = req.auth.brokerId; // adapt to actual auth object
+       const { code } = req.body as { code?: string };
+
+       if (!code) {
+         return res.status(400).json({ error: "Missing referral code" });
+       }
+
+       try {
+         await registerReferralFromCode(code.trim(), brokerId);
+         await grantReferralRewardsIfEligible(brokerId); // in case broker is already PRO
+         return res.json({ ok: true });
+       } catch (err) {
+         console.error("Error applying referral code", err);
+         return res.status(500).json({ error: "Failed to apply referral code" });
+       }
+     });
+     ```
+
+   - Adjust frontend to:
+     - Show a small success toast if `{ ok: true }`.
+     - Show a user-friendly error if backend returns `{ error }`.
+     - After successful apply, refetch the billing/referral info query so counters update.
+
+3. **Trigger rewards when a broker becomes PRO**
+
+   We want rewards to work even when Stripe webhooks are not configured in development. So we should hook referral rewards into the **same place where you currently mark broker as PRO**.
+
+   - Search backend for logic that:
+     - Handles Stripe checkout completion (e.g. `POST /api/billing/stripe/complete`, `GET /api/billing/stripe/success`, or in `stripe.ts` when session/payment is verified).
+     - Updates broker’s subscription in DB (`plan` = PRO, sets `cycleEnd`, sets entitlements, etc).
+
+   - In that place — **right after** you successfully set the broker’s plan to PRO — call:
+
+     ```ts
+     await grantReferralRewardsIfEligible(brokerId);
+     ```
+
+   - If there is already an older implementation `grantReferralRewards` tied to Stripe webhook:
+     - You may refactor it to be a thin wrapper around the new `grantReferralRewardsIfEligible`.
+     - Ensure idempotency: If both webhook and direct call run, the second will do nothing because status is already `'REWARDED'`.
+
+4. **Endpoint for billing “Refer & Earn” stats**
+
+   - There is likely an endpoint like `GET /api/billing/referrals` already used by the Billing page.
+   - Update its implementation so that it simply calls `getReferralStatsForBroker(brokerId)` and returns:
+
+     ```json
+     {
+       "referralCode": "DNF3S37N",
+       "referrals": 3,
+       "active": 2,
+       "loadsEarned": 40
+     }
+     ```
+
+   - Keep existing shape if the client already expects slightly different field names, but ensure mapping is correct.
+
+================================================================================
+STEP 5 – Update frontend Billing UI for “Refer & Earn”
+================================================================================
+
+1. Open the Billing page component (the screen where user sees PRO plan, extra credits, and “Refer & Earn” section). File is likely under `client/src/pages/app-billing.tsx` or similar.
+
+2. Ensure that:
+   - It uses React Query (or current data fetching) to call `GET /api/billing/referrals` and receives the fields from `getReferralStatsForBroker`.
+   - The UI binds:
+     - The code from `data.referralCode` to the “YOUR REFERRAL CODE” display.
+     - `REFERRALS` metric to `data.referrals`.
+     - `ACTIVE` metric to `data.active`.
+     - `LOADS EARNED` metric to `data.loadsEarned`.
+
+3. Copy Link button:
+   - Build the link as:
+
+     ```ts
+     const origin = typeof window !== "undefined" ? window.location.origin : "";
+     const referralLink = `${origin}/login?ref=${data.referralCode}`;
+     ```
+
+   - Copy this string to clipboard (existing implementation might already do that, just ensure it uses current `referralCode`).
+
+4. “Apply” referral code:
+   - The text input under the subscription section should be clearly labeled for **referral code**, not promo coupon.
+   - On submit:
+     - Normalize input, extract code (see Step 4.2).
+     - Call `POST /api/billing/referrals/apply`.
+     - On success:
+       * Clear input.
+       * Refetch both:
+         - billing info (to update credits if user got 10 loads),
+         - referral stats (just in case).
+       * Show success toast: “Referral code applied! Bonuses will be granted when the referred account activates PRO.”
+     - On error, show toast with backend message.
+
+5. Make sure that this “Apply” control is not reused for promo coupons anymore. If you still want coupons later, use a **separate** section & endpoint.
+
+================================================================================
+STEP 6 – Manual testing scenario (run these after code changes)
+================================================================================
+
+After implementing the above, run `npm run dev` (or the existing dev command) and verify manually:
+
+1. **Existing user sees referral code**
+   - Log in as broker A (existing account).
+   - Go to Billing.
+   - Confirm:
+     * A non-empty referral code is shown (7–8 chars, like DNF3S37N).
+     * Copy Link copies URL `/login?ref=CODE`.
+     * Counters (REFERRALS, ACTIVE, LOADS EARNED) are numbers (0 if no referrals yet).
+
+2. **New user via referral link**
+   - Open the copied URL in a fresh browser profile/incognito.
+   - Make sure it lands on `/login?ref=CODE`.
+   - Register/login as broker B.
+   - Confirm that on backend a `referrals` row is created with:
+     * `referrerBrokerId` = A.id,
+     * `referredBrokerId` = B.id,
+     * `status` = 'REGISTERED'.
+
+3. **Upgrade referred user to PRO**
+   - As broker B, purchase a PRO plan using the existing Stripe test flow.
+   - After successful checkout and redirect back:
+     * Confirm B’s plan is PRO as before.
+     * Confirm that `grantReferralRewardsIfEligible(B.id)` was called (add temporary console logs if needed).
+     * Check DB:
+       - Referral row now has `status = 'REWARDED'`,
+       - `loadsRewardedToReferrer = 20`,
+       - `loadsRewardedToReferred = 10`.
+     * On Billing page:
+       - Broker A now has +20 extra credits (or equivalent loads) added.
+       - Broker B has +10 extra credits.
+       - A’s “REFERRALS” count increased by 1, “ACTIVE” at least 1, “LOADS EARNED” increased by 20.
+
+4. **Manual “Apply” route**
+   - Register broker C **without** using the referral link.
+   - On Billing page of C, paste either:
+     * full link `https://.../login?ref=CODE`, or
+     * bare code `CODE`.
+   - Press Apply.
+   - Check DB: new referral row (or updated) for C.
+   - If C is already PRO, the rewards should be granted immediately (20 to referrer, 10 to C). If not, they will be granted when C upgrades.
+
+5. **Idempotency**
+   - Try pressing Apply with the same code again for C → no duplicate rewards should be created (referral row remains single, status stays 'REWARDED').
+   - Trigger subscription upgrade logic again for B or C (e.g., via webhook replay) → `grantReferralRewardsIfEligible` should detect already rewarded and do nothing.
+
+================================================================================
+STEP 7 – Clean up & logging
+================================================================================
+
+1. Remove or replace any obsolete referral functions that are no longer used, but only if you are sure nothing calls them.
+2. Ensure all new backend code has basic error handling and `console.error` when something goes wrong.
+3. Optionally, insert rows into `admin_audit_logs` for:
+   - `"REFERRAL_REGISTERED"` when `registerReferralFromCode` creates a new row.
+   - `"REFERRAL_REWARDED"` when `grantReferralRewardsIfEligible` grants bonuses.
+
+================================================================================
+CONSTRAINTS
+================================================================================
+
+- Keep all other existing functionality working:
+  * Subscription upgrades.
+  * Extra credits purchases.
+  * Billing UI.
+- No breaking changes to API shapes used by other parts of the app, unless you update both backend and frontend consistently.
+- Prefer small, focused modifications per file instead of large rewrites.
+- After implementing changes, run the dev server and ensure there are no TypeScript / runtime errors.
+
+When you are done, summarize the exact code changes and files touched so the human developer understands what was modified.

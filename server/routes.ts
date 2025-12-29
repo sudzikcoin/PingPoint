@@ -13,7 +13,7 @@ import express from "express";
 import { sendBrokerVerificationEmail, sendDriverAppLink } from "./email";
 import { strictRateLimit } from "./middleware/rateLimit";
 import { checkAndConsumeLoadAllowance, rollbackLoadAllowance, getBillingSummary, FREE_INCLUDED_LOADS } from "./billing/entitlements";
-import { createCheckoutSession, createSubscriptionCheckoutSession, createBillingPortalSession, getStripeCustomerByEmail, verifyWebhookSignature, processStripeEvent } from "./billing/stripe";
+import { createCheckoutSession, createSubscriptionCheckoutSession, createBillingPortalSession, getStripeCustomerByEmail, verifyWebhookSignature, processStripeEvent, grantReferralRewardsIfEligible } from "./billing/stripe";
 import { incrementLoadsCreated, getUsageSummary } from "./billing/usage";
 import { createProPaymentIntent, checkAndConfirmIntent, getMerchantInfo } from "./billing/solana";
 import { evaluateGeofencesForActiveLoad, getGeofenceDebugInfo } from "./geofence";
@@ -1480,6 +1480,17 @@ export async function registerRoutes(
       });
 
       console.log(`[Referral] Manual apply: referrer=${referrer.email}, referred=${broker.email}`);
+
+      // Check if broker is already PRO and grant rewards immediately if so
+      const summary = await getBillingSummary(broker.id);
+      if (summary.plan === "PRO") {
+        await grantReferralRewardsIfEligible(broker.id);
+        console.log(`[Referral] Broker ${broker.email} is already PRO, granted rewards immediately`);
+        return res.json({ 
+          ok: true, 
+          message: "Referral applied and rewards granted! You've received 10 bonus loads." 
+        });
+      }
 
       return res.json({ 
         ok: true, 

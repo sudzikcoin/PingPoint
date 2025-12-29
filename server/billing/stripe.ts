@@ -223,10 +223,11 @@ async function processPromoCodeRedemption(
   }
 }
 
-async function grantReferralRewards(
+// Exported for use when manually applying referral codes
+export async function grantReferralRewardsIfEligible(
   referredBrokerId: string,
-  stripeSessionId: string | null,
-  stripeSubscriptionId: string | null
+  stripeSessionId: string | null = null,
+  stripeSubscriptionId: string | null = null
 ): Promise<void> {
   try {
     // Check if there's a pending referral for this broker
@@ -381,7 +382,7 @@ export async function processStripeEvent(event: Stripe.Event): Promise<{ process
         });
 
         // Check and grant referral rewards
-        await grantReferralRewards(brokerId, session.id, subscriptionId);
+        await grantReferralRewardsIfEligible(brokerId, session.id, subscriptionId);
 
         // Process promo code if provided
         const promoCode = metadata.promoCode;
