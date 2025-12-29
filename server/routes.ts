@@ -831,6 +831,31 @@ export async function registerRoutes(
     }
   });
 
+  // GET /api/drivers - List drivers associated with broker's loads
+  app.get("/api/drivers", async (req: Request, res: Response) => {
+    try {
+      const broker = await getBrokerFromRequest(req);
+      if (!broker) {
+        return res.status(401).json({ error: "Unauthorized" });
+      }
+
+      const drivers = await storage.getDriversByBroker(broker.id);
+
+      return res.json({
+        drivers: drivers.map(d => ({
+          id: d.id,
+          phone: d.phone,
+          createdAt: d.createdAt.toISOString(),
+          totalLoads: d.totalLoads,
+          activeLoads: d.activeLoads,
+        })),
+      });
+    } catch (error) {
+      console.error("Error in GET /api/drivers:", error);
+      return res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
   // GET /api/loads/:id - Get single load details
   app.get("/api/loads/:id", async (req: Request, res: Response) => {
     try {

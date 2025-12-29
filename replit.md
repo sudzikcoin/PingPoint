@@ -28,7 +28,8 @@ Preferred communication style: Simple, everyday language.
 
 ### Feature Specifications
 
-- **Load Management**: Create, manage, and assign loads; update load statuses.
+- **Load Management**: Create, manage, and assign loads; update load statuses. Rate confirmation upload with file attachment to loads.
+- **Driver Management**: View drivers associated with broker's loads at /app/drivers with load statistics (total/active loads).
 - **Tracking**: Real-time location pings from drivers, public customer tracking links.
 - **Billing**:
     - **Tiers**: FREE (3 loads/month), PRO ($99/month, 200 loads/month via Solana Pay USDC).

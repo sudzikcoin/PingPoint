@@ -1,0 +1,96 @@
+You are working on the PingPoint7 project in this Replit. The tech stack is Next.js 14 with App Router + TypeScript + Tailwind for the frontend and a TypeScript backend with Drizzle + Postgres. Most of the app (broker console, loads, tracking, billing, admin, etc.) is already working and MUST NOT be broken.
+
+The user only wants one thing:
+
+================================================
+GOAL: FIX THE “DRIVERS” TAB (NO MORE 404)
+================================================
+Currently, in the broker console sidebar (the “PingPoint Control” menu that appears on the left in landscape mode), there are two nav items:
+- LOADS
+- DRIVERS
+
+When the user clicks **DRIVERS**, the app navigates to a route that shows a **404 Page Not Found** with the message “Did you forget to add the page to the router?”. We need to fix this so that DRIVERS opens a real page instead of a 404.
+
+Implement this carefully with minimal changes and without touching anything unrelated.
+
+================================================
+STEP 1 – Find the existing DRIVERS link
+================================================
+1. Search the frontend code for the sidebar component that renders the items “LOADS” and “DRIVERS” (likely inside the broker console layout).
+2. Identify:
+   - the React component that renders the sidebar,
+   - the exact `href` / `Link` target for the DRIVERS item (for example `/app/drivers`, `/app/(broker)/drivers`, or similar).
+3. DO NOT change this `href` unless absolutely necessary. Prefer to create the matching page file for that existing route.
+
+================================================
+STEP 2 – Create the Drivers page for that route
+================================================
+1. Under the `app` directory, create the correct App Router page file that corresponds to the DRIVERS href. For example, if the link is:
+
+   - `/app/drivers` → create `app/drivers/page.tsx`
+   - `/app/(broker)/drivers` → create `app/(broker)/drivers/page.tsx`
+
+   Use the existing folder structure and layout conventions used by the broker console pages.
+
+2. The page should:
+   - use the same neon/arcade visual style as the broker console (background, typography, spacing),
+   - integrate with the existing layout shell (header, wrapper components) if such layout is used for the broker console,
+   - NOT crash if there are no drivers.
+
+3. Start with a clear title and description, for example:
+   - Title: “Drivers”
+   - Subtitle: “Manage and view drivers for your loads.”
+
+================================================
+STEP 3 – List drivers if backend support already exists
+================================================
+1. Check if there is already:
+   - a `drivers` table in the Drizzle schema, and/or
+   - an existing API endpoint like `GET /api/drivers` or similar.
+
+2. If there IS an existing way to fetch drivers:
+   - Reuse it rather than inventing a new API.
+   - On the Drivers page, fetch drivers for the currently logged-in broker/company (follow the same auth / scoping pattern as the loads list).
+   - Render a table with columns such as:
+     - Name
+     - Phone
+     - Email
+     - Status (active / blocked, if available)
+     - Created At
+   - Handle loading and empty states:
+     - While loading: show a small “Loading drivers…” message or skeleton.
+     - If there are no drivers: show “No drivers yet”.
+
+3. If there is NO existing drivers endpoint or table wired in the code:
+   - Do NOT add complicated backend logic.
+   - Instead, implement a minimal placeholder page that:
+     - clearly says “Drivers management coming soon.”
+     - explains that this section will show drivers assigned to loads.
+   - This placeholder still counts as a successful fix because the main requirement is to avoid the 404 and show a real page.
+
+================================================
+STEP 4 – Keep everything else unchanged
+================================================
+Very important:
+- Do NOT modify:
+  - routes or behavior for LOADS,
+  - broker console main page,
+  - Stripe/billing logic,
+  - admin panel,
+  - tracking or webhooks,
+  - any Solana/testnet monitoring code.
+- Do NOT change database migrations unless absolutely necessary for the Drivers page.
+
+================================================
+STEP 5 – Manual check
+================================================
+After implementing the Drivers page:
+
+1. Run the app in dev mode (npm run dev or the existing dev command).
+2. Log in as a broker and open the broker console.
+3. In landscape mode, click the sidebar item **DRIVERS**:
+   - Confirm it NO LONGER shows the 404 page.
+   - Confirm the new Drivers page renders correctly (either a real drivers table if wired, or a “coming soon” placeholder).
+4. Verify that the LOADS tab and other existing functionality still work as before.
+
+Finally, summarize briefly in a comment or log message which files you created/modified to implement the Drivers page and how to reach it (the route path).

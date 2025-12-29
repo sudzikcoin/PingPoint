@@ -77,6 +77,7 @@ export interface IStorage {
   getDriver(id: string): Promise<Driver | undefined>;
   getDriverByPhone(phone: string): Promise<Driver | undefined>;
   createDriver(driver: InsertDriver): Promise<Driver>;
+  getDriversByBroker(brokerId: string): Promise<{ id: string; phone: string; createdAt: Date; totalLoads: number; activeLoads: number }[]>;
 
   // Load operations
   getLoad(id: string): Promise<Load | undefined>;
@@ -221,6 +222,23 @@ export class DatabaseStorage implements IStorage {
       .values(insertDriver)
       .returning();
     return driver;
+  }
+
+  async getDriversByBroker(brokerId: string): Promise<{ id: string; phone: string; createdAt: Date; totalLoads: number; activeLoads: number }[]> {
+    const result = await db
+      .select({
+        id: drivers.id,
+        phone: drivers.phone,
+        createdAt: drivers.createdAt,
+        totalLoads: sql<number>`count(loads.id)::int`,
+        activeLoads: sql<number>`count(case when loads.status in ('PLANNED', 'IN_TRANSIT', 'AT_PICKUP', 'AT_DELIVERY') then 1 end)::int`,
+      })
+      .from(drivers)
+      .innerJoin(loads, eq(loads.driverId, drivers.id))
+      .where(eq(loads.brokerId, brokerId))
+      .groupBy(drivers.id, drivers.phone, drivers.createdAt)
+      .orderBy(desc(drivers.createdAt));
+    return result;
   }
 
   // Load operations
