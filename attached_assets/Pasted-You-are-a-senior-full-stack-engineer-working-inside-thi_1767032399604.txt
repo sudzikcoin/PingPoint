@@ -1,0 +1,294 @@
+You are a senior full-stack engineer working inside this PingPoint project (Node/Express backend + client SPA, Stripe billing, referral UI). The goal of this task is very focused:
+
+> Make the **referral program fully work for existing users via the “Apply referral code” field**, without breaking any of the existing billing / Stripe / referral logic that already works.
+
+Right now:
+
+- New brokers coming via `?ref=CODE` at login can be partially handled at signup.
+- The “Refer & Earn” block and stats UI are already present.
+- Stripe webhooks and `grantReferralRewards` are wired up for successful Pro subscriptions.
+- BUT the “Apply” flow for referral code / referral link (for an already registered broker) does NOT actually attach a referral on the backend, so no rewards are ever granted in that scenario.
+
+You must implement a **small, surgical change** to:
+
+1. Add a backend endpoint to apply a referral code for the **current logged-in broker**.
+2. Wire the front-end “Apply referral code” UI to that endpoint.
+3. Ensure that when the referred broker later buys Pro, the existing Stripe webhook + referral reward logic can find this referral and award bonus loads.
+
+Do NOT rewrite big chunks of the app. Prefer minimal, well-commented edits.
+
+==================================================
+1. Inspect current referral implementation
+==================================================
+
+1) Search the repo for these terms and open the relevant files:
+
+- `referrals` / `referralCode` / `getReferrals` / `grantReferralRewards`
+- Billing page: the UI that shows “REFER & EARN”, “REFERRALS / ACTIVE / LOADS EARNED”.
+- Login / signup page that handles `?ref=CODE`.
+- Stripe webhook handler (`checkout.session.completed` / subscription activation).
+- Storage / DB layer for referrals.
+
+You will likely find (names may differ slightly, adapt to actual code):
+
+- `server/storage.ts` (or similar):
+  - Functions like:
+    - `getBrokerByReferralCode`
+    - `createReferral`
+    - `getReferralStats`
+    - maybe a `grantReferralRewards` helper is imported here or in billing module.
+- `server/routes.ts`:
+  - `POST /api/broker/ensure` that passes `referralCode` to storage on broker creation.
+  - `GET /api/billing/referrals` that returns stats for the “Refer & Earn” block.
+- `server/billing/stripe.ts`:
+  - `processStripeEvent` that calls `grantReferralRewards` on subscription success.
+
+Do **not** change the existing Stripe logic or the basic referral creation at signup unless strictly necessary.
+
+==================================================
+2. Backend: add API to attach referral to existing broker
+==================================================
+
+We need a dedicated endpoint that:
+
+- Is called by an **already logged in** broker.
+- Accepts either a referral **URL** or a raw referral **code**.
+- Resolves it to a referrer broker.
+- Creates or updates a `referrals` row so that the Stripe webhook can later reward it.
+
+### 2.1 Storage helper
+
+In `server/storage.ts` (or equivalent storage module), add a helper like:
+
+```ts
+export async function attachReferralToExistingBroker(opts: {
+  referredBrokerId: string;
+  referralCodeOrUrl: string;
+}): Promise<void> {
+  // Implementation described below
+}
+
+Implement it using the existing schema and helper functions:
+	1.	Parse the input:
+	•	Trim whitespace.
+	•	If it contains ?ref=:
+	•	Parse it as a URL (use new URL(value) or manual parsing).
+	•	Extract the ref query param.
+	•	Else:
+	•	Treat the entire string as the code.
+	2.	Normalize the code:
+	•	Uppercase it.
+	•	Ensure it’s not empty; if empty or invalid, throw an error.
+	3.	Look up the referrer broker:
+	•	Use existing helper like getBrokerByReferralCode(code) or equivalent table lookup.
+	•	If no broker found – throw an error like new Error("Referral code not found").
+	4.	Validation:
+	•	If referrerBrokerId === referredBrokerId, throw new Error("You cannot use your own referral code").
+	•	Check if there is already a referral row for this referredBrokerId (any status, e.g. REGISTERED, PRO_SUBSCRIBED, etc.).
+	•	If there is a COMPLETED/PRO_SUBSCRIBED referral, do not override; throw an error like new Error("Referral already used").
+	•	If there is an existing PENDING or REGISTERED referral, you may:
+	•	Either update it to point to this new referrer (if that’s acceptable),
+	•	Or simply reuse it and do not create a second referral row.
+	•	For safety and simplicity: if ANY referral exists for referredBrokerId, throw new Error("Referral already set").
+	5.	Create a new referral row (if none exists):
+	•	Use existing createReferral(...) helper or write one if missing.
+	•	Fields should mirror the current schema; for example:
+	•	referrerBrokerId
+	•	referredBrokerId
+	•	referralCode
+	•	status: "REGISTERED" (or whatever status you already use after signup)
+	•	createdAt: new Date()
+	6.	Optionally, log this in admin_audit_logs if there is an existing function/helper for that (e.g. logAdminEvent("REFERRAL_ATTACHED", {...details})).
+
+Keep this function small, with clear comments describing each step and error condition.
+
+2.2 Express route: POST /api/billing/referrals/apply
+
+In server/routes.ts (or wherever routes are defined):
+	1.	Import the new helper:
+
+import { attachReferralToExistingBroker } from "./storage";
+// (use the correct relative path)
+
+	2.	Add a new route handler (near other /api/billing routes):
+
+app.post("/api/billing/referrals/apply", async (req, res) => {
+  try {
+    const broker = await requireBroker(req, res);
+    if (!broker) return; // requireBroker should already have responded
+
+    const { codeOrUrl } = req.body || {};
+    if (!codeOrUrl || typeof codeOrUrl !== "string") {
+      return res.status(400).json({ error: "Referral code or link is required." });
+    }
+
+    await attachReferralToExistingBroker({
+      referredBrokerId: broker.id,
+      referralCodeOrUrl: codeOrUrl,
+    });
+
+    return res.json({ ok: true });
+  } catch (err) {
+    console.error("Error applying referral code:", err);
+    return res.status(400).json({
+      error:
+        (err as Error).message ||
+        "Unable to apply referral code. Please check the code and try again.",
+    });
+  }
+});
+
+	3.	Use existing requireBroker or equivalent auth helper used in other authenticated routes to get current broker.
+
+This endpoint should not award any loads. It only sets up the link; rewards are handled by Stripe webhook later.
+
+==================================================
+3. Front-end: wire the “Apply” referral UI
+
+We want a dedicated referral apply flow, separate from promo codes. Use minimal edits, reusing existing UI if possible.
+	1.	Find the Billing page component, likely something like:
+
+	•	client/src/pages/app-billing.tsx
+	•	Or a component in client/src/components/billing/...
+
+Identify the UI section where:
+	•	The Pro plan is displayed.
+	•	There is a “referral link” / “referral code” input with an Apply button currently doing nothing (or wired to promo API incorrectly).
+
+	2.	Create a small client API helper in client/src/lib/api.ts (or equivalent) for this new endpoint:
+
+export async function applyReferralCode(codeOrUrl: string) {
+  return request("/api/billing/referrals/apply", {
+    method: "POST",
+    body: { codeOrUrl },
+  });
+}
+
+	•	Reuse the existing request helper that handles fetch, JSON, auth, errors, etc.
+
+	3.	In the Billing component:
+
+	•	Add React state for the input and status:
+
+const [referralInput, setReferralInput] = useState("");
+const [isApplyingReferral, setIsApplyingReferral] = useState(false);
+const [referralMessage, setReferralMessage] = useState<string | null>(null);
+
+	•	Make the input controlled:
+
+<input
+  type="text"
+  value={referralInput}
+  onChange={(e) => setReferralInput(e.target.value)}
+  placeholder="Paste referral link or code"
+  // reuse existing styling classes
+/>
+
+	•	Implement the onClick handler for the Apply button:
+
+const handleApplyReferral = async () => {
+  if (!referralInput.trim()) {
+    setReferralMessage("Please enter a referral link or code.");
+    return;
+  }
+
+  setIsApplyingReferral(true);
+  setReferralMessage(null);
+  try {
+    await api.applyReferralCode(referralInput.trim());
+    setReferralMessage("Referral applied! You’ll receive bonus loads when your friend’s Pro subscription activates.");
+  } catch (err: any) {
+    const msg =
+      err?.message ||
+      err?.error ||
+      "Unable to apply referral code. Please check it and try again.";
+    setReferralMessage(msg);
+  } finally {
+    setIsApplyingReferral(false);
+  }
+};
+
+	•	Connect it to the button:
+
+<button
+  onClick={handleApplyReferral}
+  disabled={isApplyingReferral || !referralInput.trim()}
+>
+  {isApplyingReferral ? "Applying..." : "Apply"}
+</button>
+
+	•	Display a small message below the input if referralMessage is not null.
+
+	4.	Important:
+
+	•	Do not break any existing promo code UI / logic. If there is a separate promo code input for discounts, keep it working as is.
+	•	If the current input is mis-used for promo instead of referrals, rename the label to “Promo code” for that one, and add a separate small UI block labeled “Referral code” wired to this new referral endpoint.
+
+==================================================
+4. Keep Stripe + referral rewards as they are
+
+In server/billing/stripe.ts (or equivalent):
+	•	Do NOT change the existing event handling significantly.
+	•	Just confirm that grantReferralRewards (or similar function) logic is correct:
+	•	It is called when a Pro subscription is successfully created / paid for, e.g. on checkout.session.completed.
+	•	It finds a referral for the referredBrokerId with a status like "REGISTERED".
+	•	It:
+	•	Updates the referral status to "PRO_SUBSCRIBED" / "COMPLETED" (whatever is in your schema).
+	•	Awards +20 loads to the referrer.
+	•	Awards +10 loads to the referred broker.
+	•	Updates broker_credits / extraCredits / whichever field is used for free extra loads.
+	•	Optionally writes an audit log row.
+
+If any tiny bug is found there (like wrong status string), fix it minimally and add comments.
+
+==================================================
+5. Testing scenarios (do this locally after code changes)
+
+After implementing the above:
+	1.	Referral via link (existing behavior)
+
+	•	As Broker A:
+	•	Go to Billing.
+	•	Copy your referral link (the UI already shows it).
+	•	In a private window:
+	•	Open this link.
+	•	Register as a new broker B.
+	•	Buy Pro (using Stripe test card if in test mode).
+	•	Verify:
+	•	In DB, there is a referral record linking A -> B.
+	•	A’s Billing stats show:
+	•	REFERRALS ≥ 1
+	•	ACTIVE ≥ 1 (if code uses this for completed referrals)
+	•	LOADS EARNED = 20 * ACTIVE (if that’s how you compute it).
+	•	A’s remaining loads / credits include the +20 bonus.
+	•	B’s loads include +10 bonus.
+
+	2.	Referral via “Apply” for existing broker (new behavior)
+
+	•	As Broker C (already registered, not via referral):
+	•	Go to Billing.
+	•	Paste A’s referral link or code into the new “Referral code” input.
+	•	Click Apply.
+	•	See success message.
+	•	Then buy Pro as Broker C.
+	•	Verify:
+	•	Referral row exists pointing A as referrer and C as referred, with status updated after Stripe event.
+	•	Credits/loads and stats updated like in scenario 1.
+
+	3.	Negative / error cases:
+
+	•	Try applying your own code: see an error message.
+	•	Try applying a non-existent code: see an error.
+	•	Try applying a second code when a referral already exists: see an error.
+
+==================================================
+6. Safety & comments
+	•	Do not change environment variables, Stripe keys, or webhook URLs.
+	•	Do not modify Resend / email logic.
+	•	Keep all new code well-commented, especially:
+	•	attachReferralToExistingBroker in storage.
+	•	The new route /api/billing/referrals/apply.
+	•	The React handler bridging the “Apply” button with the new API.
+
+At the end of your changes, ensure the project still builds and runs (both server and client). If you add new TypeScript types or imports, fix all type errors.
+
