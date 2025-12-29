@@ -89,6 +89,11 @@ export default function AppBilling() {
     totalRewardsEarned: number;
   } | null>(null);
   const [referralCopied, setReferralCopied] = useState(false);
+  
+  // Apply referral code state
+  const [applyReferralCode, setApplyReferralCode] = useState("");
+  const [applyingReferral, setApplyingReferral] = useState(false);
+  const [hasAppliedReferral, setHasAppliedReferral] = useState(false);
 
   useEffect(() => {
     const params = new URLSearchParams(searchString);
@@ -115,6 +120,10 @@ export default function AppBilling() {
           activeReferrals: data.stats?.proSubscribed || 0,
           totalRewardsEarned: data.stats?.loadsEarned || 0,
         });
+        // Set whether the broker has already applied a referral
+        if (data.hasAppliedReferral) {
+          setHasAppliedReferral(true);
+        }
       }
     } catch (error) {
       console.error("Error fetching referral data:", error);
@@ -275,6 +284,39 @@ export default function AppBilling() {
       setTimeout(() => setReferralCopied(false), 2000);
     } catch (error) {
       toast.error("Failed to copy link");
+    }
+  };
+
+  const handleApplyReferral = async () => {
+    if (!applyReferralCode.trim()) {
+      toast.error("Please enter a referral code or link");
+      return;
+    }
+    
+    setApplyingReferral(true);
+    try {
+      const res = await fetch("/api/referrals/apply", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ code: applyReferralCode.trim() }),
+      });
+      
+      const data = await res.json();
+      
+      if (res.ok) {
+        toast.success(data.message || "Referral applied successfully!");
+        setHasAppliedReferral(true);
+        setApplyReferralCode("");
+        // Refresh referral data to update counters
+        fetchReferralData();
+      } else {
+        toast.error(data.error || "Failed to apply referral code");
+      }
+    } catch (error) {
+      toast.error("Failed to apply referral code");
+    } finally {
+      setApplyingReferral(false);
     }
   };
 
@@ -685,6 +727,43 @@ export default function AppBilling() {
                       </div>
                     </div>
                   </div>
+
+                  {/* Apply a referral code section */}
+                  {!hasAppliedReferral && (
+                    <div className={cn("p-3 rounded border mt-4", theme === "arcade90s" ? "border-arc-border bg-arc-bg/30" : "border-brand-border/50 bg-brand-bg/30")}>
+                      <div className={cn("text-xs uppercase tracking-wide mb-2", theme === "arcade90s" ? "text-arc-muted arcade-pixel-font" : "text-brand-muted")}>
+                        Have a friend's referral code?
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="text"
+                          value={applyReferralCode}
+                          onChange={(e) => setApplyReferralCode(e.target.value)}
+                          placeholder="Enter code or paste link"
+                          className={cn(
+                            "flex-1 px-3 py-2 text-sm rounded border bg-transparent",
+                            theme === "arcade90s" 
+                              ? "border-arc-border text-arc-text placeholder:text-arc-muted/50" 
+                              : "border-brand-border text-white placeholder:text-brand-muted/50"
+                          )}
+                          data-testid="input-apply-referral"
+                        />
+                        <Button
+                          size="sm"
+                          onClick={handleApplyReferral}
+                          disabled={applyingReferral || !applyReferralCode.trim()}
+                          className={cn(
+                            theme === "arcade90s" 
+                              ? "bg-arc-secondary text-black rounded-none hover:bg-arc-secondary/80" 
+                              : "bg-brand-gold text-black hover:bg-brand-gold/90"
+                          )}
+                          data-testid="button-apply-referral"
+                        >
+                          {applyingReferral ? <Loader2 className="w-4 h-4 animate-spin" /> : "Apply"}
+                        </Button>
+                      </div>
+                    </div>
+                  )}
                 </CardContent>
               </Card>
             )}

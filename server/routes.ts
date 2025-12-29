@@ -1355,6 +1355,9 @@ export async function registerRoutes(
       const origin = process.env.PINGPOINT_PUBLIC_URL || "https://pingpoint.app";
       const referralLink = `${origin}/login?ref=${referralCode}`;
 
+      // Check if this broker has applied someone else's referral code
+      const appliedReferral = await storage.getReferralByReferredId(broker.id);
+
       return res.json({
         code: referralCode,
         link: referralLink,
@@ -1367,6 +1370,7 @@ export async function registerRoutes(
           referrerLoads: REFERRAL_REFERRER_LOADS,
           referredLoads: REFERRAL_REFERRED_LOADS,
         },
+        hasAppliedReferral: !!appliedReferral,
       });
     } catch (error) {
       console.error("Error in GET /api/broker/referral:", error);
@@ -1415,6 +1419,77 @@ export async function registerRoutes(
       : local[0] + "*";
     return `${masked}@${domain}`;
   }
+
+  // POST /api/referrals/apply - Manually apply a referral code for an existing broker
+  app.post("/api/referrals/apply", async (req: Request, res: Response) => {
+    try {
+      const broker = await getBrokerFromRequest(req);
+      if (!broker) {
+        return res.status(401).json({ error: "Unauthorized" });
+      }
+
+      let { code } = req.body;
+      
+      if (!code || typeof code !== "string") {
+        return res.status(400).json({ error: "Referral code is required" });
+      }
+
+      // Extract code from URL if a full URL was provided
+      if (code.includes("?ref=")) {
+        try {
+          const url = new URL(code.startsWith("http") ? code : `https://example.com${code}`);
+          code = url.searchParams.get("ref") || code;
+        } catch {
+          // If URL parsing fails, use the value as-is
+        }
+      }
+
+      code = code.trim().toUpperCase();
+
+      if (!code) {
+        return res.status(400).json({ error: "Invalid referral code" });
+      }
+
+      // Find the referrer by code
+      const referrer = await storage.getBrokerByReferralCode(code);
+      if (!referrer) {
+        return res.status(400).json({ error: "Invalid referral code" });
+      }
+
+      // Cannot use own referral code
+      if (referrer.id === broker.id) {
+        return res.status(400).json({ error: "You cannot use your own referral code" });
+      }
+
+      // Check if broker already has a referral
+      const existingReferral = await storage.getReferralByReferredId(broker.id);
+      if (existingReferral) {
+        if (existingReferral.status === "REWARDS_GRANTED") {
+          return res.status(400).json({ error: "A referral has already been applied and rewarded for your account" });
+        }
+        return res.status(400).json({ error: "You already have a referral applied to your account" });
+      }
+
+      // Create the referral
+      await storage.createReferral({
+        referrerId: referrer.id,
+        referredId: broker.id,
+        referredEmail: broker.email,
+        referrerCode: code,
+        status: "REGISTERED",
+      });
+
+      console.log(`[Referral] Manual apply: referrer=${referrer.email}, referred=${broker.email}`);
+
+      return res.json({ 
+        ok: true, 
+        message: "Referral applied! You'll receive bonus loads when you subscribe to PRO." 
+      });
+    } catch (error) {
+      console.error("Error in POST /api/referrals/apply:", error);
+      return res.status(500).json({ error: "Internal server error" });
+    }
+  });
 
   // POST /api/billing/stripe/checkout-credits - Create Stripe checkout session for credits
   app.post("/api/billing/stripe/checkout-credits", async (req: Request, res: Response) => {

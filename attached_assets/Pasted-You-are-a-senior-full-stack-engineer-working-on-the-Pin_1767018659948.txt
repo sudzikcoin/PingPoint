@@ -1,0 +1,282 @@
+You are a senior full-stack engineer working on the PingPoint project in this Replit (Next.js App Router + TypeScript + Drizzle + Stripe). The app already has billing, Pro subscriptions, extra load credits and a partially implemented referral UI.
+
+CURRENT PROBLEM (VERY IMPORTANT):
+
+1) On the Billing page a broker sees:
+
+   - A referral code, e.g. `DNF3S37N`.
+   - A "Copy Link" button that currently copies something like:
+     `https://<app-domain>/login?ref=DNF3S37N`
+
+2) A new user:
+
+   - Opens that link, lands on the login / signup page.
+   - Registers a new account and then buys a Pro subscription.
+   - RESULT: no referral bonus loads are added to **anyone**, and the counters under "REFER & EARN" remain:
+     - REFERRALS = 0
+     - ACTIVE = 0
+     - LOADS EARNED = 0
+
+3) Additionally, in the subscription / billing UI for a newly registered user there is a field under the plan for "referral link" with an **Apply** button. When the user pastes the ref link and clicks Apply, nothing happens (no validation, no message, no DB changes).
+
+We need you to make the referral system actually work end-to-end:
+
+- Visiting someone’s referral link (e.g. `/login?ref=CODE` or `/signup?ref=CODE`) should correctly attach that referrer to the new broker account.
+- The “referral link” input (+ Apply button) for an already registered user should also work.
+- When the referred user successfully activates a Pro subscription, bonus loads must be credited to both participants and the counters on the Billing screen must update accordingly.
+
+Do NOT rewrite the whole project. Keep changes minimal and aligned with existing patterns.
+
+==================================================
+1. Inspect existing referral implementation
+==================================================
+
+1) Search the codebase for any of these terms:
+   - `referral`
+   - `referrals`
+   - `referralCode`
+   - `refCode`
+   - `REFER & EARN`
+   - `LOADS EARNED`
+   - `DNF3S37N` (in case of hard-coded examples)
+2) Open:
+   - The Drizzle schema file(s) (e.g. `db/schema.ts`, `db/tables.ts`).
+   - The Billing page component that renders the "REFER & EARN" block.
+   - The login / signup page(s) that handle queries like `?ref=...`.
+   - Any existing API routes related to referrals (if any).
+   - The Stripe webhook handler for subscription events.
+
+Understand what already exists before adding anything:
+   - Is there a `referrals` table? What are its columns?
+   - Where/how is the per-broker `referralCode` stored?
+   - Is there any code that tries to read `ref` from query/cookies and store it, but doesn’t complete the flow?
+
+Only after this, start making changes.
+
+==================================================
+2. Single source of truth for referral code and link
+==================================================
+
+Goal: every broker has one stable `referralCode`, and the link is built consistently.
+
+1) Ensure there is a column like `brokers.referralCode` (string, unique). If it doesn’t exist yet, add it via Drizzle migration, keeping it optional for existing rows but unique once set.
+2) On broker creation:
+   - If `referralCode` is null/undefined:
+     - Generate a random 8–10 character code (A–Z and digits), e.g. `DNF3S37N`.
+     - Ensure uniqueness by checking the table and regenerating on collision.
+3) Implement a helper function, e.g. `getReferralLink(broker)` that returns:
+   - `${PUBLIC_APP_URL ?? DEFAULT_APP_URL}/login?ref=${broker.referralCode}`
+   - Reuse an existing `PUBLIC_APP_URL` or similar env var already used in other parts of the app.
+4) Update the Billing API / Billing page to use this helper so that:
+   - The “YOUR REFERRAL CODE” text shows exactly `broker.referralCode`.
+   - The “Copy link” button copies the link built by `getReferralLink`.
+
+==================================================
+3. Capture referral when visiting a referral link
+==================================================
+
+We must remember who referred the user when they arrive via `?ref=CODE`.
+
+1) On the login / signup route:
+
+   - Handle query param `ref` on **both** `/login` and `/signup` (App Router route segment or middleware):
+     - Validate the code:
+       - Find broker where `referralCode = code`.
+       - If not found, ignore (but do NOT crash).
+     - If valid, store it in a cookie or session, e.g. `pingpoint_referral_code = code`.
+       - Use Next.js server actions / cookies utilities the project already uses for auth.
+   - Do NOT attach referral to a broker yet; just remember the code for later.
+
+2) In the broker signup flow (where a new broker DB row is created):
+
+   - After a new broker `B` is successfully created:
+     - Read the referral code from:
+       - The cookie `pingpoint_referral_code`, OR
+       - Any explicit `ref` parameter that the signup form submits.
+     - If a code is present:
+       - Find the referrer broker `A` by `referralCode`.
+       - Ensure:
+         - `A.id !== B.id` (no self referrals).
+         - `B` does not already have a referrer (no duplicate mapping).
+       - Create/update a row in a `referrals` table (create this table if it doesn’t exist):
+
+         Example schema (adapt to current style):
+           - id (pk)
+           - referrerBrokerId (fk to brokers.id)
+           - referredBrokerId (fk to brokers.id)
+           - referralCode (string)
+           - status (enum: 'PENDING' | 'COMPLETED' | 'CANCELLED')
+           - createdAt, completedAt timestamps
+
+         Set:
+           - `referrerBrokerId = A.id`
+           - `referredBrokerId = B.id`
+           - `referralCode = code`
+           - `status = 'PENDING'`
+           - `createdAt = now()`
+       - Clear the cookie `pingpoint_referral_code` after use.
+   - Make sure this logic is idempotent:
+       - If a referral record for `referredBrokerId=B.id` already exists, don’t create another.
+
+==================================================
+4. Make the “Referral link + Apply” field actually work
+==================================================
+
+On the Billing or Subscription page of an already registered user, there is a field under the plan where the broker can paste a referral link and click **Apply**. Right now, clicking Apply does nothing.
+
+Implement this flow:
+
+1) Front-end:
+
+   - Find the component that renders this “referral link” input and Apply button.
+   - Implement an `onClick` handler for Apply that:
+     - Takes the text from the input.
+     - Accepts **either**:
+       - A full URL (`https://.../login?ref=DNF3S37N` or `/login?ref=...` or `/signup?ref=...`)
+       - OR just the pure code (`DNF3S37N`).
+     - Extracts the code:
+       - If the value contains `?ref=`, parse query parameters and read `ref`.
+       - Else, treat the entire string as the code.
+     - Sends a POST request to a new API route, e.g. `/api/referrals/apply`, with payload `{ code }`.
+     - Shows user feedback (toast, message):
+       - On success: “Referral applied! You’ll receive bonus loads when your friend activates Pro.”
+       - On failure: show server message (“Invalid code”, “You cannot use your own code”, etc.).
+
+2) Backend API `/api/referrals/apply`:
+
+   - Only accessible to authenticated brokers.
+   - Steps:
+     1. Get current broker `B` from the session.
+     2. Read `code` from JSON body.
+     3. Validate:
+        - `code` is non-empty.
+        - Find referrer `A` with `referralCode = code`.
+        - Fail with 400 if not found.
+        - If `A.id === B.id`, return 400 with message “You cannot use your own referral code.”
+        - If `B` already has a referral row with any `status` (PENDING/COMPLETED), do not create another; respond with 400 “Referral already set.”
+     4. Upsert referral:
+        - If a `referrals` record for `referredBrokerId=B.id` exists, update it to:
+          - `referrerBrokerId = A.id`
+          - `referralCode = code`
+          - `status = 'PENDING'` (if not COMPLETED yet).
+        - Else, create a new row as in section 3.
+     5. Optionally log to `admin_audit_logs` that B applied referral code from A.
+     6. Return `{ ok: true }`.
+
+   - This API must not grant any loads directly; it only creates/updates a PENDING referral. Bonuses are granted in Stripe webhook.
+
+==================================================
+5. Referral bonuses on Stripe subscription activation
+==================================================
+
+We only award bonus loads when the referred user has actually bought Pro.
+
+1) Open the Stripe webhook handler (likely at `app/api/stripe/webhook/route.ts`).
+   - Find the event where the app already upgrades a broker to Pro, for example when handling:
+     - `checkout.session.completed` or
+     - `customer.subscription.created` or
+     - `invoice.payment_succeeded`
+   - Identify how it maps the Stripe customer/subscription to the internal `brokerId` and how it updates plan / load limits.
+
+2) Extend that logic:
+
+   AFTER a broker `B` has been successfully upgraded to Pro from this event:
+
+   - Look up a referral with:
+       - `referredBrokerId = B.id`
+       - `status = 'PENDING'` (or similar)
+   - If none found, do nothing regarding referrals.
+   - If found and NOT yet rewarded:
+       - Identify the referrer broker `A` via `referrerBrokerId`.
+       - Award bonus loads:
+
+         Use the same mechanism as existing extra credits / load purchase logic. Reuse existing helper(s), for example:
+           - If there is a `broker_credits` table or similar with `extraCredits`:
+             - `A.extraCredits += 20`
+             - `B.extraCredits += 10`
+           - If credits are stored differently, follow the existing pattern for "BUY EXTRA LOAD CREDITS".
+
+       - Ensure idempotency:
+         - If `status` is already 'COMPLETED' or there is a dedicated `rewarded` boolean, skip applying bonuses again.
+       - Update the referral row:
+         - `status = 'COMPLETED'`
+         - `completedAt = now()`
+       - Optionally create entries in `admin_audit_logs` describing the reward:
+         - `"referral_bonus_awarded"` with details of A, B, and credited loads.
+
+3) Important: handle errors gracefully.
+
+   - Wrap referral bonus logic in try/catch:
+     - If anything fails, log the error (and optionally create an audit log), but DO NOT fail the whole webhook. The Pro activation should still succeed even if referral crediting fails.
+
+==================================================
+6. Billing API: show real referral stats
+==================================================
+
+The Billing page currently shows three counters under “REFER & EARN”:
+
+- `REFERRALS`
+- `ACTIVE`
+- `LOADS EARNED`
+
+Wire them to real DB data:
+
+1) Find the API route or server function that provides Billing data to the frontend (e.g. `/api/billing/summary`).
+2) For the current broker `A`, compute:
+
+   - `referralsCount`:
+     - Count rows in `referrals` where `referrerBrokerId = A.id`.
+   - `activeCount`:
+     - Count rows where `referrerBrokerId = A.id` AND `status = 'COMPLETED'`.
+   - `loadsEarned`:
+     - Either:
+       - `20 * activeCount` (if each completion gives 20 loads), OR
+       - Sum explicit bonus credits if they are tracked separately.
+     - Choose the option that matches how you implemented bonus crediting. If you’re just adding +20 credits per completed referral, then `20 * activeCount` is sufficient for display.
+
+3) Extend the Billing API response with something like:
+
+   ```ts
+   referralStats: {
+     referrals: number;
+     active: number;
+     loadsEarned: number;
+   }
+
+4.	Update the Billing page component so that:
+	•	The left stat box shows referralStats.referrals.
+	•	The middle stat box shows referralStats.active.
+	•	The right stat box (green number) shows referralStats.loadsEarned.
+
+==================================================
+7. Quick sanity tests (must all pass)
+
+After implementing the above, manually test with fresh test accounts:
+	1.	As Broker A (existing Pro):
+	•	Go to Billing.
+	•	Copy referral link (now guaranteed to be /login?ref=CODE or /signup?ref=CODE built by your helper).
+	2.	In a private window as a new user:
+	•	Open the referral link.
+	•	Sign up as Broker B.
+	•	Buy Pro subscription using test Stripe card.
+	3.	After Stripe redirects back and the webhook runs:
+	•	Reload Billing for Broker A:
+	•	REFERRALS >= 1
+	•	ACTIVE >= 1
+	•	LOADS EARNED = 20 * ACTIVE
+	•	Extra credits / remaining loads should include the referral bonus (+20 loads).
+	•	Reload Billing for Broker B:
+	•	Extra credits / remaining loads should reflect +10 bonus loads for referral.
+	4.	Test the manual “Apply” path:
+	•	Create Broker C without using referral link.
+	•	Go to their Billing or subscription page, paste Broker A’s referral link into the “referral link” field, press Apply.
+	•	Confirm success message.
+	•	Then buy Pro as Broker C.
+	•	Verify A and C are rewarded the same way as in steps above.
+
+Ensure that:
+	•	Normal Pro purchase without any referral continues to work.
+	•	No user can use their own referral code.
+	•	A broker cannot change referrer after a COMPLETED referral (you can keep status COMPLETED as read-only and reject Apply in that case).
+
+Please implement these changes with minimal modifications to unrelated code, and add concise comments where you touch critical billing / Stripe / referral logic so the human maintainer can review easily.
