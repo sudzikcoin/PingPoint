@@ -2401,37 +2401,37 @@ export async function registerRoutes(
     }
   });
 
-  // POST /api/admin/referrals - Create referral code
-  app.post("/api/admin/referrals", async (req: Request, res: Response) => {
+  // POST /api/admin/referral-code - Set a broker's referral code
+  app.post("/api/admin/referral-code", async (req: Request, res: Response) => {
     try {
       const admin = await requireAdminAuth(req);
       if (!admin) {
         return res.status(403).json({ error: "Admin access required" });
       }
 
-      const { referrerId, code, rewardLoads } = req.body;
+      const { brokerId, code } = req.body;
 
-      if (!referrerId || !code) {
-        return res.status(400).json({ error: "referrerId and code are required" });
+      if (!brokerId || !code) {
+        return res.status(400).json({ error: "brokerId and code are required" });
       }
 
-      const referral = await storage.createReferral({
-        referrerId,
-        code: code.toUpperCase(),
-        rewardLoads: rewardLoads || 1,
-      });
+      const updatedBroker = await storage.updateBrokerReferralCode(brokerId, code.toUpperCase());
+      if (!updatedBroker) {
+        return res.status(404).json({ error: "Broker not found" });
+      }
 
       // Log admin action
       await storage.createAdminAuditLog({
         actorBrokerId: admin.id,
         actorEmail: admin.email,
-        action: "CREATE_REFERRAL",
-        metadata: JSON.stringify({ referrerId, code: referral.code }),
+        action: "SET_REFERRAL_CODE",
+        targetBrokerId: brokerId,
+        metadata: JSON.stringify({ code: code.toUpperCase() }),
       });
 
-      return res.json({ ok: true, referral });
+      return res.json({ ok: true, referralCode: updatedBroker.referralCode });
     } catch (error) {
-      console.error("Error in POST /api/admin/referrals:", error);
+      console.error("Error in POST /api/admin/referral-code:", error);
       return res.status(500).json({ error: "Internal server error" });
     }
   });

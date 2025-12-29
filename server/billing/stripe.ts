@@ -1,6 +1,6 @@
 import Stripe from "stripe";
 import { db } from "../db";
-import { stripeWebhookEvents, stripePayments, brokerEntitlements, referrals, promotions, promotionRedemptions } from "@shared/schema";
+import { stripeWebhookEvents, stripePayments, brokerEntitlements, referrals, promotions, promotionRedemptions, adminAuditLogs } from "@shared/schema";
 import { eq, and } from "drizzle-orm";
 import { grantCredits, ensureBrokerEntitlements, PRO_INCLUDED_LOADS, CYCLE_DAYS } from "./entitlements";
 
@@ -264,6 +264,22 @@ async function grantReferralRewards(
         referredLoadsGranted: REFERRED_REWARD_LOADS,
       })
       .where(eq(referrals.id, pendingReferral.id));
+
+    // Log the referral reward to admin audit log
+    await db.insert(adminAuditLogs).values({
+      actorEmail: "system",
+      action: "REFERRAL_REWARDS_GRANTED",
+      targetBrokerId: referredBrokerId,
+      metadata: JSON.stringify({
+        referralId: pendingReferral.id,
+        referrerId: pendingReferral.referrerId,
+        referredId: referredBrokerId,
+        referrerLoads: REFERRER_REWARD_LOADS,
+        referredLoads: REFERRED_REWARD_LOADS,
+        stripeSessionId,
+        stripeSubscriptionId,
+      }),
+    });
 
     console.log(`[Referral] Granted ${REFERRER_REWARD_LOADS} loads to referrer ${pendingReferral.referrerId} and ${REFERRED_REWARD_LOADS} loads to ${referredBrokerId}`);
   } catch (error: any) {
