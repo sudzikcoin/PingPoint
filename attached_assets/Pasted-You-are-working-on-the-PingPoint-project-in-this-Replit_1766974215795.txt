@@ -1,0 +1,201 @@
+You are working on the PingPoint project in this Replit. Tech stack: 
+- Next.js 14 App Router + React + Tailwind (frontend in /app)
+- Node/Express (or similar) backend in /server
+- Drizzle ORM with SQL DB (you can see tables in startup logs)
+- There is already full auth, broker dashboard, loads, admin panel, Stripe billing, etc.
+
+You MUST:
+- Keep ALL existing flows working (driver app, broker console, Stripe billing, admin, webhooks, etc).
+- Re-use existing models / tables (do NOT create duplicate schemas).
+- Run the app with ONE dev server only (avoid EADDRINUSE on port 5000).
+- Prefer small, localized changes over big refactors.
+
+GOAL 1 — Make “UPLOAD RATE CONFIRMATION” fully working and attachable to a specific load
+=========================================================================================
+
+Context:
+- On the broker dashboard page you can see a big button: **UPLOAD RATE CONFIRMATION** under the “CREATE LOAD” button.
+- In the DB we already have a table named something like `rate_confirmation_files` (see startup log).
+- Right now this button either does nothing or opens a half-implemented UI – we need a complete flow.
+
+Tasks:
+
+1. Locate existing code for the broker dashboard:
+   - Page that renders “WELCOME, {name}” and the “CREATE LOAD” + “UPLOAD RATE CONFIRMATION” buttons and the loads list.
+   - It is likely under `/app/(broker)/dashboard` or similar. Find the exact file and component and work there.
+
+2. Locate any existing code related to Rate Confirmation:
+   - Look for components / routes / DB models with names like:
+     - `RateConfirmation`, `RateConfirmationUpload`, `UploadRateConfirmationButton`
+     - API routes like `/api/rate-confirmations` or `/api/rate-confirmation/upload`
+     - Drizzle schema `rate_confirmation_files`.
+   - If such code exists, **extend and finish it** instead of creating a new parallel implementation.
+   - If there is no usable code, create a clean, minimal implementation that fits the existing style.
+
+3. Data model for rate confirmations:
+   - Use the existing table `rate_confirmation_files`. If it already has suitable columns, use them.
+   - If necessary, safely add missing columns via Drizzle migration (but do NOT break existing data):
+     - id (primary key, string/uuid)
+     - brokerId (foreign key to brokers table)
+     - loadId (nullable foreign key to loads table) — to attach RC to a specific load
+     - fileName (string)
+     - fileUrl or filePath (string, where the file is stored)
+     - mimeType (string)
+     - size (number)
+     - createdAt (timestamp, default now)
+   - Make sure `loadId` can be null (RC uploaded before assigning to a load) but our frontend flow will allow attaching to a specific load.
+
+4. Backend upload endpoint:
+   - Implement or finish an endpoint like: `POST /api/rate-confirmations` (if there’s already one, use it).
+   - It should accept `multipart/form-data`:
+     - field `file`: the uploaded RC file (PDF or image)
+     - field `loadId`: optional id of the load to attach to
+   - Only allow authenticated brokers; derive `brokerId` from the current session/auth context (reuse existing broker auth code).
+   - Save the file:
+     - Use a simple local filesystem storage directory inside the project, e.g. `./uploads/rate-confirmations`.
+     - Ensure the directory exists (create on startup if needed).
+     - Generate a unique filename (e.g. `${id}-${originalName}`).
+   - Insert a new row into `rate_confirmation_files` with:
+     - brokerId (current broker)
+     - loadId (if provided and belongs to this broker)
+     - fileName, mimeType, size, filePath/fileUrl, createdAt.
+   - Return JSON with the created RC record and any useful metadata.
+
+5. Serving/download of RC files:
+   - Implement a GET endpoint like `/api/rate-confirmations/:id/download` (or `/files/rate-confirmations/:id`):
+     - Check that the requesting broker owns this RC (or has permission via admin).
+     - Read the file from disk and stream it with correct `Content-Type` and `Content-Disposition: attachment; filename="..."`.
+   - Make sure URIs used in the frontend match this route.
+
+6. Frontend UI — Upload Rate Confirmation flow:
+   - When the broker clicks “UPLOAD RATE CONFIRMATION”, open a modal dialog instead of navigating away.
+   - The modal should contain:
+     - File input:
+       - `<input type="file" accept="application/pdf,image/*">`
+       - Show selected file name and size.
+       - Validate: max ~10MB (or reuse any existing validation constants).
+     - “Attach to Load” selector:
+       - A dropdown or searchable select with broker’s loads (use existing loads API).
+       - Show options like `LD-2025-1234 — Shipper → Destination`.
+       - Allow “No load / attach later”, but default behavior should encourage attaching.
+     - Buttons:
+       - “Cancel”
+       - “Upload Rate Confirmation” (primary).
+   - On submit:
+       - Disable button and show loading state.
+       - Send `multipart/form-data` POST request to your new API endpoint using `fetch` from the browser.
+   - On success:
+       - Close the modal.
+       - Optionally show a toast “Rate confirmation uploaded”.
+       - If a loadId was chosen, refresh the loads list so that the attached RC indicator appears on that load.
+
+7. Showing RC attached to loads:
+   - In the loads list and/or load details page:
+     - For each load, if there is at least one RC linked via `rate_confirmation_files.loadId`, show a small badge/icon, e.g. “RC” with a paperclip icon.
+     - Clicking that badge can:
+       - Either immediately start download of the most recent RC via the download endpoint,
+       - Or open a small modal listing all attached RC files with individual “Download” links.
+   - Make sure this is non-intrusive and doesn’t break existing layout.
+
+8. Permissions:
+   - Only brokers should see and upload their own RCs.
+   - Admin can see all RCs via existing or future admin panel, but for now just make sure broker access control is correct.
+
+GOAL 2 — Fully working filter for “YOUR LOADS”
+==============================================
+
+Right now the “Filter” button above the loads table appears but the filtering is not fully implemented. We need a complete, server-side filter by:
+
+- Date (range)
+- Shipper (shipper name)
+- Receiver (e.g. facility / carrier / receiver name – use existing field that represents receiver)
+- Load number
+- Price (rate amount)
+- Phone (driver phone or broker phone field used in loads)
+- Addresses (origin/destination city/state/address)
+- Email (broker email or load contact email)
+
+1. Find existing loads list API:
+   - Look for the handler that the broker dashboard uses to fetch loads (probably something like `GET /api/loads` or `/api/broker/loads`).
+   - Confirm how it currently supports pagination, sorting, etc.
+   - Extend THIS route to accept query parameters for filters (do NOT create a duplicate API).
+
+2. Extend API query parameters:
+   - Allow the following optional query params:
+     - `dateFrom`, `dateTo` — ISO date strings; filter by load pickup date or `createdAt` (choose whichever is already used in UI; if none, use `createdAt`).
+     - `shipper` — string; filter loads where `shipperName` ILIKE `%shipper%`.
+     - `receiver` — string; filter by the appropriate receiver field (e.g. `carrierName` or `facilityName` depending on schema).
+     - `loadNumber` — string; filter by `loadNumber` ILIKE `%loadNumber%`.
+     - `minRate`, `maxRate` — numeric; filter by `rateAmount` between these values.
+     - `phone` — string; filter by driver/broker phone fields ILIKE `%phone%`.
+     - `address` — string; filter across origin/destination city/state/address fields with ILIKE `%address%`.
+     - `email` — string; filter by broker email or any email field stored with the load.
+   - Use Drizzle `and()` / `or()` helpers to combine conditions only when the param is present.
+   - Keep existing pagination behavior working (page, limit, total, etc).
+
+3. Frontend filter UI:
+   - Find the filter button and any existing filter panel on the broker dashboard.
+   - Implement a real filter panel/drawer/modal that has input fields:
+     - Date range: from / to (can be simple text inputs or existing date picker).
+     - Shipper (text input).
+     - Receiver (text input).
+     - Load number (text input).
+     - Min price / Max price (numeric).
+     - Phone (text input).
+     - Address (text input).
+     - Email (text input).
+   - Connect these fields to React state.
+
+4. Filter behavior:
+   - When user clicks “Apply filters”:
+     - Build a query string with only non-empty fields.
+     - Trigger reload of loads via the loads API with these query params.
+     - Update the loads table with the filtered result.
+   - Add a “Clear filters” button:
+     - Clears all filter controls in the UI.
+     - Reloads loads list without any filter params.
+   - Show somewhere small text like “Filters applied” when any filter is active (for example, change the filter button color/label).
+
+5. UX details:
+   - The loads list should show correct counts even when filtered (e.g. “8 Active” may become “2 Active” for filtered subset).
+   - Preserve pagination when filters are applied (page resets to 1 for new filters).
+
+6. Type-safety and error handling:
+   - Make sure TypeScript types for API responses are updated if needed.
+   - Validate inputs on backend:
+     - Parse numbers safely.
+     - Ignore invalid dates instead of throwing.
+   - If something goes wrong in the frontend call, log to console and show a simple toast like “Failed to apply filters”.
+
+GOAL 3 — Keep everything stable and consistent
+==============================================
+
+- Do not break:
+  - Existing Stripe subscription/billing code.
+  - Existing driver tracking and load status updates.
+  - Existing admin panel, webhooks, promotions.
+- Reuse existing auth helpers for identifying the current broker.
+- Make sure new routes are integrated into existing routing style (if there is an `apiRouter`, plug new endpoints into it instead of creating a separate server instance).
+
+ACCEPTANCE CHECKLIST
+====================
+
+1. Start dev server (only one `npm run dev` running, no EADDRINUSE errors).
+2. Log in as broker.
+3. On broker dashboard:
+   - Click “UPLOAD RATE CONFIRMATION”.
+   - Modal opens with file input and “Attach to Load” selector.
+   - Select an existing load and choose a small PDF/image.
+   - Click “Upload Rate Confirmation”.
+   - Upload succeeds, modal closes, and no errors appear in console.
+4. Refresh the page:
+   - For the chosen load you can see an RC indicator/badge.
+   - Clicking the RC badge starts download of the file or opens a modal with a download link.
+5. Open webhook console/server logs: no unhandled errors, DB insert into `rate_confirmation_files` exists.
+6. Test filters:
+   - Click “Filter”, enter a specific shipper name that exists → Apply → loads list narrows to that shipper.
+   - Filter by date range that excludes most loads → see fewer or zero results.
+   - Filter by load number substring, price range, phone, address, email → verify that the backend query actually changes results.
+   - Click “Clear filters” → you see full list again.
+
+When you finish, ensure `npm run dev` still starts cleanly with no TypeScript or runtime errors and all new/changed files are saved.

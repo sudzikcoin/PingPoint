@@ -761,7 +761,7 @@ export async function registerRoutes(
     }
   });
 
-  // GET /api/loads - List loads for current broker (with pagination)
+  // GET /api/loads - List loads for current broker (with pagination and filters)
   app.get("/api/loads", async (req: Request, res: Response) => {
     try {
       const broker = await getBrokerFromRequest(req);
@@ -771,12 +771,27 @@ export async function registerRoutes(
 
       const page = Math.max(1, parseInt(req.query.page as string) || 1);
       const limit = Math.min(100, Math.max(1, parseInt(req.query.limit as string) || 25));
-      const status = req.query.status as string | undefined;
       const offset = (page - 1) * limit;
+
+      const filterOptions = {
+        limit,
+        offset,
+        status: req.query.status as string | undefined,
+        dateFrom: req.query.dateFrom as string | undefined,
+        dateTo: req.query.dateTo as string | undefined,
+        shipper: req.query.shipper as string | undefined,
+        receiver: req.query.receiver as string | undefined,
+        loadNumber: req.query.loadNumber as string | undefined,
+        minRate: req.query.minRate ? parseFloat(req.query.minRate as string) : undefined,
+        maxRate: req.query.maxRate ? parseFloat(req.query.maxRate as string) : undefined,
+        phone: req.query.phone as string | undefined,
+        address: req.query.address as string | undefined,
+        email: req.query.email as string | undefined,
+      };
 
       const { loads: allLoads, total } = await storage.getLoadsByBrokerPaginated(
         broker.id, 
-        { limit, offset, status }
+        filterOptions
       );
 
       const enrichedLoads = await Promise.all(
@@ -784,6 +799,7 @@ export async function registerRoutes(
           const loadStops = await storage.getStopsByLoad(load.id);
           const pickupStop = loadStops.find(s => s.type === 'PICKUP');
           const deliveryStop = loadStops.find(s => s.type === 'DELIVERY');
+          const hasRateConfirmation = await storage.hasRateConfirmation(load.id);
 
           return {
             id: load.id,
@@ -797,6 +813,7 @@ export async function registerRoutes(
             destinationCity: deliveryStop?.city || "",
             destinationState: deliveryStop?.state || "",
             createdAt: load.createdAt,
+            hasRateConfirmation,
           };
         })
       );
@@ -1561,7 +1578,100 @@ export async function registerRoutes(
 
   app.use("/uploads", express.static(path.join(process.cwd(), "uploads")));
 
-  // POST /api/loads/:loadId/rate-confirmation - Upload rate confirmation file
+  // POST /api/rate-confirmations - Upload rate confirmation file (optionally attach to load)
+  const ALLOWED_RC_MIMETYPES = [
+    "application/pdf",
+    "image/jpeg",
+    "image/png",
+    "image/gif",
+    "image/webp",
+  ];
+
+  app.post("/api/rate-confirmations", upload.single("file"), async (req: Request, res: Response) => {
+    try {
+      const broker = await getBrokerFromRequest(req);
+      if (!broker) {
+        return res.status(401).json({ error: "Unauthorized" });
+      }
+
+      const file = req.file;
+      const { loadId } = req.body;
+
+      if (!file) {
+        return res.status(400).json({ error: "File is required" });
+      }
+
+      if (!ALLOWED_RC_MIMETYPES.includes(file.mimetype)) {
+        fs.unlinkSync(path.join(uploadsDir, file.filename));
+        return res.status(400).json({ error: "Invalid file type. Please upload a PDF or image file." });
+      }
+
+      if (loadId) {
+        const load = await storage.getLoad(loadId);
+        if (!load || load.brokerId !== broker.id) {
+          fs.unlinkSync(path.join(uploadsDir, file.filename));
+          return res.status(404).json({ error: "Load not found or does not belong to you" });
+        }
+      }
+
+      const relativePath = `/uploads/rate-confirmations/${file.filename}`;
+
+      const rcFile = await storage.createRateConfirmationFile({
+        brokerId: broker.id,
+        loadId: loadId || null,
+        fileUrl: relativePath,
+        originalName: file.originalname,
+        mimeType: file.mimetype,
+        fileSize: file.size,
+      });
+
+      const origin = getBaseUrl(req);
+      const publicUrl = `${origin}${relativePath}`;
+
+      return res.json({
+        id: rcFile.id,
+        url: publicUrl,
+        originalName: rcFile.originalName,
+        loadId: rcFile.loadId,
+      });
+    } catch (error) {
+      console.error("Error uploading rate confirmation:", error);
+      return res.status(500).json({ error: "Failed to upload rate confirmation" });
+    }
+  });
+
+  // GET /api/rate-confirmations/:id/download - Download rate confirmation file
+  app.get("/api/rate-confirmations/:id/download", async (req: Request, res: Response) => {
+    try {
+      const broker = await getBrokerFromRequest(req);
+      if (!broker) {
+        return res.status(401).json({ error: "Unauthorized" });
+      }
+
+      const { id } = req.params;
+      const rcFile = await storage.getRateConfirmationFileById(id);
+
+      if (!rcFile || rcFile.brokerId !== broker.id) {
+        return res.status(404).json({ error: "Rate confirmation not found" });
+      }
+
+      const filePath = path.join(process.cwd(), rcFile.fileUrl);
+      if (!fs.existsSync(filePath)) {
+        return res.status(404).json({ error: "File not found on disk" });
+      }
+
+      res.setHeader("Content-Disposition", `attachment; filename="${rcFile.originalName}"`);
+      if (rcFile.mimeType) {
+        res.setHeader("Content-Type", rcFile.mimeType);
+      }
+      return res.sendFile(filePath);
+    } catch (error) {
+      console.error("Error downloading rate confirmation:", error);
+      return res.status(500).json({ error: "Failed to download rate confirmation" });
+    }
+  });
+
+  // POST /api/loads/:loadId/rate-confirmation - Upload rate confirmation file (legacy endpoint)
   app.post("/api/loads/:loadId/rate-confirmation", upload.single("file"), async (req: Request, res: Response) => {
     try {
       const broker = await getBrokerFromRequest(req);
@@ -1584,9 +1694,12 @@ export async function registerRoutes(
       const relativePath = `/uploads/rate-confirmations/${file.filename}`;
 
       const rcFile = await storage.createRateConfirmationFile({
+        brokerId: broker.id,
         loadId,
         fileUrl: relativePath,
         originalName: file.originalname,
+        mimeType: file.mimetype,
+        fileSize: file.size,
       });
 
       const origin = getBaseUrl(req);

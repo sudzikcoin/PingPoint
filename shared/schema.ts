@@ -185,13 +185,20 @@ export const trackingPingsRelations = relations(trackingPings, ({ one }) => ({
 // Rate Confirmation File model
 export const rateConfirmationFiles = pgTable("rate_confirmation_files", {
   id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
-  loadId: uuid("load_id").notNull().references(() => loads.id),
+  brokerId: uuid("broker_id").notNull().references(() => brokers.id),
+  loadId: uuid("load_id").references(() => loads.id),
   fileUrl: text("file_url").notNull(),
   originalName: text("original_name").notNull(),
+  mimeType: text("mime_type"),
+  fileSize: integer("file_size"),
   uploadedAt: timestamp("uploaded_at", { withTimezone: true }).notNull().default(sql`now()`),
 });
 
 export const rateConfirmationFilesRelations = relations(rateConfirmationFiles, ({ one }) => ({
+  broker: one(brokers, {
+    fields: [rateConfirmationFiles.brokerId],
+    references: [brokers.id],
+  }),
   load: one(loads, {
     fields: [rateConfirmationFiles.loadId],
     references: [loads.id],

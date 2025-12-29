@@ -43,7 +43,23 @@ import {
   type BrokerCredit,
 } from "@shared/schema";
 import { db } from "./db";
-import { eq, and, desc, ilike, sql, lt, gte } from "drizzle-orm";
+import { eq, and, desc, ilike, sql, lt, gte, lte, or } from "drizzle-orm";
+
+export interface LoadFilterOptions {
+  limit: number;
+  offset: number;
+  status?: string;
+  dateFrom?: string;
+  dateTo?: string;
+  shipper?: string;
+  receiver?: string;
+  loadNumber?: string;
+  minRate?: number;
+  maxRate?: number;
+  phone?: string;
+  address?: string;
+  email?: string;
+}
 
 export interface IStorage {
   // Broker operations
@@ -65,7 +81,7 @@ export interface IStorage {
   // Load operations
   getLoad(id: string): Promise<Load | undefined>;
   getLoadsByBroker(brokerId: string): Promise<Load[]>;
-  getLoadsByBrokerPaginated(brokerId: string, options: { limit: number; offset: number; status?: string }): Promise<{ loads: Load[]; total: number }>;
+  getLoadsByBrokerPaginated(brokerId: string, options: LoadFilterOptions): Promise<{ loads: Load[]; total: number }>;
   getLoadByToken(token: string, type: 'tracking' | 'driver'): Promise<Load | undefined>;
   createLoad(load: InsertLoad): Promise<Load>;
   updateLoad(id: string, data: Partial<Load>): Promise<Load | undefined>;
@@ -81,8 +97,11 @@ export interface IStorage {
   getTrackingPingsByLoad(loadId: string): Promise<TrackingPing[]>;
 
   // Rate confirmation file operations
-  createRateConfirmationFile(data: { loadId: string; fileUrl: string; originalName: string }): Promise<RateConfirmationFile>;
+  createRateConfirmationFile(data: { brokerId: string; loadId?: string | null; fileUrl: string; originalName: string; mimeType?: string; fileSize?: number }): Promise<RateConfirmationFile>;
   getLatestRateConfirmationFile(loadId: string): Promise<RateConfirmationFile | undefined>;
+  getRateConfirmationFileById(id: string): Promise<RateConfirmationFile | undefined>;
+  getRateConfirmationFilesByBroker(brokerId: string): Promise<RateConfirmationFile[]>;
+  hasRateConfirmation(loadId: string): Promise<boolean>;
 
   // Broker field hints operations
   upsertFieldHint(brokerId: string, fieldKey: string, value: string): Promise<BrokerFieldHint>;
@@ -220,13 +239,51 @@ export class DatabaseStorage implements IStorage {
 
   async getLoadsByBrokerPaginated(
     brokerId: string, 
-    options: { limit: number; offset: number; status?: string }
+    options: LoadFilterOptions
   ): Promise<{ loads: Load[]; total: number }> {
-    const { limit, offset, status } = options;
+    const { limit, offset, status, dateFrom, dateTo, shipper, receiver, loadNumber, minRate, maxRate } = options;
     
-    const whereConditions = status 
-      ? and(eq(loads.brokerId, brokerId), eq(loads.status, status))
-      : eq(loads.brokerId, brokerId);
+    const conditions: any[] = [eq(loads.brokerId, brokerId), eq(loads.isArchived, false)];
+    
+    if (status) {
+      conditions.push(eq(loads.status, status));
+    }
+    
+    if (dateFrom) {
+      try {
+        conditions.push(gte(loads.createdAt, new Date(dateFrom)));
+      } catch {}
+    }
+    
+    if (dateTo) {
+      try {
+        const endDate = new Date(dateTo);
+        endDate.setHours(23, 59, 59, 999);
+        conditions.push(lte(loads.createdAt, endDate));
+      } catch {}
+    }
+    
+    if (shipper) {
+      conditions.push(ilike(loads.shipperName, `%${shipper}%`));
+    }
+    
+    if (receiver) {
+      conditions.push(ilike(loads.carrierName, `%${receiver}%`));
+    }
+    
+    if (loadNumber) {
+      conditions.push(ilike(loads.loadNumber, `%${loadNumber}%`));
+    }
+    
+    if (minRate !== undefined && !isNaN(minRate)) {
+      conditions.push(gte(loads.rateAmount, minRate.toString()));
+    }
+    
+    if (maxRate !== undefined && !isNaN(maxRate)) {
+      conditions.push(lte(loads.rateAmount, maxRate.toString()));
+    }
+
+    const whereConditions = and(...conditions);
 
     const [countResult] = await db
       .select({ count: sql<number>`count(*)::int` })
@@ -319,10 +376,17 @@ export class DatabaseStorage implements IStorage {
   }
 
   // Rate confirmation file operations
-  async createRateConfirmationFile(data: { loadId: string; fileUrl: string; originalName: string }): Promise<RateConfirmationFile> {
+  async createRateConfirmationFile(data: { brokerId: string; loadId?: string | null; fileUrl: string; originalName: string; mimeType?: string; fileSize?: number }): Promise<RateConfirmationFile> {
     const [file] = await db
       .insert(rateConfirmationFiles)
-      .values(data)
+      .values({
+        brokerId: data.brokerId,
+        loadId: data.loadId || null,
+        fileUrl: data.fileUrl,
+        originalName: data.originalName,
+        mimeType: data.mimeType || null,
+        fileSize: data.fileSize || null,
+      })
       .returning();
     return file;
   }
@@ -335,6 +399,31 @@ export class DatabaseStorage implements IStorage {
       .orderBy(desc(rateConfirmationFiles.uploadedAt))
       .limit(1);
     return file || undefined;
+  }
+
+  async getRateConfirmationFileById(id: string): Promise<RateConfirmationFile | undefined> {
+    const [file] = await db
+      .select()
+      .from(rateConfirmationFiles)
+      .where(eq(rateConfirmationFiles.id, id));
+    return file || undefined;
+  }
+
+  async getRateConfirmationFilesByBroker(brokerId: string): Promise<RateConfirmationFile[]> {
+    return await db
+      .select()
+      .from(rateConfirmationFiles)
+      .where(eq(rateConfirmationFiles.brokerId, brokerId))
+      .orderBy(desc(rateConfirmationFiles.uploadedAt));
+  }
+
+  async hasRateConfirmation(loadId: string): Promise<boolean> {
+    const [file] = await db
+      .select({ id: rateConfirmationFiles.id })
+      .from(rateConfirmationFiles)
+      .where(eq(rateConfirmationFiles.loadId, loadId))
+      .limit(1);
+    return !!file;
   }
 
   // Broker field hints operations
