@@ -50,6 +50,82 @@ function generateToken(prefix: string): string {
   return `${prefix}_${randomBytes(12).toString('hex')}`;
 }
 
+// Helper function to apply referral from cookie after login
+async function applyReferralFromCookie(req: Request, res: Response, brokerId: string): Promise<void> {
+  try {
+    const refCode = req.cookies?.pingpoint_ref;
+    if (!refCode) {
+      return;
+    }
+
+    console.log(`[Referral] Found referral cookie: ${refCode} for broker ${brokerId}`);
+
+    // Look up the referrer
+    const referrer = await storage.getBrokerByReferralCode(refCode);
+    if (!referrer) {
+      console.log(`[Referral] Referral code ${refCode} not found, clearing cookie`);
+      res.clearCookie("pingpoint_ref", { path: "/" });
+      return;
+    }
+
+    // Cannot self-refer
+    if (referrer.id === brokerId) {
+      console.log(`[Referral] Self-referral detected, clearing cookie`);
+      res.clearCookie("pingpoint_ref", { path: "/" });
+      return;
+    }
+
+    // Check if this broker already has a referral
+    const existingReferral = await storage.getReferralByReferredId(brokerId);
+    if (existingReferral) {
+      console.log(`[Referral] Broker already has a referral (status: ${existingReferral.status}), clearing cookie`);
+      res.clearCookie("pingpoint_ref", { path: "/" });
+      
+      // If they already have a pending referral and are now PRO, grant rewards
+      if (existingReferral.status === "REGISTERED") {
+        const summary = await getBillingSummary(brokerId);
+        if (summary.plan === "PRO") {
+          await grantReferralRewardsIfEligible(brokerId);
+          console.log(`[Referral] Granted rewards for existing pending referral`);
+        }
+      }
+      return;
+    }
+
+    // Get the broker
+    const broker = await storage.getBroker(brokerId);
+    if (!broker) {
+      console.log(`[Referral] Broker ${brokerId} not found`);
+      res.clearCookie("pingpoint_ref", { path: "/" });
+      return;
+    }
+
+    // Create the referral with REGISTERED status
+    await storage.createReferral({
+      referrerId: referrer.id,
+      referredId: brokerId,
+      referredEmail: broker.email,
+      referrerCode: refCode,
+      status: "REGISTERED",
+    });
+
+    console.log(`[Referral] Created referral: referrer=${referrer.email}, referred=${broker.email}`);
+
+    // Check if broker is already PRO and grant rewards immediately
+    const summary = await getBillingSummary(brokerId);
+    if (summary.plan === "PRO") {
+      await grantReferralRewardsIfEligible(brokerId);
+      console.log(`[Referral] Broker is already PRO, granted rewards immediately`);
+    }
+
+    // Clear the cookie
+    res.clearCookie("pingpoint_ref", { path: "/" });
+  } catch (error: any) {
+    console.error(`[Referral] Error applying referral from cookie:`, error.message);
+    // Don't throw - referral application should not break login
+  }
+}
+
 function getBaseUrl(req?: Request): string {
   // Priority: explicit env var > request headers > fallback
   if (process.env.PINGPOINT_PUBLIC_URL) {
@@ -241,6 +317,9 @@ export async function registerRoutes(
       await getOrCreateTrustedDevice(req, res, verificationToken.brokerId);
       console.log(`[Verify] Session and trusted device created for broker ${verificationToken.brokerId}`);
       
+      // Apply referral from cookie if present
+      await applyReferralFromCookie(req, res, verificationToken.brokerId);
+      
       return res.json({ ok: true });
     } catch (error) {
       console.error("Error in /api/brokers/verify:", error);
@@ -270,6 +349,9 @@ export async function registerRoutes(
       
       // Mark this device as trusted
       await getOrCreateTrustedDevice(req, res, verificationToken.brokerId);
+      
+      // Apply referral from cookie if present
+      await applyReferralFromCookie(req, res, verificationToken.brokerId);
       
       return res.redirect('/app/loads');
     } catch (error) {
@@ -329,6 +411,9 @@ export async function registerRoutes(
         await storage.updateBrokerDeviceLastUsed(trustedDevice.id);
         createBrokerSession(broker.id, res);
         console.log(`[Login] Trusted device login for broker ${broker.email}`);
+        
+        // Apply referral from cookie if present
+        await applyReferralFromCookie(req, res, broker.id);
         
         return res.json({
           code: "LOGIN_SUCCESS",
@@ -1420,85 +1505,39 @@ export async function registerRoutes(
     return `${masked}@${domain}`;
   }
 
-  // POST /api/referrals/apply - Manually apply a referral code for an existing broker
-  app.post("/api/referrals/apply", async (req: Request, res: Response) => {
+  // POST /api/referrals/track - Set referral cookie when user visits with ?ref=CODE
+  // Security: Always returns success to prevent referral code enumeration attacks
+  // Actual validation is deferred to login time in applyReferralFromCookie
+  app.post("/api/referrals/track", strictRateLimit(10, 60000), async (req: Request, res: Response) => {
     try {
-      const broker = await getBrokerFromRequest(req);
-      if (!broker) {
-        return res.status(401).json({ error: "Unauthorized" });
-      }
-
-      let { code } = req.body;
+      const { code } = req.body;
       
       if (!code || typeof code !== "string") {
-        return res.status(400).json({ error: "Referral code is required" });
+        // Return success even for invalid input to prevent information leakage
+        return res.json({ ok: true });
       }
 
-      // Extract code from URL if a full URL was provided
-      if (code.includes("?ref=")) {
-        try {
-          const url = new URL(code.startsWith("http") ? code : `https://example.com${code}`);
-          code = url.searchParams.get("ref") || code;
-        } catch {
-          // If URL parsing fails, use the value as-is
-        }
-      }
-
-      code = code.trim().toUpperCase();
-
-      if (!code) {
-        return res.status(400).json({ error: "Invalid referral code" });
-      }
-
-      // Find the referrer by code
-      const referrer = await storage.getBrokerByReferralCode(code);
-      if (!referrer) {
-        return res.status(400).json({ error: "Invalid referral code" });
-      }
-
-      // Cannot use own referral code
-      if (referrer.id === broker.id) {
-        return res.status(400).json({ error: "You cannot use your own referral code" });
-      }
-
-      // Check if broker already has a referral
-      const existingReferral = await storage.getReferralByReferredId(broker.id);
-      if (existingReferral) {
-        if (existingReferral.status === "REWARDS_GRANTED") {
-          return res.status(400).json({ error: "A referral has already been applied and rewarded for your account" });
-        }
-        return res.status(400).json({ error: "You already have a referral applied to your account" });
-      }
-
-      // Create the referral
-      await storage.createReferral({
-        referrerId: referrer.id,
-        referredId: broker.id,
-        referredEmail: broker.email,
-        referrerCode: code,
-        status: "REGISTERED",
-      });
-
-      console.log(`[Referral] Manual apply: referrer=${referrer.email}, referred=${broker.email}`);
-
-      // Check if broker is already PRO and grant rewards immediately if so
-      const summary = await getBillingSummary(broker.id);
-      if (summary.plan === "PRO") {
-        await grantReferralRewardsIfEligible(broker.id);
-        console.log(`[Referral] Broker ${broker.email} is already PRO, granted rewards immediately`);
-        return res.json({ 
-          ok: true, 
-          message: "Referral applied and rewards granted! You've received 10 bonus loads." 
+      const normalizedCode = code.trim().toUpperCase();
+      
+      // Only set cookie if code looks valid (8 alphanumeric chars)
+      // Don't validate against database to prevent enumeration attacks
+      if (normalizedCode && /^[A-Z0-9]{6,10}$/.test(normalizedCode)) {
+        res.cookie("pingpoint_ref", normalizedCode, {
+          httpOnly: true,
+          secure: process.env.NODE_ENV === "production",
+          sameSite: "lax",
+          maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days
+          path: "/",
         });
+        console.log(`[Referral] Tracked referral code in cookie`);
       }
 
-      return res.json({ 
-        ok: true, 
-        message: "Referral applied! You'll receive bonus loads when you subscribe to PRO." 
-      });
+      // Always return success to prevent code enumeration
+      return res.json({ ok: true });
     } catch (error) {
-      console.error("Error in POST /api/referrals/apply:", error);
-      return res.status(500).json({ error: "Internal server error" });
+      console.error("Error in POST /api/referrals/track:", error);
+      // Return success even on error to prevent information leakage
+      return res.json({ ok: true });
     }
   });
 

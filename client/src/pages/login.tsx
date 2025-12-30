@@ -23,13 +23,15 @@ export default function LoginPage() {
     const params = new URLSearchParams(searchString);
     const ref = params.get("ref");
     if (ref) {
-      setReferralCode(ref.toUpperCase());
-      localStorage.setItem("pingpoint_referral_code", ref.toUpperCase());
-    } else {
-      const storedRef = localStorage.getItem("pingpoint_referral_code");
-      if (storedRef) {
-        setReferralCode(storedRef);
-      }
+      const code = ref.toUpperCase();
+      setReferralCode(code);
+      // Set HTTP-only cookie via API call
+      fetch("/api/referrals/track", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ code }),
+      }).catch(err => console.error("Failed to track referral:", err));
     }
   }, [searchString]);
 
@@ -44,7 +46,6 @@ export default function LoginPage() {
       if (result.code === "LOGIN_SUCCESS") {
         setStatus("success");
         setSuccessMessage(result.message);
-        localStorage.removeItem("pingpoint_referral_code");
         setTimeout(() => {
           setLocation(result.redirect || "/app/loads");
         }, 1500);
@@ -63,7 +64,6 @@ export default function LoginPage() {
           await api.brokers.sendVerification(broker.id);
           setStatus("magic_link_sent");
           setSuccessMessage("Account created! Check your email for a verification link.");
-          localStorage.removeItem("pingpoint_referral_code");
         } catch (signupErr: any) {
           setStatus("idle");
           setErrorMessage(signupErr.message || "Failed to create account. Please try again.");

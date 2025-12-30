@@ -1,0 +1,249 @@
+You are a senior full-stack engineer working on the PingPoint app (Next.js 14 App Router + TypeScript + Tailwind on the frontend, Express/Node + Drizzle/Postgres on the backend). The app is already mostly working, including subscriptions, extra load credits, and the “Refer & Earn” UI on the Billing page, but the referral logic itself is broken and must be fixed once and for all.
+
+GOAL
+Implement a **real working referral program** with the following rules, while keeping all existing plans, prices, and billing logic intact:
+
+1. Each broker has a unique **referral code** (e.g. `DNF3S37N`) and a **referral link** that looks like:
+   - `<APP_URL>/login?ref=<CODE>`
+   - (If a signup route exists, it’s OK to also support `<APP_URL>/signup?ref=<CODE>`, but login is enough.)
+
+2. The **only way** to use a referral is through that link:
+   - Remove/disable any “Enter code or paste link” + “Apply” input from the UI and its handlers.
+   - No manual field where a user types a code. Only clicking/opening the referral link.
+
+3. Referral BONUS logic:
+   - When a user opens the app with a `?ref=<CODE>` query param:
+     - We **store this referral code in an HTTP-only cookie** (e.g. `pingpoint_ref`) with a TTL of 30 days.
+     - Do **not** award any loads yet.
+   - When a user is authenticated and has plan PRO (either:
+     - he already had PRO before clicking the link, or
+     - he purchases PRO after clicking the link),
+     then we:
+       - award the referrer **+20 free loads**;
+       - award the referred user **+10 free loads**;
+       - persist a referral record so that this referral is only processed once.
+
+   Important details:
+   - If the user already has an account **and already has PRO** when he clicks the referral link, bonuses should still be granted (as soon as we link the cookie to this user).
+   - If the user has an account but **no PRO yet**, then bonuses are granted **only when** he successfully gets PRO.
+   - A user cannot refer himself (ignore or skip if `referrer.id === currentUser.id`).
+
+4. Billing UI counters “Refer & Earn” must become real:
+   - `REFERRALS` = total number of distinct referred brokers this user has successfully referred (i.e. referrals that reached the “completed” state).
+   - `ACTIVE` = how many of those referred brokers currently still have an active PRO subscription.
+   - `LOADS EARNED` = total amount of bonus loads this broker has ever earned from referrals (sum across all completed referrals).
+   - Keep the existing design and text, only wire them to real data.
+
+5. Existing **extra load credits** logic (purchased for $0.99, etc.) must remain unchanged. Referral bonuses should use the same mechanism the app already uses for crediting/balancing extra loads.
+
+--------------------
+STEP 1 – DISCOVER CURRENT REFERRAL IMPLEMENTATION
+1. Search the codebase for the referral UI on the Billing page:
+   - Look for text like `REFER & EARN`, `Your referral code`, `LOADS EARNED`, `Enter code or paste link`, `Have a friend's referral code?`, etc.
+   - Identify:
+     - React component(s) that render this section.
+     - Any hooks/hooks or API calls used to fetch or update referral data.
+2. Search backend for any referral-related code:
+   - Look for folders / files like `referral`, `referrals`, `refer`, `promotion_redemptions`, or similar.
+   - Search strings: `referral`, `ref_code`, `referrer`, `LOADS_EARNED`, `referralsCount`.
+   - Note any existing tables and models in Drizzle schema that are clearly meant for referrals.
+3. Identify where:
+   - Broker (user) entity is defined (likely `brokers` table/model).
+   - Extra load credits are credited/charged (e.g. `broker_credits`, `broker_entitlements`, or a column like `extraCredits`).
+   - Active PRO subscription is tracked (table like `subscriptions`, `stripe_payments`, or fields on `brokers`).
+
+DO NOT remove any existing columns or tables; reuse or extend the current schema.
+
+--------------------
+STEP 2 – DATABASE MODEL FOR REFERRALS
+1. Ensure the `brokers` table has a column for a unique referral code:
+   - If it already exists (e.g. `referral_code`, `refCode`), reuse it.
+   - If it doesn’t exist, add a new nullable, unique text column in the Drizzle schema, e.g.:
+
+     - `referralCode` text, unique, not null.
+
+   - On broker creation, if `referralCode` is missing, generate one:
+     - 7–8 chars long, uppercase alphanumeric, e.g. `DNF3S37N`.
+     - Ensure uniqueness by regenerating on conflict.
+
+2. Create or adapt a **Referrals** table if needed (use existing if already there):
+   - Fields (names can be adapted to match existing style):
+     - `id` (PK)
+     - `referrerBrokerId` (FK → brokers.id)
+     - `referredBrokerId` (FK → brokers.id)
+     - `referralCode` (text) – code used.
+     - `status` (text enum: 'PENDING' | 'COMPLETED')
+     - `createdAt` (timestamp)
+     - `completedAt` (timestamp | null)
+   - Add indexes on (`referrerBrokerId`), (`referredBrokerId`), and (`referralCode`).
+
+3. Run migrations and ensure the DB is up to date without losing existing data.
+
+--------------------
+STEP 3 – TRACKING REFERRAL CLICKS (COOKIE)
+We want a simple flow: when the user arrives with `?ref=CODE`, we remember the code in a cookie.
+
+1. In the Next.js App Router:
+   - Find the login page route (e.g. `app/(auth)/login/page.tsx` or similar).
+   - Adjust routing so that:
+     - `GET /login?ref=<CODE>` is valid and rendered by the login page.
+   - On the server side for that route (using `cookies()` from `next/headers`):
+     - If `searchParams.ref` is present:
+       - Validate that such `referralCode` exists in `brokers` (optional, but nice).
+       - Set an HTTP-only cookie `pingpoint_ref` with that code:
+         - `maxAge` ~ 30 days.
+         - `path` = `/`.
+   - Do NOT award any bonuses here; just set the cookie.
+
+   If there is also a dedicated signup page, do the same there for `?ref=`.
+
+2. Ensure the cookie is NOT overwritten by other logic and is visible to API routes (same domain, same path).
+
+--------------------
+STEP 4 – APPLYING REFERRALS WHEN USER IS PRO
+We need a single backend helper that can be called whenever a user “may” be eligible for a referral bonus.
+
+1. Create a backend service module, for example:
+   - `server/services/referrals.ts` (or reuse an existing one if already present).
+
+2. Implement function `async applyReferralIfNeeded(brokerId: string, requestCookies: RequestCookiesLike)` (name can be adapted to your style), responsibilities:
+
+   - Read the `pingpoint_ref` cookie value (refCode) from `requestCookies`.
+   - If no cookie → nothing to do.
+   - Look up the **current broker** by `brokerId`.
+   - Look up **referrer broker** by `referralCode = refCode`:
+     - If not found, or `referrer.id === broker.id`, do nothing and optionally clear the cookie.
+   - Check if we already have a referral row for (`referrer.id`, `broker.id`):
+     - If exists with status COMPLETED → do nothing.
+     - If exists with status PENDING → reuse it.
+     - If not exists → create a new row with:
+       - `status = 'PENDING'`
+       - `createdAt = now()`
+   - Check if the **referred broker currently has an active PRO subscription**:
+     - Reuse existing billing logic to determine if broker is PRO.
+     - Use exactly the same mechanism used on the Billing page / access control for PRO.
+   - If broker is PRO:
+     - Call an internal helper to award the bonuses **once**:
+
+       - Add **+20 free loads** to `referrer`.
+       - Add **+10 free loads** to `broker` (referred).
+
+       Reuse existing functions that add “extra credits” when someone buys credits, rather than hand-editing balances. For example:
+         - If there is a function like `addExtraCredits(brokerId, amount)` or similar, call it.
+         - If not, create a small utility that updates the proper table/column in a transactional and safe way.
+
+     - Mark the referral row as:
+       - `status = 'COMPLETED'`
+       - `completedAt = now()`
+     - Clear the `pingpoint_ref` cookie (so it doesn’t keep re-triggering).
+
+   - If broker is NOT PRO yet:
+     - Keep the referral row as `PENDING`, and leave cookie as is or clear it (your choice, but keep at least DB record so we can process later when he becomes PRO).
+
+3. Call `applyReferralIfNeeded(...)` in two places:
+
+   a) **After successful login/registration**:
+      - Wherever you create/return the session for a broker, call this helper:
+        - You have brokerId and request cookies here.
+        - This covers the case: “user already had PRO before clicking link” – as soon as he logs in after clicking the link, bonuses are granted.
+
+   b) **After PRO subscription is activated**:
+      - Find the Stripe webhook handler or whatever logic converts a broker to PRO (e.g. in `stripe-webhook`, `billing` service, etc.).
+      - After you successfully mark the broker as PRO (or extend subscription), call `applyReferralIfNeeded(brokerId, cookiesFromContextOrNull)`:
+        - For this call you might not have cookies; that’s OK:
+          - In `applyReferralIfNeeded`, if cookies are not available, you can:
+            - Look up a `PENDING` referral row where `referredBrokerId = brokerId` and use it to award bonuses (without reading cookie).
+        - This covers the case: “user had account, clicked referral link with no PRO, then bought PRO”.
+
+--------------------
+STEP 5 – UPDATE BILLING “REFER & EARN” UI
+1. In the Billing page component, remove the manual entry UI:
+   - Remove input “Have a friend’s referral code?” and the “Apply” button.
+   - Remove any client-side fetches/mutations calling an “apply referral” endpoint.
+   - Keep the existing layout for:
+     - Referral code display.
+     - “Copy Link” button.
+     - Three metrics cards: `REFERRALS`, `ACTIVE`, `LOADS EARNED`.
+
+2. Generate the **referral link** on this page:
+   - Use the current app URL (environment variable for public base URL, e.g. `PINGPOINT_PUBLIC_URL` or similar). If such var exists, reuse it.
+   - Referral link format: `<BASE_URL>/login?ref=<REFERRAL_CODE>`.
+   - “Copy Link” button should copy this full URL to the clipboard.
+
+3. Backend endpoint / hook for Billing page should now return:
+   - `referralCode` for this broker.
+   - `referralsCount` (REFERRALS).
+   - `activeReferredCount` (ACTIVE).
+   - `loadsEarnedFromReferrals` (LOADS EARNED).
+
+   Implement them as follows using the Referrals table and the same credits mechanism:
+
+   - `REFERRALS`:
+     - Count rows in Referrals where:
+       - `referrerBrokerId = currentBrokerId`
+       - `status = 'COMPLETED'`
+   - `ACTIVE`:
+     - Same rows as above, but referred brokers who currently have active PRO (reuse existing PRO-check helper).
+   - `LOADS EARNED`:
+     - Sum total bonus loads granted to this broker **from referrals only**.
+     - If you track credit origin separately (e.g. via a `reason` field), use that.
+     - Otherwise, sum `20 * numberOfCompletedReferrals` for referrer.
+     - (For now it is OK if it counts only referrer bonuses, not the 10 loads the user got as referred.)
+
+4. Ensure the Billing API/loader is stable and returns sensible default values (0, 0, 0) when there are no referrals yet.
+
+--------------------
+STEP 6 – CLEAN UP OLD, BROKEN REFERRAL HANDLERS
+1. Remove or no-op any obsolete endpoints that:
+   - Take a referral code/input from body and “apply” it manually.
+   - Perform partial referral updates that conflict with the new flow.
+2. Make sure there are no remaining UI elements that call those endpoints.
+3. Confirm TypeScript types compile and there are no unused imports.
+
+--------------------
+STEP 7 – MANUAL VERIFICATION (very important)
+After implementation, run the dev server and manually test these exact flows:
+
+1) BASIC GENERATION
+   - Log in as existing broker with PRO.
+   - Open Billing → Refer & Earn.
+   - Verify:
+     - Referral code is shown (e.g. `DNF3S37N`).
+     - “Copy Link” copies a URL like `<BASE_URL>/login?ref=DNF3S37N`.
+     - No input field for applying friend’s code.
+
+2) FLOW A – NEW USER WITHOUT PRO, THEN BUYS PRO
+   - In an incognito window:
+     - Open the copied link.
+     - Make sure `?ref=CODE` is present.
+     - Register/login as a **new broker** (no PRO yet).
+     - Confirm no bonuses yet for anyone.
+     - Buy PRO subscription for the new broker.
+   - Back as referrer and as new broker:
+     - Refresh Billing.
+     - Referrer should see:
+       - REFERRALS = 1
+       - ACTIVE = 1
+       - LOADS EARNED increased by 20.
+       - Extra loads / remaining loads increased by 20 in total.
+     - New broker should see:
+       - Extra loads increased by 10.
+
+3) FLOW B – EXISTING USER ALREADY WITH PRO
+   - Create or use a broker who already has PRO and has never been linked to this referrer.
+   - While logged out, open the referrer’s link (`/login?ref=CODE`).
+   - Log in as this already-PRO broker.
+   - After login:
+     - Both referrer and this broker should immediately receive respective bonuses (20 and 10).
+     - Referral appears in the referrer’s REFERRALS + ACTIVE.
+
+4) SELF-REFERRAL GUARD
+   - Open your own referral link while logged out, then log in as the same broker.
+   - Confirm that no bonuses are added and no referral row for self-referral is created.
+
+5) STABILITY
+   - Reload Billing for multiple brokers.
+   - Check that there are no runtime errors (React, API, server logs).
+   - Ensure Stripe billing, extra credit purchase, load creation, admin panel, webhooks, etc. still work as before.
+
+Make minimal, focused changes necessary to achieve this behavior. Do not change plan names, prices, or any non-referral business logic. Keep the UI style exactly the same, except for removing the manual “Apply referral code” input and wiring the counters to real data.
