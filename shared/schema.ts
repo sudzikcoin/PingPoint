@@ -13,7 +13,8 @@ export const brokers = pgTable("brokers", {
   timezone: text("timezone").default("Central (CT)"),
   emailVerified: boolean("email_verified").notNull().default(false),
   isBlocked: boolean("is_blocked").notNull().default(false),
-  referralCode: text("referral_code").unique(), // Personal referral code for sharing
+  referralCode: text("referral_code").unique(),
+  co2FactorGramPerMile: decimal("co2_factor_gram_per_mile", { precision: 10, scale: 2 }).notNull().default("1610"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`now()`),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().default(sql`now()`),
 });
@@ -111,6 +112,7 @@ export const loads = pgTable("loads", {
   archivedAt: timestamp("archived_at", { withTimezone: true }),
   deliveredAt: timestamp("delivered_at", { withTimezone: true }),
   trackingEndedAt: timestamp("tracking_ended_at", { withTimezone: true }),
+  distanceMiles: decimal("distance_miles", { precision: 10, scale: 2 }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`now()`),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().default(sql`now()`),
 });

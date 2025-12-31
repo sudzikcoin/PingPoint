@@ -19,6 +19,7 @@ import { createProPaymentIntent, checkAndConfirmIntent, getMerchantInfo } from "
 import { evaluateGeofencesForActiveLoad, getGeofenceDebugInfo } from "./geofence";
 import { getOrCreateWebhookConfigForUser, updateWebhookConfigForUser, emitLoadEvent } from "./webhooks/webhookService";
 import { notifyLoadStatusChange } from "./services/notificationService";
+import * as analyticsService from "./services/analyticsService";
 
 const uploadsDir = path.join(process.cwd(), "uploads", "rate-confirmations");
 if (!fs.existsSync(uploadsDir)) {
@@ -2709,6 +2710,111 @@ export async function registerRoutes(
       return res.json({ ok: true, referralCode: updatedBroker.referralCode });
     } catch (error) {
       console.error("Error in POST /api/admin/referral-code:", error);
+      return res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  // ============================================
+  // ANALYTICS ENDPOINTS
+  // ============================================
+
+  // GET /api/analytics/overview - Get analytics overview
+  app.get("/api/analytics/overview", async (req: Request, res: Response) => {
+    try {
+      const broker = await getBrokerFromRequest(req);
+      if (!broker) {
+        return res.status(401).json({ error: "Not authenticated" });
+      }
+
+      const { from, to } = req.query;
+      const fromDate = from ? new Date(from as string) : undefined;
+      const toDate = to ? new Date(to as string) : undefined;
+
+      const plan = await analyticsService.getBrokerPlan(broker.id);
+
+      // Free plan: limit to last 30 days
+      let effectiveFrom = fromDate;
+      let effectiveTo = toDate;
+      let limited = false;
+
+      if (plan === "FREE") {
+        const thirtyDaysAgo = new Date();
+        thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+        if (!effectiveFrom || effectiveFrom < thirtyDaysAgo) {
+          effectiveFrom = thirtyDaysAgo;
+          limited = true;
+        }
+        effectiveTo = effectiveTo || new Date();
+      }
+
+      const overview = await analyticsService.getAnalyticsOverview(broker.id, effectiveFrom, effectiveTo);
+
+      // For free plan, limit driver/shipper breakdowns
+      if (plan === "FREE") {
+        overview.byDrivers = overview.byDrivers.slice(0, 5);
+        overview.byShippers = overview.byShippers.slice(0, 5);
+      }
+
+      return res.json({ ...overview, plan, limited });
+    } catch (error) {
+      console.error("Error in GET /api/analytics/overview:", error);
+      return res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  // GET /api/analytics/loads - Get paginated loads with analytics
+  app.get("/api/analytics/loads", async (req: Request, res: Response) => {
+    try {
+      const broker = await getBrokerFromRequest(req);
+      if (!broker) {
+        return res.status(401).json({ error: "Not authenticated" });
+      }
+
+      const { from, to, page = "1", limit = "50" } = req.query;
+      const fromDate = from ? new Date(from as string) : undefined;
+      const toDate = to ? new Date(to as string) : undefined;
+      const pageNum = parseInt(page as string, 10);
+      const limitNum = parseInt(limit as string, 10);
+
+      const plan = await analyticsService.getBrokerPlan(broker.id);
+
+      // Free plan: limit to 50 rows max
+      const effectiveLimit = plan === "FREE" ? Math.min(limitNum, 50) : limitNum;
+
+      const result = await analyticsService.getAnalyticsLoadsTable(broker.id, fromDate, toDate, pageNum, effectiveLimit);
+
+      return res.json({ ...result, plan, limited: plan === "FREE" });
+    } catch (error) {
+      console.error("Error in GET /api/analytics/loads:", error);
+      return res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  // GET /api/analytics/loads.csv - Export loads as CSV
+  app.get("/api/analytics/loads.csv", async (req: Request, res: Response) => {
+    try {
+      const broker = await getBrokerFromRequest(req);
+      if (!broker) {
+        return res.status(401).json({ error: "Not authenticated" });
+      }
+
+      const { from, to } = req.query;
+      const fromDate = from ? new Date(from as string) : undefined;
+      const toDate = to ? new Date(to as string) : undefined;
+
+      const plan = await analyticsService.getBrokerPlan(broker.id);
+
+      // Free plan: limit to 50 rows
+      const limit = plan === "FREE" ? 50 : 1000;
+
+      const result = await analyticsService.getAnalyticsLoadsTable(broker.id, fromDate, toDate, 1, limit);
+      const csv = analyticsService.generateLoadsCsv(result.items);
+
+      res.setHeader("Content-Type", "text/csv");
+      res.setHeader("Content-Disposition", "attachment; filename=analytics-loads.csv");
+      return res.send(csv);
+    } catch (error) {
+      console.error("Error in GET /api/analytics/loads.csv:", error);
       return res.status(500).json({ error: "Internal server error" });
     }
   });

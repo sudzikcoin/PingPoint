@@ -1,0 +1,341 @@
+
+You are a senior full-stack engineer working on the PingPoint project.
+
+Tech stack (use what already exists in the repo):
+- Backend: Node / Express (or similar) API server in `server/` using TypeScript and Drizzle ORM with PostgreSQL.
+- Frontend: Next.js 14 with App Router in `app/`, using TypeScript and Tailwind CSS.
+- Email: Resend is already configured and used for magic-link login and other emails.
+- Billing, loads, tracking, webhooks, admin and other existing flows MUST remain working.
+
+GOAL OF THIS PROMPT (SPRINT 2)
+Implement a first version of **Analytics + CO₂ metrics** for PingPoint, in a SAFE and minimal way:
+
+1) Add data fields to support distance and CO₂ per load.
+2) Implement backend analytics endpoints that compute:
+   - Total loads, on-time vs late, delay, dwell times, CO₂ totals.
+   - Breakdowns by drivers and by shippers.
+3) Expose a new broker page “Analytics” with simple cards and tables.
+4) Respect Free vs Pro plans as LIGHT gating (no breaking changes).
+
+Do NOT break any existing functionality (login, magic links, billing, tracking, exceptions, admin, etc.).
+
+==================================================
+STEP 0 – DISCOVER EXISTING STRUCTURE
+==================================================
+
+1. Locate the existing Drizzle schema definitions for:
+   - `loads`
+   - any `stops` or `loadStops` tables if present (pickup/delivery timestamps)
+   - `brokers`
+   - `drivers` (if a dedicated table exists)
+   - any existing “shipper/receiver” storage (either in `loads` or separate tables).
+
+2. Locate how you currently:
+   - Store **planned pickup** and **planned delivery** times (appointment times).
+   - Store actual **pickup** and **delivery** event timestamps (Arrived/Departed, Delivered).
+   - Store **driver pings** (`tracking_pings` or equivalent).
+
+3. Locate:
+   - The main broker navigation (sidebar/topbar with “Loads”, “Billing”, “Exceptions”, etc.).
+   - Any existing analytics / dashboard components (if they exist; we will extend).
+
+DO NOT rename or remove any existing tables or fields.
+
+==================================================
+STEP 1 – DATABASE: DISTANCE & CO₂ SUPPORT
+==================================================
+
+We want to be able to estimate distance and CO₂ per load in a simple, robust way.
+
+1. In the Drizzle schema for `loads`, add a new column (or rename if a suitable one already exists):
+
+   - `distanceMiles` (or `distance_miles`) – `numeric` or `double precision`, nullable.
+
+   This represents the *planned* trip distance for the load in miles.
+
+2. In the Drizzle schema for `brokers`, add a new column:
+
+   - `co2FactorGramPerMile` (or `co2_factor_gram_per_mile`) – `numeric`, NOT NULL, with a reasonable default.
+   - Use a default like `1610` (grams CO₂ per mile for a heavy truck), but you may adjust slightly if needed.
+
+3. Run the appropriate Drizzle migration generation command and apply the migration to the database, consistent with the existing Drizzle workflow.
+
+4. Do NOT change existing columns. Only add new ones.
+
+==================================================
+STEP 2 – POPULATE distanceMiles WHEN CREATING LOADS
+==================================================
+
+We want to set `distanceMiles` when a new load is created, if possible.
+
+1. Find the API endpoint or service that handles **new load creation** (the POST handler for creating loads).
+
+2. If there is already a function that computes a route or distance (for example via Valhalla or any routing service):
+
+   - Reuse that function to compute the **planned distance** between pickup and delivery (and intermediate stops if applicable).
+   - Convert the distance to **miles** (if the routing library returns meters or km).
+   - Set `distanceMiles` for the new load accordingly.
+
+3. If there is NO existing distance computation utility:
+
+   - DO NOT implement complex new routing logic in this sprint.
+   - For now, leave `distanceMiles` as `null` on creation.
+   - Add a `TODO` comment and a clear note (e.g. in the load creation handler) explaining that distance calculation will be wired later.
+
+4. Ensure that NOT computing distance does NOT break analytics (we will treat `null` distance as “unknown” and skip it in CO₂ calculations).
+
+==================================================
+STEP 3 – DEFINE ANALYTICS METRICS (LOGIC)
+==================================================
+
+We will implement the following metrics for a given broker and date range (`from`, `to`):
+
+For all loads belonging to the current broker whose **planned pickup or delivery** falls within the range:
+
+1. Base counts:
+   - `totalLoads`
+   - `deliveredLoads` (loads in final “delivered” status)
+   - `onTimeLoads` (delivered on or before planned delivery time + small grace, e.g. 15 minutes)
+   - `lateLoads` = `deliveredLoads - onTimeLoads`
+   - `onTimePercent` = `onTimeLoads / max(1, deliveredLoads) * 100`
+
+2. Delay metrics:
+   - `avgDelayMinutes`:
+     - For `late` loads, compute (actualDeliveryTime - plannedDeliveryTime) in minutes and average it.
+   - If there are no late loads, this can be `0` or `null`.
+
+3. Dwell metrics:
+   - `avgPickupDwellMinutes`:
+     - For each load, if there is a pickup stop with `Arrived` and `Departed` timestamps, compute `Departed - Arrived` in minutes.
+     - Average across all loads where both times exist.
+   - `avgDeliveryDwellMinutes`:
+     - Same idea for the final delivery stop.
+
+4. CO₂:
+   - For each load with non-null `distanceMiles`, estimate:
+     - `co2KgPerLoad = (distanceMiles * co2FactorGramPerMile) / 1000.0`
+   - Summed across loads → `co2TotalKg`.
+
+5. Breakdowns:
+   - `byDrivers`:
+     - For each driver, compute:
+       - `totalLoads`, `deliveredLoads`, `onTimeLoads`, `lateLoads`, `onTimePercent`.
+   - `byShippers` (if you have a `shipper` concept):
+     - Similar stats aggregated per shipper.
+   - You do NOT need to implement extremely detailed stats; focus on correctness and moderate performance.
+
+You MAY implement some of these metrics directly in SQL/Drizzle. It is fine if the initial implementation is straightforward and not micro-optimized, as long as it is clean and safe.
+
+==================================================
+STEP 4 – BACKEND: ANALYTICS SERVICE MODULE
+==================================================
+
+Create a new server-side module, for example:
+
+- `server/services/analyticsService.ts`
+
+Implement functions like:
+
+```ts
+export async function getAnalyticsOverview(brokerId: string, from?: Date, to?: Date) { ... }
+
+export async function getAnalyticsLoadsTable(brokerId: string, from?: Date, to?: Date) { ... }
+
+export async function getAnalyticsBreakdownByDrivers(brokerId: string, from?: Date, to?: Date) { ... }
+
+export async function getAnalyticsBreakdownByShippers(brokerId: string, from?: Date, to?: Date) { ... }
+
+Implementation notes:
+	1.	Use the Drizzle ORM and existing schema types.
+	2.	Be defensive with null timestamps:
+	•	If a load does not have a planned delivery time or an actual delivery time, exclude it from on-time/late calculations.
+	3.	When from / to are not provided:
+	•	Default to the last 30 days (or a similar reasonable default).
+	4.	Make sure that all queries are scoped by brokerId.
+
+==================================================
+STEP 5 – BACKEND API: ANALYTICS ENDPOINTS
+
+Expose REST endpoints for the broker UI.
+	1.	GET /api/analytics/overview
+	•	Authenticated as broker.
+	•	Query parameters:
+	•	from (ISO date string, optional)
+	•	to (ISO date string, optional)
+	•	Uses getAnalyticsOverview and returns JSON payload like:
+
+{
+  totalLoads: number;
+  deliveredLoads: number;
+  onTimeLoads: number;
+  lateLoads: number;
+  onTimePercent: number;
+  avgDelayMinutes: number | null;
+  avgPickupDwellMinutes: number | null;
+  avgDeliveryDwellMinutes: number | null;
+  co2TotalKg: number | null;
+  byDrivers: Array<{
+    driverId: string | null;
+    driverName: string | null;
+    totalLoads: number;
+    deliveredLoads: number;
+    onTimeLoads: number;
+    lateLoads: number;
+    onTimePercent: number;
+  }>;
+  byShippers: Array<{
+    shipperId: string | null;
+    shipperName: string | null;
+    totalLoads: number;
+    deliveredLoads: number;
+    onTimeLoads: number;
+    lateLoads: number;
+    onTimePercent: number;
+  }>;
+}
+
+
+	•	It is acceptable if byShippers only works once you have a clear shipper model; otherwise, omit or return an empty array and document it.
+
+	2.	GET /api/analytics/loads
+	•	Authenticated as broker.
+	•	Query parameters:
+	•	from, to
+	•	page, limit
+	•	Returns a paginated list of loads with key stats:
+
+{
+  items: Array<{
+    loadId: string;
+    loadNumber: string;
+    pickupCity?: string;
+    deliveryCity?: string;
+    plannedDeliveryAt?: string;
+    actualDeliveryAt?: string;
+    status: string;
+    onTime: boolean | null;
+    delayMinutes: number | null;
+    distanceMiles: number | null;
+    co2Kg: number | null;
+  }>;
+  page: number;
+  limit: number;
+  total: number;
+}
+
+
+	3.	GET /api/analytics/loads.csv
+	•	Same filters as /api/analytics/loads.
+	•	Returns CSV data (set Content-Type: text/csv).
+	•	Columns: Load number, pickup city, delivery city, planned delivery, actual delivery, on-time flag, delay minutes, distance miles, CO₂ kg.
+
+==================================================
+STEP 6 – PLAN GATING (FREE vs PRO)
+
+We don’t want to break existing flows, but we do want light gating.
+	1.	Inspect how broker.plan (or similar) is currently stored and used (e.g. FREE, PRO).
+	2.	For the analytics endpoints:
+	•	For Free plan:
+	•	Allow /api/analytics/overview, but:
+	•	Limit the date range to last 30 days.
+	•	You may omit byDrivers and byShippers or reduce the returned details.
+	•	For /api/analytics/loads and .csv:
+	•	You may limit the number of rows (e.g. first 50 records).
+	•	For Pro plan:
+	•	No such limitations.
+	3.	Implement a small helper (if not already existing), e.g.:
+
+function assertPlanAllowsAnalytics(broker: Broker) { ... }
+
+Or simply inline the logic inside the route handlers, but:
+	•	DO NOT block analytics fully for Free.
+	•	Instead, enforce soft limits and, if necessary, include a flag in the response like limited: true.
+
+==================================================
+STEP 7 – FRONTEND: NAVIGATION – ADD “Analytics”
+	1.	Find the main broker navigation component/layout (where Loads, Billing, Exceptions, etc. are listed).
+	2.	Add a new nav item:
+	•	Label: Analytics
+	•	Route: /app/analytics (adjust path to match your routing organization).
+	3.	Ensure the nav visually matches existing items (icons, colors, hover states).
+
+==================================================
+STEP 8 – FRONTEND: ANALYTICS PAGE
+
+Create a new page for broker analytics:
+	1.	File: e.g. app/(broker)/analytics/page.tsx
+	2.	This page should:
+	•	Fetch data from GET /api/analytics/overview (using the same data-fetching approach as other pages: server components, fetch, etc.).
+	•	Offer a simple date range filter:
+	•	Quick presets: “Last 7 days”, “Last 30 days”, “Last 90 days”.
+	•	Optionally custom date range (from/to date pickers), if the project already has a date picker component.
+	3.	Layout:
+	•	A header: Analytics
+	•	A row of metric cards (Tailwind cards):
+Example cards:
+	•	Total Loads
+	•	On-time %
+	•	Average Delay (min)
+	•	Pickup Dwell (min)
+	•	Delivery Dwell (min)
+	•	Total CO₂ (kg)
+	•	Below, two sections:
+a) By Drivers
+	•	Table:
+	•	Driver
+	•	Total loads
+	•	On-time %
+	•	Late loads
+	•	If driverName is null, display “Unassigned driver”.
+b) By Shippers (if data is available)
+	•	Same pattern: shipper, total loads, on-time %, etc.
+	4.	Add a link/button to export CSV:
+	•	Something like “Export loads CSV”.
+	•	Clicking it calls /api/analytics/loads.csv with the same date range and triggers a download.
+	5.	If the broker is on Free plan and the response indicates limited or similar:
+	•	Show a small banner at the top:
+	•	“You are on the Free plan. Upgrade to Pro to unlock full analytics history and driver/shipper breakdown.”
+	•	Do NOT block the page; just indicate the limitation.
+
+==================================================
+STEP 9 – FRONTEND: LOADS TABLE (OPTIONAL, SIMPLE)
+
+If you want a simple detailed list (optional but recommended):
+	1.	On the Analytics page, add a tab or section “Loads detail”.
+	2.	Use GET /api/analytics/loads to show a paginated table:
+	•	Columns:
+	•	Load #
+	•	Pickup city → Delivery city
+	•	Planned delivery
+	•	Actual delivery
+	•	On-time (icon / yes/no)
+	•	Delay (min)
+	•	Distance (mi)
+	•	CO₂ (kg)
+	3.	A click on Load # should navigate to /app/loads/[id] (reuse existing detail page).
+
+==================================================
+STEP 10 – LOGGING & TESTING
+
+Add minimal logging and test in dev.
+	1.	In getAnalyticsOverview and getAnalyticsLoadsTable:
+	•	Optionally log at debug level some information (e.g. number of loads considered) to help debugging.
+	•	Do NOT spam logs per load; log once per request.
+	2.	Verify in development:
+	•	TypeScript compiles, tests (if present) pass, and the app builds.
+	•	Login as a broker on Free plan:
+	•	Navigate to /app/analytics.
+	•	Verify metrics show up (even if simple).
+	•	Login as a broker on Pro plan:
+	•	Verify there are no artificial limits for date range and rows.
+	•	Create a few loads with:
+	•	On-time deliveries.
+	•	Late deliveries (manipulate test data).
+	•	Check that:
+	•	On-time % and avg delays make sense.
+	•	CO₂ total is correctly computed where distanceMiles and co2FactorGramPerMile are set.
+	3.	At the end, OUTPUT a concise markdown summary:
+	•	New/changed tables and fields.
+	•	New API endpoints.
+	•	New pages and components.
+	•	Any soft plan limitations for Free vs Pro.
