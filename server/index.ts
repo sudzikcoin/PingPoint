@@ -2,6 +2,7 @@ import { createApp, log } from "./app";
 import { serveStatic } from "./static";
 import { logEnvStatus, logAdminStatus } from "./config/env";
 import { ensureDatabase } from "./migrate";
+import { startExceptionScanning } from "./services/exceptionService";
 
 (async () => {
   logEnvStatus();
@@ -19,6 +20,8 @@ import { ensureDatabase } from "./migrate";
   }
   
   const { app, httpServer } = await createApp();
+  
+  startExceptionScanning(5);
 
   if (process.env.NODE_ENV === "production") {
     serveStatic(app);

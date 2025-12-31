@@ -41,11 +41,21 @@ Preferred communication style: Simple, everyday language.
     - **Promo Types**: FIXED_LOAD_CREDITS (grants bonus loads), PERCENT_FIRST_SUBSCRIPTION, FIXED_FIRST_SUBSCRIPTION (future: Stripe coupon integration).
     - **Referral Program**: Brokers get auto-generated 8-char referral codes. Referrer earns 20 loads, referred user earns 10 loads on first PRO subscription.
     - **Tracking**: promotionRedemptions table tracks per-user redemptions, referrals table tracks referral relationships and reward status.
+- **Exception Monitoring**:
+    - **Exception Types**: LATE (delivery >15min past expected), NO_SIGNAL (no ping for >20min), LONG_DWELL (>60min at stop without departure).
+    - **Detection**: Background service scans every 5 minutes for exception conditions.
+    - **Auto-Resolution**: Exceptions auto-clear when conditions improve (signal restored, departed, delivered).
+    - **UI**: Dedicated Exceptions page (/app/exceptions) with filtering, pagination, and manual resolution.
+- **Notifications**:
+    - **Status Updates**: Email notifications when load status changes (DELIVERED).
+    - **Broker Notifications**: Styled HTML emails sent to broker on status changes (EMAIL_BROKER_STATUS preference).
+    - **Client Notifications**: Optional emails to shipper/receiver contacts if EMAIL_CLIENT_STATUS enabled and contacts available.
+    - **Preferences**: Notification settings managed in Settings page with toggles for each channel.
 
 ### System Design Choices
 
 - **Database**: PostgreSQL via Drizzle ORM.
-    - **Schema**: 12 tables managing brokers, loads, drivers, stops, tracking pings, billing (entitlements, credits, payments), and audit logs.
+    - **Schema**: 26 tables managing brokers, loads, drivers, stops, tracking pings, billing (entitlements, credits, payments), exceptions, notification preferences, and audit logs.
     - **Migrations**: Drizzle Kit for schema-first migrations, with auto-migration on server startup.
 - **API Design**: RESTful endpoints under `/api/*`.
 - **Security**: JWT secret from environment variables, secure and HTTP-only cookies, SameSite: lax for CSRF protection, rate limiting on critical endpoints.

@@ -598,3 +598,60 @@ export type InsertWebhookDeliveryLog = {
   errorMessage?: string | null;
   durationMs: number;
 };
+
+// Exception Events - tracks problematic loads (Late, No Signal, Long Dwell)
+export const exceptionEvents = pgTable("exception_events", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  loadId: uuid("load_id").notNull().references(() => loads.id),
+  brokerId: uuid("broker_id").notNull().references(() => brokers.id),
+  type: text("type").notNull(), // 'LATE' | 'NO_SIGNAL' | 'LONG_DWELL'
+  detectedAt: timestamp("detected_at", { withTimezone: true }).notNull().default(sql`now()`),
+  resolvedAt: timestamp("resolved_at", { withTimezone: true }),
+  details: text("details"), // JSON string for extra context
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`now()`),
+});
+
+export const exceptionEventsRelations = relations(exceptionEvents, ({ one }) => ({
+  load: one(loads, {
+    fields: [exceptionEvents.loadId],
+    references: [loads.id],
+  }),
+  broker: one(brokers, {
+    fields: [exceptionEvents.brokerId],
+    references: [brokers.id],
+  }),
+}));
+
+// Notification Preferences - per-broker notification settings
+export const notificationPreferences = pgTable("notification_preferences", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  brokerId: uuid("broker_id").notNull().references(() => brokers.id),
+  channel: text("channel").notNull(), // EMAIL_BROKER_STATUS, EMAIL_CLIENT_STATUS
+  enabled: boolean("enabled").notNull().default(true),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`now()`),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().default(sql`now()`),
+});
+
+export const notificationPreferencesRelations = relations(notificationPreferences, ({ one }) => ({
+  broker: one(brokers, {
+    fields: [notificationPreferences.brokerId],
+    references: [brokers.id],
+  }),
+}));
+
+// Exception Event types
+export type ExceptionEvent = typeof exceptionEvents.$inferSelect;
+export type InsertExceptionEvent = {
+  loadId: string;
+  brokerId: string;
+  type: 'LATE' | 'NO_SIGNAL' | 'LONG_DWELL';
+  details?: string;
+};
+
+// Notification Preferences types
+export type NotificationPreference = typeof notificationPreferences.$inferSelect;
+export type InsertNotificationPreference = {
+  brokerId: string;
+  channel: string;
+  enabled?: boolean;
+};

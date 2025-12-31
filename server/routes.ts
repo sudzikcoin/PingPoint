@@ -18,6 +18,7 @@ import { incrementLoadsCreated, getUsageSummary } from "./billing/usage";
 import { createProPaymentIntent, checkAndConfirmIntent, getMerchantInfo } from "./billing/solana";
 import { evaluateGeofencesForActiveLoad, getGeofenceDebugInfo } from "./geofence";
 import { getOrCreateWebhookConfigForUser, updateWebhookConfigForUser, emitLoadEvent } from "./webhooks/webhookService";
+import { notifyLoadStatusChange } from "./services/notificationService";
 
 const uploadsDir = path.join(process.cwd(), "uploads", "rate-confirmations");
 if (!fs.existsSync(uploadsDir)) {
@@ -1226,6 +1227,15 @@ export async function registerRoutes(
           previousStatus,
         }).catch(err => console.error("Error emitting webhook:", err));
 
+        notifyLoadStatusChange({
+          loadId: load.id,
+          newStatus: 'DELIVERED',
+          previousStatus,
+        }).catch(err => console.error("Error sending notification:", err));
+
+        storage.resolveExceptions(load.brokerId, load.id)
+          .catch(err => console.error("Error resolving exceptions:", err));
+
         return res.json({ 
           ok: true, 
           stop, 
@@ -1538,6 +1548,148 @@ export async function registerRoutes(
       console.error("Error in POST /api/referrals/track:", error);
       // Return success even on error to prevent information leakage
       return res.json({ ok: true });
+    }
+  });
+
+  // ============================================
+  // EXCEPTIONS API
+  // ============================================
+
+  // GET /api/loads/exceptions - Get unresolved exceptions for current broker
+  app.get("/api/loads/exceptions", async (req: Request, res: Response) => {
+    try {
+      const broker = await getBrokerFromRequest(req);
+      if (!broker) {
+        return res.status(401).json({ error: "Unauthorized" });
+      }
+
+      const type = req.query.type as string | undefined;
+      const page = Math.max(1, parseInt(req.query.page as string) || 1);
+      const limit = Math.min(100, Math.max(1, parseInt(req.query.limit as string) || 25));
+      const offset = (page - 1) * limit;
+
+      const { exceptions, total } = await storage.getUnresolvedExceptions(broker.id, type, limit, offset);
+
+      const enrichedExceptions = await Promise.all(
+        exceptions.map(async (exc) => {
+          const load = await storage.getLoad(exc.loadId);
+          const stops = load ? await storage.getStopsByLoad(load.id) : [];
+          const pickupStop = stops.find(s => s.type === 'PICKUP');
+          const deliveryStop = stops.find(s => s.type === 'DELIVERY');
+          const pings = load ? await storage.getTrackingPingsByLoad(load.id) : [];
+          const lastPing = pings.length > 0 ? pings[pings.length - 1] : null;
+
+          return {
+            id: exc.id,
+            loadId: exc.loadId,
+            loadNumber: load?.loadNumber || 'Unknown',
+            type: exc.type,
+            detectedAt: exc.detectedAt.toISOString(),
+            lastPingAt: lastPing?.createdAt?.toISOString() || null,
+            status: load?.status || 'Unknown',
+            shipperName: pickupStop?.name || load?.shipperName || null,
+            receiverName: deliveryStop?.name || null,
+            details: exc.details ? JSON.parse(exc.details) : null,
+          };
+        })
+      );
+
+      return res.json({
+        exceptions: enrichedExceptions,
+        total,
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit),
+      });
+    } catch (error) {
+      console.error("Error in GET /api/loads/exceptions:", error);
+      return res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  // POST /api/loads/:id/exceptions/resolve - Resolve exceptions for a load
+  app.post("/api/loads/:id/exceptions/resolve", async (req: Request, res: Response) => {
+    try {
+      const broker = await getBrokerFromRequest(req);
+      if (!broker) {
+        return res.status(401).json({ error: "Unauthorized" });
+      }
+
+      const loadId = req.params.id;
+      const { type } = req.body || {};
+
+      const load = await storage.getLoad(loadId);
+      if (!load || load.brokerId !== broker.id) {
+        return res.status(404).json({ error: "Load not found" });
+      }
+
+      const resolved = await storage.resolveExceptions(broker.id, loadId, type);
+
+      return res.json({ ok: true, resolved });
+    } catch (error) {
+      console.error("Error in POST /api/loads/:id/exceptions/resolve:", error);
+      return res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  // ============================================
+  // NOTIFICATION PREFERENCES API
+  // ============================================
+
+  // GET /api/notifications/preferences - Get notification preferences
+  app.get("/api/notifications/preferences", async (req: Request, res: Response) => {
+    try {
+      const broker = await getBrokerFromRequest(req);
+      if (!broker) {
+        return res.status(401).json({ error: "Unauthorized" });
+      }
+
+      const preferences = await storage.ensureDefaultNotificationPreferences(broker.id);
+      const channels: Record<string, boolean> = {};
+      for (const pref of preferences) {
+        channels[pref.channel] = pref.enabled;
+      }
+
+      return res.json({ channels });
+    } catch (error) {
+      console.error("Error in GET /api/notifications/preferences:", error);
+      return res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  // PUT /api/notifications/preferences - Update notification preferences
+  app.put("/api/notifications/preferences", async (req: Request, res: Response) => {
+    try {
+      const broker = await getBrokerFromRequest(req);
+      if (!broker) {
+        return res.status(401).json({ error: "Unauthorized" });
+      }
+
+      const { channels } = req.body || {};
+      if (!channels || typeof channels !== 'object') {
+        return res.status(400).json({ error: "Invalid request body" });
+      }
+
+      const validChannels = ['EMAIL_BROKER_STATUS', 'EMAIL_CLIENT_STATUS'];
+      const updatedChannels: Record<string, boolean> = {};
+
+      for (const [channel, enabled] of Object.entries(channels)) {
+        if (validChannels.includes(channel) && typeof enabled === 'boolean') {
+          await storage.upsertNotificationPreference(broker.id, channel, enabled);
+          updatedChannels[channel] = enabled;
+        }
+      }
+
+      const allPrefs = await storage.getNotificationPreferences(broker.id);
+      const result: Record<string, boolean> = {};
+      for (const pref of allPrefs) {
+        result[pref.channel] = pref.enabled;
+      }
+
+      return res.json({ channels: result });
+    } catch (error) {
+      console.error("Error in PUT /api/notifications/preferences:", error);
+      return res.status(500).json({ error: "Internal server error" });
     }
   });
 

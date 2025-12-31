@@ -15,6 +15,8 @@ import {
   referrals,
   brokerEntitlements,
   brokerCredits,
+  exceptionEvents,
+  notificationPreferences,
   type Broker,
   type InsertBroker,
   type Driver,
@@ -41,6 +43,10 @@ import {
   type InsertReferral,
   type BrokerEntitlement,
   type BrokerCredit,
+  type ExceptionEvent,
+  type InsertExceptionEvent,
+  type NotificationPreference,
+  type InsertNotificationPreference,
 } from "@shared/schema";
 import { db } from "./db";
 import { eq, and, desc, ilike, sql, lt, gte, lte, or } from "drizzle-orm";
@@ -150,6 +156,21 @@ export interface IStorage {
   getReferralByReferredId(referredId: string): Promise<Referral | undefined>;
   updateReferral(id: string, data: Partial<Referral>): Promise<Referral | undefined>;
   getReferralStats(brokerId: string): Promise<{ totalReferred: number; proSubscribed: number; loadsEarned: number }>;
+
+  // Exception Event operations
+  createExceptionEvent(event: InsertExceptionEvent): Promise<ExceptionEvent>;
+  getUnresolvedExceptions(brokerId: string, type?: string, limit?: number, offset?: number): Promise<{ exceptions: ExceptionEvent[]; total: number }>;
+  getUnresolvedExceptionByLoadAndType(loadId: string, type: string): Promise<ExceptionEvent | undefined>;
+  resolveExceptions(brokerId: string, loadId: string, type?: string): Promise<number>;
+  getActiveLoadsWithDetails(brokerId: string): Promise<{ load: Load; stops: Stop[]; lastPing: TrackingPing | null }[]>;
+
+  // Notification Preferences operations
+  getNotificationPreferences(brokerId: string): Promise<NotificationPreference[]>;
+  upsertNotificationPreference(brokerId: string, channel: string, enabled: boolean): Promise<NotificationPreference>;
+  ensureDefaultNotificationPreferences(brokerId: string): Promise<NotificationPreference[]>;
+
+  // Get loads with unresolved exceptions for cleanup
+  getLoadsWithUnresolvedExceptions(brokerId: string): Promise<{ load: Load; stops: Stop[]; lastPing: TrackingPing | null }[]>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -878,6 +899,184 @@ export class DatabaseStorage implements IStorage {
     const loadsEarned = allReferrals.reduce((sum, r) => sum + (r.referrerLoadsGranted || 0), 0);
     
     return { totalReferred, proSubscribed, loadsEarned };
+  }
+
+  // Exception Event operations
+  async createExceptionEvent(event: InsertExceptionEvent): Promise<ExceptionEvent> {
+    const [result] = await db
+      .insert(exceptionEvents)
+      .values(event)
+      .returning();
+    return result;
+  }
+
+  async getUnresolvedExceptions(brokerId: string, type?: string, limit: number = 50, offset: number = 0): Promise<{ exceptions: ExceptionEvent[]; total: number }> {
+    const conditions = [
+      eq(exceptionEvents.brokerId, brokerId),
+      sql`${exceptionEvents.resolvedAt} IS NULL`,
+    ];
+    if (type) {
+      conditions.push(eq(exceptionEvents.type, type));
+    }
+    const whereConditions = and(...conditions);
+
+    const [countResult] = await db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(exceptionEvents)
+      .where(whereConditions);
+
+    const exceptions = await db
+      .select()
+      .from(exceptionEvents)
+      .where(whereConditions)
+      .orderBy(desc(exceptionEvents.detectedAt))
+      .limit(limit)
+      .offset(offset);
+
+    return { exceptions, total: countResult?.count || 0 };
+  }
+
+  async getUnresolvedExceptionByLoadAndType(loadId: string, type: string): Promise<ExceptionEvent | undefined> {
+    const [result] = await db
+      .select()
+      .from(exceptionEvents)
+      .where(and(
+        eq(exceptionEvents.loadId, loadId),
+        eq(exceptionEvents.type, type),
+        sql`${exceptionEvents.resolvedAt} IS NULL`
+      ));
+    return result || undefined;
+  }
+
+  async resolveExceptions(brokerId: string, loadId: string, type?: string): Promise<number> {
+    const conditions = [
+      eq(exceptionEvents.brokerId, brokerId),
+      eq(exceptionEvents.loadId, loadId),
+      sql`${exceptionEvents.resolvedAt} IS NULL`,
+    ];
+    if (type) {
+      conditions.push(eq(exceptionEvents.type, type));
+    }
+    const result = await db
+      .update(exceptionEvents)
+      .set({ resolvedAt: new Date() })
+      .where(and(...conditions))
+      .returning();
+    return result.length;
+  }
+
+  async getActiveLoadsWithDetails(brokerId: string): Promise<{ load: Load; stops: Stop[]; lastPing: TrackingPing | null }[]> {
+    const activeLoads = await db
+      .select()
+      .from(loads)
+      .where(and(
+        eq(loads.brokerId, brokerId),
+        eq(loads.isArchived, false),
+        sql`${loads.status} NOT IN ('DELIVERED', 'CANCELLED')`
+      ));
+
+    const result: { load: Load; stops: Stop[]; lastPing: TrackingPing | null }[] = [];
+    for (const load of activeLoads) {
+      const loadStops = await db
+        .select()
+        .from(stops)
+        .where(eq(stops.loadId, load.id))
+        .orderBy(stops.sequence);
+
+      const [lastPing] = await db
+        .select()
+        .from(trackingPings)
+        .where(eq(trackingPings.loadId, load.id))
+        .orderBy(desc(trackingPings.createdAt))
+        .limit(1);
+
+      result.push({ load, stops: loadStops, lastPing: lastPing || null });
+    }
+    return result;
+  }
+
+  // Notification Preferences operations
+  async getNotificationPreferences(brokerId: string): Promise<NotificationPreference[]> {
+    return await db
+      .select()
+      .from(notificationPreferences)
+      .where(eq(notificationPreferences.brokerId, brokerId));
+  }
+
+  async upsertNotificationPreference(brokerId: string, channel: string, enabled: boolean): Promise<NotificationPreference> {
+    const existing = await db
+      .select()
+      .from(notificationPreferences)
+      .where(and(
+        eq(notificationPreferences.brokerId, brokerId),
+        eq(notificationPreferences.channel, channel)
+      ));
+
+    if (existing.length > 0) {
+      const [updated] = await db
+        .update(notificationPreferences)
+        .set({ enabled, updatedAt: new Date() })
+        .where(eq(notificationPreferences.id, existing[0].id))
+        .returning();
+      return updated;
+    } else {
+      const [created] = await db
+        .insert(notificationPreferences)
+        .values({ brokerId, channel, enabled })
+        .returning();
+      return created;
+    }
+  }
+
+  async ensureDefaultNotificationPreferences(brokerId: string): Promise<NotificationPreference[]> {
+    const existing = await this.getNotificationPreferences(brokerId);
+    if (existing.length > 0) return existing;
+
+    const defaults = [
+      { brokerId, channel: 'EMAIL_BROKER_STATUS', enabled: true },
+      { brokerId, channel: 'EMAIL_CLIENT_STATUS', enabled: false },
+    ];
+    const created = await db
+      .insert(notificationPreferences)
+      .values(defaults)
+      .returning();
+    return created;
+  }
+
+  async getLoadsWithUnresolvedExceptions(brokerId: string): Promise<{ load: Load; stops: Stop[]; lastPing: TrackingPing | null }[]> {
+    const unresolvedExceptions = await db
+      .select({ loadId: exceptionEvents.loadId })
+      .from(exceptionEvents)
+      .where(and(
+        eq(exceptionEvents.brokerId, brokerId),
+        sql`${exceptionEvents.resolvedAt} IS NULL`
+      ))
+      .groupBy(exceptionEvents.loadId);
+
+    const loadIds = unresolvedExceptions.map(e => e.loadId);
+    if (loadIds.length === 0) return [];
+
+    const result: { load: Load; stops: Stop[]; lastPing: TrackingPing | null }[] = [];
+    for (const loadId of loadIds) {
+      const [load] = await db.select().from(loads).where(eq(loads.id, loadId));
+      if (!load) continue;
+
+      const loadStops = await db
+        .select()
+        .from(stops)
+        .where(eq(stops.loadId, load.id))
+        .orderBy(stops.sequence);
+
+      const [lastPing] = await db
+        .select()
+        .from(trackingPings)
+        .where(eq(trackingPings.loadId, load.id))
+        .orderBy(desc(trackingPings.createdAt))
+        .limit(1);
+
+      result.push({ load, stops: loadStops, lastPing: lastPing || null });
+    }
+    return result;
   }
 }
 

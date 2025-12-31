@@ -1,0 +1,328 @@
+Круто, давай сразу боевой промпт под Sprint 1 (Exceptions + Notifications) — чтобы Replit всё сделал сам и ничего не сломал. Скопируй этот блок целиком в Replit Backend Agent:
+
+You are a senior full-stack engineer working on the PingPoint project.
+
+Tech stack (use what already exists in the repo):
+- Backend: Node / Express (or similar) API server in `server/` using TypeScript and Drizzle ORM with PostgreSQL.
+- Frontend: Next.js 14 with App Router in `app/`, using TypeScript and Tailwind CSS.
+- Email: Resend is already configured and used for magic-link login and other emails.
+- Billing, loads, tracking, webhooks, admin and other existing flows MUST remain working.
+
+GOAL OF THIS PROMPT (SPRINT 1)
+Implement **Manage-by-Exception + Email notifications** in a minimal, safe way, WITHOUT breaking existing behavior:
+
+1) Add a new “Exceptions” screen for brokers that shows only problematic loads:
+   - Late delivery.
+   - No recent signal from driver.
+   - Long dwell at pickup/delivery.
+2) Add a simple notification preferences system.
+3) Send email notifications on load status changes (to broker and optionally to shipper/receiver), using the existing Resend email setup.
+4) Keep everything backward-compatible. DO NOT break login, magic links, Stripe, load creation, tracking, or admin.
+
+Please FOLLOW THESE STEPS IN ORDER and at the end print a clear summary of all files changed.
+
+==================================================
+STEP 0 – DISCOVER EXISTING STRUCTURE
+==================================================
+
+1. Inspect the project to find:
+   - The main API server entry (likely `server/index.ts` or similar).
+   - Existing Drizzle schema definitions for:
+     - `loads`
+     - any `tracking_pings` / tracking tables
+     - `brokers`
+   - Existing load status update logic:
+     - Where a load’s status is changed on Arrive/Depart (pickup/delivery).
+   - Existing Resend email utility:
+     - The function/module used to send emails (for magic link etc).
+   - Existing broker settings or profile endpoints:
+     - Where broker-specific settings are saved/loaded (for later notification preferences).
+   - Main broker dashboard navigation component:
+     - Where the left menu / tabs like Loads, Billing, etc. are defined.
+
+2. DO NOT change any existing table names or core flows. We only extend.
+
+==================================================
+STEP 1 – DATABASE: EXCEPTION EVENTS
+==================================================
+
+We’ll track “problem loads” in a separate table.
+
+1. In the Drizzle schema (where other tables are defined), add a new table, e.g. `exception_events`:
+
+   - Fields:
+     - `id` – UUID primary key.
+     - `loadId` – UUID FK -> loads.id.
+     - `brokerId` – UUID FK -> brokers.id.
+     - `type` – text (enum-like string). Allowed values: `'LATE' | 'NO_SIGNAL' | 'LONG_DWELL'`.
+     - `detectedAt` – timestamptz.
+     - `resolvedAt` – timestamptz | null.
+     - `details` – jsonb (optional small JSON with extra info, like `{ "delayMinutes": 42 }`).
+
+2. Run the correct Drizzle migration generation command and update the DB schema, consistent with the project’s existing Drizzle workflow.
+
+3. Do NOT remove or modify existing tables. Only add this new one.
+
+==================================================
+STEP 2 – DATABASE: NOTIFICATION PREFERENCES
+==================================================
+
+We want a simple way for each broker to enable/disable email notifications.
+
+1. In the Drizzle schema, add a new table `notification_preferences`:
+
+   - Fields:
+     - `id` – UUID primary key.
+     - `brokerId` – UUID FK -> brokers.id.
+     - `channel` – text (string key).
+       - Allowed values (for now):
+         - `EMAIL_BROKER_STATUS` – email to broker for status changes.
+         - `EMAIL_CLIENT_STATUS` – email to shipper/receiver for status changes.
+     - `enabled` – boolean.
+     - `createdAt` – timestamptz.
+     - `updatedAt` – timestamptz.
+
+2. On broker creation (wherever a broker row is first created), ensure there is a default seed of preferences:
+   - `EMAIL_BROKER_STATUS = true`
+   - `EMAIL_CLIENT_STATUS = false` (or true if that’s easier; just be consistent)
+
+   If there is no clean “on create broker” hook, add a simple lazy initializer:
+   - When loading notification preferences for a broker, if none exist, auto-create with the default values above.
+
+3. Run the corresponding migration(s) with the project’s Drizzle tooling.
+
+==================================================
+STEP 3 – BACKEND: EXCEPTION DETECTION LOGIC
+==================================================
+
+We will implement a small “exception detector” that periodically scans active loads and writes records in `exception_events`.
+
+Definitions (you may adjust thresholds slightly but keep them simple):
+
+- LATE:
+  - Load has a planned delivery time (use whatever existing column holds that info, e.g. appointment/delivery ETA).
+  - Load is not yet in a final status (e.g. not DELIVERED / CANCELLED).
+  - Current time > planned delivery time + small grace period (e.g. 15 minutes).
+- NO_SIGNAL:
+  - There is a field or way to compute the last driver location ping (e.g. from `tracking_pings`).
+  - If the last ping is older than some threshold (e.g. > 20 minutes) for an active load.
+- LONG_DWELL:
+  - If the load is at pickup or delivery and:
+    - For a stop with Arrived but not Departed, dwell time > threshold (e.g. 60 minutes).
+    - Use existing stop/segment schema (do NOT redesign stops). Read timestamps already saved.
+
+1. Implement a service module, e.g. `server/services/exceptionService.ts`:
+
+   - A function `scanAndUpdateExceptions()` that:
+     - Finds active loads for each broker.
+     - For each load, checks the three conditions above.
+     - For each detected issue:
+       - If there is **no** existing unresolved `exception_events` record with same `loadId`+`type`, create one with `detectedAt = now`.
+     - If a previously created `exception_events` record no longer meets the condition (e.g. delay gone or ping resumed):
+       - Optionally set `resolvedAt = now` (or keep as unresolved for now; minimal approach is fine, but do NOT break queries).
+
+2. Where to run `scanAndUpdateExceptions()`:
+
+   - In the backend server bootstrap (e.g. `server/index.ts`), create a **safe interval**:
+     - Every 5 minutes (or similar), call `scanAndUpdateExceptions()`.
+   - Guard it so it only starts once (no double intervals in dev hot-reload if possible).
+   - If the project already has a worker/cron structure, reuse it instead of creating a new random interval.
+
+   The idea: best-effort periodic scanning, not perfect enterprise cron.
+
+==================================================
+STEP 4 – BACKEND API: FETCH & RESOLVE EXCEPTIONS
+==================================================
+
+Add a small REST API for the broker UI.
+
+1. Add route: `GET /api/loads/exceptions`
+
+   - Must be **broker-authenticated** like other broker endpoints.
+   - Query parameters (all optional):
+     - `type` – `LATE | NO_SIGNAL | LONG_DWELL`
+     - `page`, `limit` – standard pagination.
+   - For the current broker, return a list of unresolved (`resolvedAt IS NULL`) exceptions:
+     - Basic shape:
+
+       ```ts
+       {
+         id: string;
+         loadId: string;
+         loadNumber: string; // whatever field they see on UI
+         type: 'LATE' | 'NO_SIGNAL' | 'LONG_DWELL';
+         detectedAt: string;
+         lastPingAt?: string;
+         status: string;
+         shipperName?: string;
+         receiverName?: string;
+       }
+       ```
+
+     - JOIN to `loads` and (if easy) to your shipper/receiver data to get names.
+
+2. Add route: `POST /api/loads/:id/exceptions/resolve`
+
+   - Authenticated as broker.
+   - Body may contain optional `type`; if provided, resolve only that type for this load; if not, resolve all exceptions for that load for this broker.
+   - Implementation:
+     - `UPDATE exception_events SET resolved_at = now() WHERE broker_id = currentBrokerId AND load_id = :id AND resolved_at IS NULL [AND type = :type]`.
+
+==================================================
+STEP 5 – BACKEND: NOTIFICATION SERVICE
+==================================================
+
+We’ll hook into existing status changes to send emails via Resend.
+
+1. Find the module that already sends emails (magic links, etc.) and reuse:
+   - Import the existing Resend client / email helper.
+   - Do NOT create a second Resend client with different env names.
+
+2. Create a service module, e.g. `server/services/notificationService.ts`, with:
+
+   ```ts
+   export async function notifyLoadStatusChange(loadId: string, newStatus: string) { ... }
+
+Implementation details:
+	•	Load the load, its broker, and any shipper/receiver contact fields that exist on the load (emails).
+	•	Load notification preferences for that broker (notification_preferences).
+	•	If EMAIL_BROKER_STATUS enabled:
+	•	Send email to broker’s email.
+	•	If EMAIL_CLIENT_STATUS enabled:
+	•	If shipperEmail is present -> send.
+	•	If receiverEmail is present -> send.
+
+Email content (keep it simple but clear):
+	•	Subject: PingPoint: Load #<loadNumber> status updated to <newStatus>
+	•	Body:
+	•	Load number, pickup/delivery cities, new status, time, and a link to the public tracking page if available.
+
+Wrap all email sending in try/catch so a failure does NOT break the main API logic. Log errors to the server console.
+	3.	Hook into status changes:
+	•	Find WHERE you change load status on:
+	•	Arrive/Depart pickup
+	•	Arrive/Depart delivery
+	•	Delivered / Completed
+	•	After a status change is successfully persisted:
+	•	Call notifyLoadStatusChange(load.id, newStatus) (await but catch errors).
+
+==================================================
+STEP 6 – BACKEND API: NOTIFICATION PREFERENCES
+
+Add a small API to manage preferences from the broker’s settings UI.
+	1.	Route: GET /api/notifications/preferences
+	•	Broker-authenticated.
+	•	Returns something like:
+
+{
+  channels: {
+    EMAIL_BROKER_STATUS: boolean;
+    EMAIL_CLIENT_STATUS: boolean;
+  }
+}
+
+
+	•	If there are no rows yet for this broker, auto-create defaults and return them.
+
+	2.	Route: PUT /api/notifications/preferences
+	•	Body strictly typed, e.g.:
+
+{
+  channels: {
+    EMAIL_BROKER_STATUS?: boolean;
+    EMAIL_CLIENT_STATUS?: boolean;
+  }
+}
+
+
+	•	Update or insert the corresponding notification_preferences records for the current broker.
+	•	Return the updated state.
+
+==================================================
+STEP 7 – FRONTEND: EXCEPTIONS PAGE
+
+Create a new broker page: “Exceptions” / “Alerts”.
+	1.	Find the main broker layout / navigation (tabs or sidebar where “Loads”, “Billing”, etc. appear).
+	2.	Add a new nav item:
+	•	Label: Exceptions (or Alerts).
+	•	Route: /app/exceptions (or consistent with your routing pattern in app/).
+	3.	Create the page file, e.g.: app/(broker)/exceptions/page.tsx (adjust segment names according to current structure).
+	4.	On this page:
+	•	Fetch data from GET /api/loads/exceptions (using whatever data-fetching pattern is used elsewhere: fetch, SWR, react-query, server components, etc.).
+	•	Add a simple filter control:
+	•	Dropdown/select with:
+	•	All
+	•	Late
+	•	No signal
+	•	Long dwell
+	•	Maps to type query param.
+	•	Render a table or list:
+Columns (example):
+	•	Load #
+	•	Type (Late / No signal / Long dwell) with a small colored pill.
+	•	Detected at
+	•	Last ping at
+	•	Status
+	•	Shipper / Receiver (if available)
+	•	Action: “View load”
+	•	On “View load” click:
+	•	Navigate to the existing load details page /app/loads/[id].
+	•	Optionally a small “Mark as resolved” button:
+	•	Calls POST /api/loads/:id/exceptions/resolve.
+	•	After success, refetch the list.
+	5.	Style the page with Tailwind consistent with the rest of PingPoint (cards, headings, etc.).
+
+==================================================
+STEP 8 – FRONTEND: NOTIFICATION SETTINGS UI
+
+We will add a simple section in broker settings to enable/disable email notifications.
+	1.	Find the existing settings / profile page for the broker (where email, company name, etc. are edited).
+	2.	In that settings page, add a new card/section:
+Title: Notifications
+Controls:
+	•	Checkbox: Email me when load status changes
+	•	Binds to EMAIL_BROKER_STATUS.
+	•	Checkbox: Email shipper/receiver on load status changes
+	•	Binds to EMAIL_CLIENT_STATUS.
+	3.	On mount, call GET /api/notifications/preferences to populate the checkboxes.
+	4.	On change, call PUT /api/notifications/preferences with the new values.
+	5.	Show a small toast / banner “Notification preferences saved” on success.
+
+==================================================
+STEP 9 – MANUAL/LOGGING SUPPORT
+
+To make testing easier for the owner (Dmitrii):
+	1.	In scanAndUpdateExceptions():
+	•	Add light logging (e.g. console.log) when a new exception is created for a load:
+	•	Include loadId, type, and brokerId.
+	•	Do NOT spam logs every run for already-existing exceptions; only when newly created or resolved.
+	2.	In notifyLoadStatusChange():
+	•	Log something like:
+	•	Sending status email for load <loadId> to broker <email> etc.
+	•	Again, wrap email calls in try/catch.
+
+==================================================
+STEP 10 – FINAL CHECK & SUMMARY
+
+After implementing everything:
+	1.	Ensure TypeScript compiles and the app builds.
+	2.	Run the dev server and quickly verify:
+	•	Login works.
+	•	Broker dashboard works as before.
+	•	Creating a new load still works.
+	•	Status buttons (Arrive/Depart) still work.
+	•	No runtime errors in logs when a status is updated.
+	3.	On the Exceptions page:
+	•	If there are no problem loads, show an empty state message.
+	•	If thresholds are easy to recreate in dev, simulate:
+	•	A load with outdated last ping.
+	•	A load with planned delivery time in the past.
+	•	Confirm they appear.
+	4.	On Notification settings:
+	•	Toggling checkboxes successfully updates via the API (monitor Network tab).
+	•	Trigger a status change and check that notifyLoadStatusChange logs appear.
+	5.	At the end, OUTPUT a short summary in markdown:
+	•	List of new/changed files.
+	•	Short description of what was added in each part (DB, backend, frontend).
+
+Если хочешь, следующим шагом после выполнения этого промпта можем придумать отдельный промпт для Спринта 2 (Analytics + CO₂), чтобы так же аккуратно докрутить отчётность.
