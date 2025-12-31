@@ -29,7 +29,16 @@ Preferred communication style: Simple, everyday language.
 ### Feature Specifications
 
 - **Load Management**: Create, manage, and assign loads; update load statuses. Rate confirmation upload with file attachment to loads.
-- **Driver Management**: View drivers associated with broker's loads at /app/drivers with load statistics (total/active loads).
+- **Driver Management**: Full driver CRM at /app/drivers with:
+    - **Driver CRUD**: Create, update drivers with name, phone, email, truck number, equipment type.
+    - **Tags & Flags**: Tags (e.g., reefer, team), favorite and blocked status.
+    - **Performance Stats**: Per-driver statsTotalLoads, statsOnTimeLoads, statsLateLoads computed via driverStatsService.
+    - **Filtering**: Search by name/phone/email/truck, filter by favorites/blocked.
+    - **Recommendations**: GET /api/loads/recommend-drivers suggests top drivers for new loads.
+- **Shipper/Receiver CRM**: Mini-CRM for managing shippers and receivers at /api/shippers and /api/receivers.
+    - **Data Model**: Separate shippers and receivers tables with address, contact info.
+    - **Load Linking**: Loads can optionally link to shipperId/receiverId for autocomplete and analytics.
+    - **Autocomplete**: Search API for typeahead when creating loads.
 - **Tracking**: Real-time location pings from drivers, public customer tracking links.
 - **Billing**:
     - **Tiers**: FREE (3 loads/month), PRO ($99/month, 200 loads/month via Solana Pay USDC).
@@ -63,7 +72,7 @@ Preferred communication style: Simple, everyday language.
 ### System Design Choices
 
 - **Database**: PostgreSQL via Drizzle ORM.
-    - **Schema**: 26 tables managing brokers, loads, drivers, stops, tracking pings, billing (entitlements, credits, payments), exceptions, notification preferences, and audit logs.
+    - **Schema**: 28 tables managing brokers, loads, drivers, stops, tracking pings, billing (entitlements, credits, payments), exceptions, notification preferences, shippers, receivers, and audit logs.
     - **Migrations**: Drizzle Kit for schema-first migrations, with auto-migration on server startup.
 - **API Design**: RESTful endpoints under `/api/*`.
 - **Security**: JWT secret from environment variables, secure and HTTP-only cookies, SameSite: lax for CSRF protection, rate limiting on critical endpoints.

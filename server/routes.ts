@@ -940,7 +940,7 @@ export async function registerRoutes(
     }
   });
 
-  // GET /api/drivers - List drivers associated with broker's loads
+  // GET /api/drivers - List drivers with pagination and filters
   app.get("/api/drivers", async (req: Request, res: Response) => {
     try {
       const broker = await getBrokerFromRequest(req);
@@ -948,19 +948,171 @@ export async function registerRoutes(
         return res.status(401).json({ error: "Unauthorized" });
       }
 
-      const drivers = await storage.getDriversByBroker(broker.id);
+      const { search, favorite, blocked, page = "1", limit = "20" } = req.query;
+
+      const result = await storage.getDriversByBrokerPaginated(broker.id, {
+        search: search as string | undefined,
+        favorite: favorite === "true" ? true : favorite === "false" ? false : undefined,
+        blocked: blocked === "true" ? true : blocked === "false" ? false : undefined,
+        page: parseInt(page as string, 10) || 1,
+        limit: parseInt(limit as string, 10) || 20,
+      });
+
+      return res.json({
+        items: result.items.map(d => ({
+          id: d.id,
+          name: d.name || null,
+          phone: d.phone,
+          email: d.email || null,
+          truckNumber: d.truckNumber || null,
+          equipmentType: d.equipmentType || null,
+          tags: d.tags || [],
+          isFavorite: d.isFavorite,
+          isBlocked: d.isBlocked,
+          statsTotalLoads: d.statsTotalLoads,
+          statsOnTimeLoads: d.statsOnTimeLoads,
+          statsLateLoads: d.statsLateLoads,
+          onTimePercent: d.statsTotalLoads > 0 ? Math.round((d.statsOnTimeLoads / d.statsTotalLoads) * 100) : null,
+          createdAt: d.createdAt.toISOString(),
+        })),
+        page: parseInt(page as string, 10) || 1,
+        limit: parseInt(limit as string, 10) || 20,
+        total: result.total,
+      });
+    } catch (error) {
+      console.error("Error in GET /api/drivers:", error);
+      return res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  // POST /api/drivers - Create a new driver
+  app.post("/api/drivers", async (req: Request, res: Response) => {
+    try {
+      const broker = await getBrokerFromRequest(req);
+      if (!broker) {
+        return res.status(401).json({ error: "Unauthorized" });
+      }
+
+      const { name, phone, email, truckNumber, equipmentType, tags } = req.body;
+
+      if (!phone) {
+        return res.status(400).json({ error: "Phone is required" });
+      }
+
+      const driver = await storage.createDriver({
+        brokerId: broker.id,
+        name: name || null,
+        phone,
+        email: email || null,
+        truckNumber: truckNumber || null,
+        equipmentType: equipmentType || null,
+        tags: tags || [],
+      });
+
+      return res.json({
+        id: driver.id,
+        name: driver.name,
+        phone: driver.phone,
+        email: driver.email,
+        truckNumber: driver.truckNumber,
+        equipmentType: driver.equipmentType,
+        tags: driver.tags || [],
+        isFavorite: driver.isFavorite,
+        isBlocked: driver.isBlocked,
+        statsTotalLoads: driver.statsTotalLoads,
+        statsOnTimeLoads: driver.statsOnTimeLoads,
+        statsLateLoads: driver.statsLateLoads,
+        createdAt: driver.createdAt.toISOString(),
+      });
+    } catch (error) {
+      console.error("Error in POST /api/drivers:", error);
+      return res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  // PUT /api/drivers/:id - Update a driver
+  app.put("/api/drivers/:id", async (req: Request, res: Response) => {
+    try {
+      const broker = await getBrokerFromRequest(req);
+      if (!broker) {
+        return res.status(401).json({ error: "Unauthorized" });
+      }
+
+      const { id } = req.params;
+      const existingDriver = await storage.getDriver(id);
+      
+      if (!existingDriver || existingDriver.brokerId !== broker.id) {
+        return res.status(404).json({ error: "Driver not found" });
+      }
+
+      const { name, phone, email, truckNumber, equipmentType, tags, isFavorite, isBlocked } = req.body;
+
+      const updated = await storage.updateDriver(id, {
+        name: name !== undefined ? name : existingDriver.name,
+        phone: phone !== undefined ? phone : existingDriver.phone,
+        email: email !== undefined ? email : existingDriver.email,
+        truckNumber: truckNumber !== undefined ? truckNumber : existingDriver.truckNumber,
+        equipmentType: equipmentType !== undefined ? equipmentType : existingDriver.equipmentType,
+        tags: tags !== undefined ? tags : existingDriver.tags,
+        isFavorite: isFavorite !== undefined ? isFavorite : existingDriver.isFavorite,
+        isBlocked: isBlocked !== undefined ? isBlocked : existingDriver.isBlocked,
+      });
+
+      if (!updated) {
+        return res.status(500).json({ error: "Failed to update driver" });
+      }
+
+      return res.json({
+        id: updated.id,
+        name: updated.name,
+        phone: updated.phone,
+        email: updated.email,
+        truckNumber: updated.truckNumber,
+        equipmentType: updated.equipmentType,
+        tags: updated.tags || [],
+        isFavorite: updated.isFavorite,
+        isBlocked: updated.isBlocked,
+        statsTotalLoads: updated.statsTotalLoads,
+        statsOnTimeLoads: updated.statsOnTimeLoads,
+        statsLateLoads: updated.statsLateLoads,
+        createdAt: updated.createdAt.toISOString(),
+      });
+    } catch (error) {
+      console.error("Error in PUT /api/drivers/:id:", error);
+      return res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  // GET /api/loads/recommend-drivers - Get recommended drivers for a new load
+  app.get("/api/loads/recommend-drivers", async (req: Request, res: Response) => {
+    try {
+      const broker = await getBrokerFromRequest(req);
+      if (!broker) {
+        return res.status(401).json({ error: "Unauthorized" });
+      }
+
+      const { pickupState, pickupCity, deliveryState, deliveryCity, limit = "3" } = req.query;
+
+      const drivers = await storage.getRecommendedDrivers(broker.id, {
+        pickupState: pickupState as string | undefined,
+        pickupCity: pickupCity as string | undefined,
+        deliveryState: deliveryState as string | undefined,
+        deliveryCity: deliveryCity as string | undefined,
+        limit: parseInt(limit as string, 10) || 3,
+      });
 
       return res.json({
         drivers: drivers.map(d => ({
           id: d.id,
+          name: d.name || d.phone,
           phone: d.phone,
-          createdAt: d.createdAt.toISOString(),
-          totalLoads: d.totalLoads,
-          activeLoads: d.activeLoads,
+          equipmentType: d.equipmentType,
+          statsTotalLoads: d.statsTotalLoads,
+          onTimePercent: d.statsTotalLoads > 0 ? Math.round((d.statsOnTimeLoads / d.statsTotalLoads) * 100) : null,
         })),
       });
     } catch (error) {
-      console.error("Error in GET /api/drivers:", error);
+      console.error("Error in GET /api/loads/recommend-drivers:", error);
       return res.status(500).json({ error: "Internal server error" });
     }
   });
@@ -2710,6 +2862,134 @@ export async function registerRoutes(
       return res.json({ ok: true, referralCode: updatedBroker.referralCode });
     } catch (error) {
       console.error("Error in POST /api/admin/referral-code:", error);
+      return res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  // ============================================
+  // SHIPPERS & RECEIVERS ENDPOINTS
+  // ============================================
+
+  // GET /api/shippers - List shippers
+  app.get("/api/shippers", async (req: Request, res: Response) => {
+    try {
+      const broker = await getBrokerFromRequest(req);
+      if (!broker) {
+        return res.status(401).json({ error: "Unauthorized" });
+      }
+
+      const { search, page = "1", limit = "20" } = req.query;
+
+      const result = await storage.getShippersByBroker(broker.id, {
+        search: search as string | undefined,
+        page: parseInt(page as string, 10) || 1,
+        limit: parseInt(limit as string, 10) || 20,
+      });
+
+      return res.json({
+        items: result.items,
+        page: parseInt(page as string, 10) || 1,
+        limit: parseInt(limit as string, 10) || 20,
+        total: result.total,
+      });
+    } catch (error) {
+      console.error("Error in GET /api/shippers:", error);
+      return res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  // POST /api/shippers - Create a shipper
+  app.post("/api/shippers", async (req: Request, res: Response) => {
+    try {
+      const broker = await getBrokerFromRequest(req);
+      if (!broker) {
+        return res.status(401).json({ error: "Unauthorized" });
+      }
+
+      const { name, address1, address2, city, state, zip, contactName, phone, email } = req.body;
+
+      if (!name) {
+        return res.status(400).json({ error: "Name is required" });
+      }
+
+      const shipper = await storage.createShipper({
+        brokerId: broker.id,
+        name,
+        address1: address1 || null,
+        address2: address2 || null,
+        city: city || null,
+        state: state || null,
+        zip: zip || null,
+        contactName: contactName || null,
+        phone: phone || null,
+        email: email || null,
+      });
+
+      return res.json(shipper);
+    } catch (error) {
+      console.error("Error in POST /api/shippers:", error);
+      return res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  // GET /api/receivers - List receivers
+  app.get("/api/receivers", async (req: Request, res: Response) => {
+    try {
+      const broker = await getBrokerFromRequest(req);
+      if (!broker) {
+        return res.status(401).json({ error: "Unauthorized" });
+      }
+
+      const { search, page = "1", limit = "20" } = req.query;
+
+      const result = await storage.getReceiversByBroker(broker.id, {
+        search: search as string | undefined,
+        page: parseInt(page as string, 10) || 1,
+        limit: parseInt(limit as string, 10) || 20,
+      });
+
+      return res.json({
+        items: result.items,
+        page: parseInt(page as string, 10) || 1,
+        limit: parseInt(limit as string, 10) || 20,
+        total: result.total,
+      });
+    } catch (error) {
+      console.error("Error in GET /api/receivers:", error);
+      return res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  // POST /api/receivers - Create a receiver
+  app.post("/api/receivers", async (req: Request, res: Response) => {
+    try {
+      const broker = await getBrokerFromRequest(req);
+      if (!broker) {
+        return res.status(401).json({ error: "Unauthorized" });
+      }
+
+      const { name, address1, address2, city, state, zip, contactName, phone, email } = req.body;
+
+      if (!name) {
+        return res.status(400).json({ error: "Name is required" });
+      }
+
+      const receiver = await storage.createReceiver({
+        brokerId: broker.id,
+        name,
+        address1: address1 || null,
+        address2: address2 || null,
+        city: city || null,
+        state: state || null,
+        zip: zip || null,
+        contactName: contactName || null,
+        phone: phone || null,
+        email: email || null,
+      });
+
+      return res.json(receiver);
+    } catch (error) {
+      console.error("Error in POST /api/receivers:", error);
       return res.status(500).json({ error: "Internal server error" });
     }
   });

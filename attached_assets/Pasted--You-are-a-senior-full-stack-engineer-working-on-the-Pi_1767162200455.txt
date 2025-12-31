@@ -1,0 +1,396 @@
+
+You are a senior full-stack engineer working on the PingPoint project.
+
+Tech stack (use what already exists in the repo):
+- Backend: Node / Express (or similar) API server in `server/` using TypeScript and Drizzle ORM with PostgreSQL.
+- Frontend: Next.js 14 with App Router in `app/`, using TypeScript and Tailwind CSS.
+- Email: Resend is configured and used for magic-link login and other emails.
+- Billing, loads, tracking, webhooks, admin, exceptions, analytics and other existing flows MUST remain working.
+
+GOAL OF THIS PROMPT (SPRINT 3)
+Implement **Drivers + Shippers/Receivers** features as a light “capacity”/CRM layer:
+
+1) Drivers:
+   - Make sure we have a proper `drivers` model.
+   - Add basic performance stats per driver (total loads, on-time, late, favorite/blocked, tags).
+   - Create a broker “Drivers” page (the tab that currently shows an error in landscape mode).
+   - Add a “recommended drivers” suggestion block when broker creates a new load.
+
+2) Shippers / Receivers:
+   - Extract shippers/receivers into separate tables (mini-CRM) IF not already done.
+   - Use them as a source for:
+     - Autocomplete when creating new loads.
+     - Analytics breakdown by shipper (to be used by the existing analytics endpoints if possible).
+
+3) DO NOT break any existing functionality:
+   - Login, magic link, load creation, tracking, billing, Stripe, admin, exceptions, analytics must keep working.
+
+Follow the steps below in order and at the end print a concise summary of all changes.
+
+==================================================
+STEP 0 – DISCOVER EXISTING STRUCTURE
+==================================================
+
+1. Inspect the current Drizzle schema to find:
+   - `drivers` table, if it exists.
+   - How driver information is currently stored on a load:
+     - e.g. `driverId`, `driverName`, `driverPhone`, etc.
+   - How shipper/receiver information is currently stored:
+     - Embedded in `loads` (e.g. `shipperName`, `shipperAddress`, `receiverName`, etc) OR via separate tables.
+   - Any existing references to a "Drivers" page or route.
+   - Any admin or analytics logic that already touches drivers/shippers.
+
+2. DO NOT rename or delete existing columns or tables. We only extend and hook into what exists.
+
+==================================================
+STEP 1 – DATABASE: DRIVERS STATS & FLAGS
+==================================================
+
+We want each driver to have basic performance metadata.
+
+1. If there is already a `drivers` table:
+
+   - Extend it with the following fields (if missing):
+
+     - `statsTotalLoads` (or `stats_total_loads`) – integer, default 0.
+     - `statsOnTimeLoads` (or `stats_on_time_loads`) – integer, default 0.
+     - `statsLateLoads` (or `stats_late_loads`) – integer, default 0.
+     - `tags` – `text[]` (array of strings), default `'{}'`.
+       - Example tags: `['reefer', 'dry van', 'team']`.
+     - `isFavorite` (or `is_favorite`) – boolean, default false.
+     - `isBlocked` (or `is_blocked`) – boolean, default false.
+
+2. If there is NO `drivers` table yet:
+
+   - Create a new `drivers` table with at least:
+
+     - `id` – UUID primary key.
+     - `brokerId` – UUID FK to `brokers.id` (each broker has their own drivers).
+     - `name` – text (driver full name).
+     - `phone` – text.
+     - `email` – text, nullable.
+     - `truckNumber` – text, nullable.
+     - `equipmentType` – text, nullable (e.g. `van`, `reefer`, `flatbed`).
+     - `statsTotalLoads`, `statsOnTimeLoads`, `statsLateLoads`, `tags`, `isFavorite`, `isBlocked` as above.
+     - `createdAt`, `updatedAt` – timestamptz.
+
+   - Wire `loads` to `drivers` via a `driverId` column (if not present):
+     - Add `driverId` in `loads` as a nullable FK to `drivers.id`.
+     - Keep all existing driver-related columns for backward compatibility (e.g. `driverName` as text).
+
+3. Create and apply Drizzle migrations consistent with the project’s workflow.
+
+==================================================
+STEP 2 – DATABASE: SHIPPERS / RECEIVERS MINI-CRM
+==================================================
+
+We want separate tables for shippers and receivers (per broker), to reuse and autocomplete them for new loads.
+
+1. If tables for shippers/receivers already exist:
+
+   - Inspect and reuse them.
+   - If needed, add any missing fields but DO NOT break existing data.
+
+2. If no such tables exist, create:
+
+   ```ts
+   shippers (
+     id          uuid pk,
+     brokerId    uuid fk -> brokers.id,
+     name        text not null,
+     address1    text,
+     address2    text,
+     city        text,
+     state       text,
+     zip         text,
+     contactName text,
+     phone       text,
+     email       text,
+     createdAt   timestamptz,
+     updatedAt   timestamptz
+   );
+
+   receivers (
+     id          uuid pk,
+     brokerId    uuid fk -> brokers.id,
+     name        text not null,
+     address1    text,
+     address2    text,
+     city        text,
+     state       text,
+     zip         text,
+     contactName text,
+     phone       text,
+     email       text,
+     createdAt   timestamptz,
+     updatedAt   timestamptz
+   );
+
+	3.	In the loads table:
+	•	Add shipperId and receiverId as nullable FK columns to shippers.id and receivers.id.
+	•	Keep existing plain text fields (shipper/receiver name, address etc.) for compatibility.
+	4.	Create and apply Drizzle migrations.
+
+==================================================
+STEP 3 – BACKEND: DRIVER STATS UPDATE LOGIC
+
+We want driver stats to update when loads are completed and/or when analytics code runs.
+	1.	Create a new server-side module, e.g.:
+	•	server/services/driverStatsService.ts
+	2.	Implement a function:
+
+export async function recomputeDriverStatsForBroker(brokerId: string): Promise<void> { ... }
+
+Behavior:
+	•	For all drivers of this broker:
+	•	Join loads filtered by this driverId and brokerId.
+	•	Count:
+	•	statsTotalLoads: number of loads (any final or active, or at least delivered).
+	•	statsOnTimeLoads: loads delivered on or before planned delivery time (+ small grace).
+	•	statsLateLoads: delivered later than planned.
+	•	Update the driver’s stats fields.
+	•	Optionally, for performance, you can:
+	•	Only recompute for drivers that have had loads changed recently.
+	•	But a full recompute per broker is acceptable as a first step if queries aren’t crazy.
+
+	3.	Integrate with existing flows:
+	•	When a load is moved to final “delivered” status:
+	•	After saving the load & status, call a helper:
+	•	updateDriverStatsForLoad(loadId) or just mark a flag that later triggers recompute.
+	•	Simpler approach:
+	•	Provide an admin endpoint to recompute driver stats for a broker on demand.
+	•	Call it from admin UI later if needed.
+	•	DO NOT introduce heavy slowdowns on the main request; you can:
+	•	Fire-and-forget (no await) with a try/catch around the recompute.
+	•	Or schedule recompute via a low-frequency interval.
+
+==================================================
+STEP 4 – BACKEND API: DRIVERS CRUD & LIST
+
+Expose basic APIs for the Drivers page.
+	1.	Create routes like:
+	•	GET /api/drivers
+	•	Auth: broker.
+	•	Query parameters:
+	•	search (string, optional) – matches driver name, phone, email, truck number.
+	•	favorite (boolean, optional).
+	•	blocked (boolean, optional).
+	•	page, limit.
+	•	Response:
+
+{
+  items: Array<{
+    id: string;
+    name: string;
+    phone?: string;
+    email?: string;
+    truckNumber?: string;
+    equipmentType?: string;
+    tags: string[];
+    isFavorite: boolean;
+    isBlocked: boolean;
+    statsTotalLoads: number;
+    statsOnTimeLoads: number;
+    statsLateLoads: number;
+    onTimePercent: number | null;
+    createdAt: string;
+  }>;
+  page: number;
+  limit: number;
+  total: number;
+}
+
+
+	•	POST /api/drivers
+	•	Creates a driver for the current broker.
+	•	Body fields: name (required), phone, email, truckNumber, equipmentType, optional tags.
+	•	Returns the created driver.
+	•	PUT /api/drivers/:id
+	•	Updates basic details: name, phone, email, equipmentType, tags, isFavorite, isBlocked.
+	•	Must respect brokerId, i.e. broker may only update their drivers.
+	•	(Optional) DELETE /api/drivers/:id
+	•	Soft delete or block only; to avoid breaking loads, you can set isBlocked = true instead of actual delete.
+
+	2.	For each driver in the response, compute onTimePercent as:
+	•	statsOnTimeLoads / max(1, statsTotalLoads) * 100.
+
+==================================================
+STEP 5 – BACKEND: DRIVER RECOMMENDATION ENDPOINT
+
+We want a simple “Recommended drivers” list when creating a new load.
+	1.	Create route:
+	•	GET /api/loads/recommend-drivers
+Query parameters:
+	•	pickupState, pickupCity (optional)
+	•	deliveryState, deliveryCity (optional)
+	•	limit (default 3)
+	2.	Logic (keep it simple, heuristic):
+	•	Scope by current broker.
+	•	Start from all non-blocked drivers.
+	•	Prefer (highest score first):
+	•	Drivers with higher statsTotalLoads (more experience).
+	•	Drivers with higher onTimePercent.
+	•	Optionally, if pickupState or deliveryState is present:
+	•	Slightly boost drivers who had loads where pickup/delivery was in these states (computed via a simple subquery).
+	•	Always exclude blocked drivers (isBlocked = true).
+	•	Return top N drivers with fields needed to show in UI and to select:
+
+{
+  drivers: Array<{
+    id: string;
+    name: string;
+    phone?: string;
+    equipmentType?: string;
+    statsTotalLoads: number;
+    onTimePercent: number | null;
+  }>
+}
+
+
+
+==================================================
+STEP 6 – BACKEND API: SHIPPERS / RECEIVERS
+
+Expose simple APIs for shippers and receivers for autocomplete and analytics.
+	1.	GET /api/shippers
+	•	Auth: broker.
+	•	Query: search (by name, city, state, contact, email), page, limit.
+	•	Returns basic info list.
+	2.	POST /api/shippers
+	•	Creates a shipper for the current broker.
+	•	Body: same structural fields as in DB (name, city, state, etc.).
+	•	On creation, you may auto-link this shipper to a current load if an optional loadId is passed.
+	3.	Same pattern for:
+	•	GET /api/receivers
+	•	POST /api/receivers
+	4.	When creating/updating loads:
+	•	If a shipper is selected from the autocomplete:
+	•	Save shipperId in the load.
+	•	If entered a completely new shipper:
+	•	Optionally auto-create a shipper record and store its id, in addition to plain text fields.
+	5.	For future analytics:
+	•	If possible, adjust the analytics service to group by these shipperId / receiverId instead of plain text.
+	•	But do NOT break existing analytics if plain-text-based grouping is already used.
+	•	It is acceptable in this sprint to keep analytics grouping as-is and only prepare data for future enhancement.
+
+==================================================
+STEP 7 – FRONTEND: DRIVERS PAGE (FIX “DRIVERS” TAB)
+
+We saw there is a “Drivers” tab in the sidebar in landscape mode that currently throws errors. We will make it real.
+	1.	Find where the nav tabs or menu is defined (where Loads and Drivers live in horizontal mode).
+	2.	Ensure the “Drivers” nav item points to a new page route:
+	•	Example: /app/drivers (adjust to your existing app routing layout: app/(broker)/drivers/page.tsx or similar).
+	3.	Create app/(broker)/drivers/page.tsx with the following behavior:
+	•	Fetch drivers from GET /api/drivers.
+	•	Show a layout:
+	•	Header: Drivers
+	•	Button: Add driver (opens a modal or inline form).
+	•	Table with columns:
+	•	Name
+	•	Phone
+	•	Email
+	•	Equipment
+	•	Tags
+	•	Total loads
+	•	On-time %
+	•	Favorited (icon)
+	•	Blocked (icon)
+	•	Actions (Edit)
+	4.	Implement:
+	•	Search input that debounces and requests /api/drivers?search=....
+	•	Filter toggles: Favorites only, Blocked only (map to query params).
+	•	Click on Add driver:
+	•	Shows a simple form (name required, others optional).
+	•	Sends POST /api/drivers.
+	•	On success, refetch list.
+	•	Click on row (or “Edit” button):
+	•	Opens edit form with:
+	•	Name, phone, email, equipmentType, tags (comma separated).
+	•	Checkboxes for Favorite and Blocked.
+	•	Sends PUT /api/drivers/:id.
+	5.	Make sure this page works on both mobile and desktop layouts, using Tailwind consistent with the rest of PingPoint.
+
+==================================================
+STEP 8 – FRONTEND: RECOMMENDED DRIVERS ON NEW LOAD
+
+On the “Create Load” screen we want a “Recommended drivers” block.
+	1.	Find the page for creating a new load:
+	•	e.g. app/(broker)/loads/new/page.tsx or similar.
+	2.	Identify where pickup and delivery are input (city/state fields).
+	3.	Add a small section “Recommended drivers”:
+	•	When pickup/delivery fields are filled (state/city):
+	•	Trigger a request to GET /api/loads/recommend-drivers with:
+	•	pickupState, pickupCity, deliveryState, deliveryCity.
+	•	Show cards/list for up to 3 drivers:
+	•	Name
+	•	Phone
+	•	Equipment
+	•	Stats summary (e.g. 12 loads, 92% on-time).
+	•	Button: Assign driver.
+	•	Clicking Assign driver:
+	•	Sets the driver for this load:
+	•	If load form has a driver selector, set its value.
+	•	Or store driverId in form state so that on submit it is saved to backend.
+	4.	Ensure the create-load form still works as before if no driver is selected or if there are no recommendations returned.
+
+==================================================
+STEP 9 – FRONTEND: SHIPPERS / RECEIVERS AUTOCOMPLETE
+
+On the “New Load” page, we want to simplify shipper/receiver input using our mini-CRM.
+	1.	Find shipper and receiver sections on the load creation page.
+	2.	Replace plain text inputs for “Shipper name” / “Receiver name” with a combo:
+	•	Autocomplete input:
+	•	When user types, call GET /api/shippers?search=... or GET /api/receivers?search=....
+	•	Show dropdown with results: name, city, state.
+	•	On select:
+	•	Fill relevant fields (address, city, state, phone, email) in the form.
+	•	Store selected shipperId / receiverId in form state.
+	•	Also allow creation of a new shipper/receiver:
+	•	If typed name does not match existing ones, show “Create new shipper ‘X’” option.
+	•	On selecting that:
+	•	Use data from the current form to send POST /api/shippers or POST /api/receivers, then set the returned id.
+	3.	On form submit for new load:
+	•	Send both:
+	•	shipperId / receiverId (if available).
+	•	The plain text fields (for backward compatibility).
+	4.	Ensure old behavior (manual entry) still works if the broker ignores suggestions or GET /api/shippers fails.
+
+==================================================
+STEP 10 – LIGHT PLAN GATING (OPTIONAL)
+
+If you already have plan gating (Free vs Pro) implemented in earlier sprints:
+	1.	Optionally, limit some features to Pro:
+	•	Example:
+	•	“Recommended drivers” only for Pro, or show only 1 driver on Free.
+	•	“Driver stats” details only for Pro; Free only sees the basic list.
+	2.	Implement this purely in UI (e.g. hide or show with a banner) or via backend checks, but:
+	•	DO NOT break basic load creation for Free.
+	•	If gating is added, also show a small hint: “Upgrade to Pro to unlock full driver recommendations.”
+
+If plan gating is not yet wired here, you can skip this step and leave all features available to all plans for now.
+
+==================================================
+STEP 11 – TESTING & SUMMARY
+
+After all changes:
+	1.	Ensure TypeScript compiles, Drizzle migrations run, and the app builds.
+	2.	In development:
+	•	Log in as a broker.
+	•	Go to Drivers page:
+	•	Add a few drivers.
+	•	Mark some as favorite/blocked.
+	•	Create a few loads, assigning drivers, with a mix of:
+	•	On-time delivery.
+	•	Late delivery.
+	•	Confirm that:
+	•	Driver stats (statsTotalLoads, statsOnTimeLoads, statsLateLoads, onTimePercent) make sense.
+	•	“Recommended drivers” appear on new load form in a reasonable way.
+	•	Create a few shippers/receivers:
+	•	Use autocomplete when creating new loads.
+	•	Check that selected shippers/receivers are saved correctly.
+	3.	Fix any runtime errors.
+	4.	Finally, OUTPUT a short markdown summary:
+	•	New/changed tables and columns.
+	•	New API endpoints.
+	•	New pages/components (/app/drivers, new UI on /app/loads/new).
+	•	Anything relevant about how drivers/shipper data is now used.

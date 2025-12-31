@@ -80,14 +80,79 @@ export const brokerDevicesRelations = relations(brokerDevices, ({ one }) => ({
 // Driver model
 export const drivers = pgTable("drivers", {
   id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  brokerId: uuid("broker_id").references(() => brokers.id),
+  name: text("name"),
   phone: text("phone").notNull(),
+  email: text("email"),
+  truckNumber: text("truck_number"),
+  equipmentType: text("equipment_type"),
+  tags: text("tags").array().default(sql`'{}'::text[]`),
+  isFavorite: boolean("is_favorite").notNull().default(false),
+  isBlocked: boolean("is_blocked").notNull().default(false),
+  statsTotalLoads: integer("stats_total_loads").notNull().default(0),
+  statsOnTimeLoads: integer("stats_on_time_loads").notNull().default(0),
+  statsLateLoads: integer("stats_late_loads").notNull().default(0),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`now()`),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().default(sql`now()`),
 });
 
-export const driversRelations = relations(drivers, ({ many }) => ({
+export const driversRelations = relations(drivers, ({ one, many }) => ({
+  broker: one(brokers, {
+    fields: [drivers.brokerId],
+    references: [brokers.id],
+  }),
   loads: many(loads),
   trackingPings: many(trackingPings),
+}));
+
+// Shipper model (mini-CRM)
+export const shippers = pgTable("shippers", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  brokerId: uuid("broker_id").notNull().references(() => brokers.id),
+  name: text("name").notNull(),
+  address1: text("address1"),
+  address2: text("address2"),
+  city: text("city"),
+  state: text("state"),
+  zip: text("zip"),
+  contactName: text("contact_name"),
+  phone: text("phone"),
+  email: text("email"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`now()`),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().default(sql`now()`),
+});
+
+export const shippersRelations = relations(shippers, ({ one, many }) => ({
+  broker: one(brokers, {
+    fields: [shippers.brokerId],
+    references: [brokers.id],
+  }),
+  loads: many(loads),
+}));
+
+// Receiver model (mini-CRM)
+export const receivers = pgTable("receivers", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  brokerId: uuid("broker_id").notNull().references(() => brokers.id),
+  name: text("name").notNull(),
+  address1: text("address1"),
+  address2: text("address2"),
+  city: text("city"),
+  state: text("state"),
+  zip: text("zip"),
+  contactName: text("contact_name"),
+  phone: text("phone"),
+  email: text("email"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`now()`),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().default(sql`now()`),
+});
+
+export const receiversRelations = relations(receivers, ({ one, many }) => ({
+  broker: one(brokers, {
+    fields: [receivers.brokerId],
+    references: [brokers.id],
+  }),
+  loads: many(loads),
 }));
 
 // Load model
@@ -95,6 +160,8 @@ export const loads = pgTable("loads", {
   id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
   brokerId: uuid("broker_id").notNull().references(() => brokers.id),
   driverId: uuid("driver_id").references(() => drivers.id),
+  shipperId: uuid("shipper_id").references(() => shippers.id),
+  receiverId: uuid("receiver_id").references(() => receivers.id),
   loadNumber: text("load_number").notNull().unique(),
   shipperName: text("shipper_name").notNull(),
   carrierName: text("carrier_name").notNull(),
@@ -125,6 +192,14 @@ export const loadsRelations = relations(loads, ({ one, many }) => ({
   driver: one(drivers, {
     fields: [loads.driverId],
     references: [drivers.id],
+  }),
+  shipper: one(shippers, {
+    fields: [loads.shipperId],
+    references: [shippers.id],
+  }),
+  receiver: one(receivers, {
+    fields: [loads.receiverId],
+    references: [receivers.id],
   }),
   stops: many(stops),
   trackingPings: many(trackingPings),
@@ -485,7 +560,27 @@ export const insertStopSchema = createInsertSchema(stops).omit({
 });
 
 export const insertDriverSchema = createInsertSchema(drivers).pick({
+  brokerId: true,
+  name: true,
   phone: true,
+  email: true,
+  truckNumber: true,
+  equipmentType: true,
+  tags: true,
+  isFavorite: true,
+  isBlocked: true,
+});
+
+export const insertShipperSchema = createInsertSchema(shippers).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export const insertReceiverSchema = createInsertSchema(receivers).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
 });
 
 export const insertTrackingPingSchema = createInsertSchema(trackingPings, {
@@ -508,6 +603,10 @@ export type VerificationToken = typeof verificationTokens.$inferSelect;
 export type BrokerDevice = typeof brokerDevices.$inferSelect;
 export type Driver = typeof drivers.$inferSelect;
 export type InsertDriver = z.infer<typeof insertDriverSchema>;
+export type Shipper = typeof shippers.$inferSelect;
+export type InsertShipper = z.infer<typeof insertShipperSchema>;
+export type Receiver = typeof receivers.$inferSelect;
+export type InsertReceiver = z.infer<typeof insertReceiverSchema>;
 export type Load = typeof loads.$inferSelect;
 export type InsertLoad = z.infer<typeof insertLoadSchema>;
 export type Stop = typeof stops.$inferSelect;

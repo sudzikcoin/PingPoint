@@ -17,6 +17,8 @@ import {
   brokerCredits,
   exceptionEvents,
   notificationPreferences,
+  shippers,
+  receivers,
   type Broker,
   type InsertBroker,
   type Driver,
@@ -47,6 +49,10 @@ import {
   type InsertExceptionEvent,
   type NotificationPreference,
   type InsertNotificationPreference,
+  type Shipper,
+  type InsertShipper,
+  type Receiver,
+  type InsertReceiver,
 } from "@shared/schema";
 import { db } from "./db";
 import { eq, and, desc, ilike, sql, lt, gte, lte, or } from "drizzle-orm";
@@ -83,7 +89,18 @@ export interface IStorage {
   getDriver(id: string): Promise<Driver | undefined>;
   getDriverByPhone(phone: string): Promise<Driver | undefined>;
   createDriver(driver: InsertDriver): Promise<Driver>;
+  updateDriver(id: string, data: Partial<Driver>): Promise<Driver | undefined>;
   getDriversByBroker(brokerId: string): Promise<{ id: string; phone: string; createdAt: Date; totalLoads: number; activeLoads: number }[]>;
+  getDriversByBrokerPaginated(brokerId: string, options: { search?: string; favorite?: boolean; blocked?: boolean; page: number; limit: number }): Promise<{ items: Driver[]; total: number }>;
+  getRecommendedDrivers(brokerId: string, options: { pickupState?: string; pickupCity?: string; deliveryState?: string; deliveryCity?: string; limit?: number }): Promise<Driver[]>;
+
+  // Shipper operations
+  getShippersByBroker(brokerId: string, options: { search?: string; page: number; limit: number }): Promise<{ items: Shipper[]; total: number }>;
+  createShipper(shipper: InsertShipper): Promise<Shipper>;
+  
+  // Receiver operations
+  getReceiversByBroker(brokerId: string, options: { search?: string; page: number; limit: number }): Promise<{ items: Receiver[]; total: number }>;
+  createReceiver(receiver: InsertReceiver): Promise<Receiver>;
 
   // Load operations
   getLoad(id: string): Promise<Load | undefined>;
@@ -245,6 +262,15 @@ export class DatabaseStorage implements IStorage {
     return driver;
   }
 
+  async updateDriver(id: string, data: Partial<Driver>): Promise<Driver | undefined> {
+    const [driver] = await db
+      .update(drivers)
+      .set({ ...data, updatedAt: new Date() })
+      .where(eq(drivers.id, id))
+      .returning();
+    return driver || undefined;
+  }
+
   async getDriversByBroker(brokerId: string): Promise<{ id: string; phone: string; createdAt: Date; totalLoads: number; activeLoads: number }[]> {
     const result = await db
       .select({
@@ -260,6 +286,150 @@ export class DatabaseStorage implements IStorage {
       .groupBy(drivers.id, drivers.phone, drivers.createdAt)
       .orderBy(desc(drivers.createdAt));
     return result;
+  }
+
+  async getDriversByBrokerPaginated(brokerId: string, options: { search?: string; favorite?: boolean; blocked?: boolean; page: number; limit: number }): Promise<{ items: Driver[]; total: number }> {
+    const { search, favorite, blocked, page, limit } = options;
+    const offset = (page - 1) * limit;
+
+    const conditions: any[] = [eq(drivers.brokerId, brokerId)];
+
+    if (favorite === true) {
+      conditions.push(eq(drivers.isFavorite, true));
+    }
+    if (blocked === true) {
+      conditions.push(eq(drivers.isBlocked, true));
+    }
+    if (blocked === false) {
+      conditions.push(eq(drivers.isBlocked, false));
+    }
+    if (search) {
+      const searchPattern = `%${search.toLowerCase()}%`;
+      conditions.push(
+        sql`(LOWER(${drivers.name}) LIKE ${searchPattern} OR LOWER(${drivers.phone}) LIKE ${searchPattern} OR LOWER(${drivers.email}) LIKE ${searchPattern} OR LOWER(${drivers.truckNumber}) LIKE ${searchPattern})`
+      );
+    }
+
+    const whereClause = conditions.length > 1 ? and(...conditions) : conditions[0];
+
+    const [items, countResult] = await Promise.all([
+      db
+        .select()
+        .from(drivers)
+        .where(whereClause)
+        .orderBy(desc(drivers.statsTotalLoads), desc(drivers.createdAt))
+        .limit(limit)
+        .offset(offset),
+      db
+        .select({ count: sql<number>`count(*)::int` })
+        .from(drivers)
+        .where(whereClause),
+    ]);
+
+    return { items, total: countResult[0]?.count || 0 };
+  }
+
+  async getRecommendedDrivers(brokerId: string, options: { pickupState?: string; pickupCity?: string; deliveryState?: string; deliveryCity?: string; limit?: number }): Promise<Driver[]> {
+    const { limit: resultLimit = 3 } = options;
+
+    const result = await db
+      .select()
+      .from(drivers)
+      .where(
+        and(
+          eq(drivers.brokerId, brokerId),
+          eq(drivers.isBlocked, false)
+        )
+      )
+      .orderBy(
+        desc(drivers.statsTotalLoads),
+        desc(sql`CASE WHEN ${drivers.statsTotalLoads} > 0 THEN ${drivers.statsOnTimeLoads}::float / ${drivers.statsTotalLoads}::float ELSE 0 END`)
+      )
+      .limit(resultLimit);
+
+    return result;
+  }
+
+  // Shipper operations
+  async getShippersByBroker(brokerId: string, options: { search?: string; page: number; limit: number }): Promise<{ items: Shipper[]; total: number }> {
+    const { search, page, limit } = options;
+    const offset = (page - 1) * limit;
+
+    const conditions: any[] = [eq(shippers.brokerId, brokerId)];
+
+    if (search) {
+      const searchPattern = `%${search.toLowerCase()}%`;
+      conditions.push(
+        sql`(LOWER(${shippers.name}) LIKE ${searchPattern} OR LOWER(${shippers.city}) LIKE ${searchPattern} OR LOWER(${shippers.state}) LIKE ${searchPattern} OR LOWER(${shippers.contactName}) LIKE ${searchPattern} OR LOWER(${shippers.email}) LIKE ${searchPattern})`
+      );
+    }
+
+    const whereClause = conditions.length > 1 ? and(...conditions) : conditions[0];
+
+    const [items, countResult] = await Promise.all([
+      db
+        .select()
+        .from(shippers)
+        .where(whereClause)
+        .orderBy(desc(shippers.createdAt))
+        .limit(limit)
+        .offset(offset),
+      db
+        .select({ count: sql<number>`count(*)::int` })
+        .from(shippers)
+        .where(whereClause),
+    ]);
+
+    return { items, total: countResult[0]?.count || 0 };
+  }
+
+  async createShipper(shipper: InsertShipper): Promise<Shipper> {
+    const [newShipper] = await db
+      .insert(shippers)
+      .values(shipper)
+      .returning();
+    return newShipper;
+  }
+
+  // Receiver operations
+  async getReceiversByBroker(brokerId: string, options: { search?: string; page: number; limit: number }): Promise<{ items: Receiver[]; total: number }> {
+    const { search, page, limit } = options;
+    const offset = (page - 1) * limit;
+
+    const conditions: any[] = [eq(receivers.brokerId, brokerId)];
+
+    if (search) {
+      const searchPattern = `%${search.toLowerCase()}%`;
+      conditions.push(
+        sql`(LOWER(${receivers.name}) LIKE ${searchPattern} OR LOWER(${receivers.city}) LIKE ${searchPattern} OR LOWER(${receivers.state}) LIKE ${searchPattern} OR LOWER(${receivers.contactName}) LIKE ${searchPattern} OR LOWER(${receivers.email}) LIKE ${searchPattern})`
+      );
+    }
+
+    const whereClause = conditions.length > 1 ? and(...conditions) : conditions[0];
+
+    const [items, countResult] = await Promise.all([
+      db
+        .select()
+        .from(receivers)
+        .where(whereClause)
+        .orderBy(desc(receivers.createdAt))
+        .limit(limit)
+        .offset(offset),
+      db
+        .select({ count: sql<number>`count(*)::int` })
+        .from(receivers)
+        .where(whereClause),
+    ]);
+
+    return { items, total: countResult[0]?.count || 0 };
+  }
+
+  async createReceiver(receiver: InsertReceiver): Promise<Receiver> {
+    const [newReceiver] = await db
+      .insert(receivers)
+      .values(receiver)
+      .returning();
+    return newReceiver;
   }
 
   // Load operations
