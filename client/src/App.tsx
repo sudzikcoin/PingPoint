@@ -18,6 +18,7 @@ import AppAdminLogin from "@/pages/app-admin-login";
 import AppAdminUserDetail from "@/pages/app-admin-user-detail";
 import AppDrivers from "@/pages/app-drivers";
 import AppExceptions from "@/pages/app-exceptions";
+import AppAnalytics from "@/pages/app-analytics";
 import VerifyPage from "@/pages/verify";
 import LoginPage from "@/pages/login";
 import LandingPage from "@/pages/landing";
@@ -44,6 +45,7 @@ function Router() {
       <Route path="/app/loads/new" component={AppLoadNew} />
       <Route path="/app/loads/:id" component={AppLoadDetails} />
       <Route path="/app/exceptions" component={AppExceptions} />
+      <Route path="/app/analytics" component={AppAnalytics} />
       <Route path="/app/drivers" component={AppDrivers} />
       <Route path="/app/billing" component={AppBilling} />
       <Route path="/app/settings" component={AppSettings} />

@@ -1,6 +1,6 @@
 import { Link, useLocation } from "wouter";
 import { cn } from "@/lib/utils";
-import { LayoutDashboard, Plus, Truck, Package, LogOut, Shield, AlertTriangle } from "lucide-react";
+import { LayoutDashboard, Plus, Truck, Package, LogOut, Shield, AlertTriangle, BarChart3 } from "lucide-react";
 import { ThemeToggle } from "@/components/ui/theme-toggle";
 import { useTheme } from "@/context/theme-context";
 import { useQuery } from "@tanstack/react-query";
@@ -22,6 +22,7 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
 
   const navItems = [
     { name: "Loads", href: "/app/loads", icon: Package },
+    { name: "Analytics", href: "/app/analytics", icon: BarChart3 },
     { name: "Exceptions", href: "/app/exceptions", icon: AlertTriangle },
     { name: "Drivers", href: "/app/drivers", icon: Truck },
     ...(profile?.isAdmin ? [{ name: "Admin", href: "/app/admin", icon: Shield }] : []),
