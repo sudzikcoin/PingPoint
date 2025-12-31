@@ -94,8 +94,9 @@ export async function getAnalyticsOverview(
   const deliveredLoads = loadsData.filter((l) => l.status === "DELIVERED").length;
 
   let onTimeLoads = 0;
+  let lateLoads = 0;
   let totalDelayMinutes = 0;
-  let lateCount = 0;
+  let scheduledDeliveredCount = 0;
   let pickupDwellSum = 0;
   let pickupDwellCount = 0;
   let deliveryDwellSum = 0;
@@ -115,6 +116,7 @@ export async function getAnalyticsOverview(
       const plannedDelivery = deliveryStop?.windowTo;
 
       if (plannedDelivery) {
+        scheduledDeliveredCount++;
         const gracePeriod = GRACE_MINUTES * 60 * 1000;
         const plannedTime = new Date(plannedDelivery).getTime() + gracePeriod;
         const actualTime = new Date(load.deliveredAt).getTime();
@@ -122,9 +124,9 @@ export async function getAnalyticsOverview(
         if (actualTime <= plannedTime) {
           onTimeLoads++;
         } else {
+          lateLoads++;
           const delayMs = actualTime - (new Date(plannedDelivery).getTime());
           totalDelayMinutes += delayMs / 60000;
-          lateCount++;
         }
       }
     }
@@ -144,9 +146,8 @@ export async function getAnalyticsOverview(
     }
   }
 
-  const lateLoads = deliveredLoads - onTimeLoads;
-  const onTimePercent = deliveredLoads > 0 ? Math.round((onTimeLoads / deliveredLoads) * 100) : 0;
-  const avgDelayMinutes = lateCount > 0 ? Math.round(totalDelayMinutes / lateCount) : null;
+  const onTimePercent = scheduledDeliveredCount > 0 ? Math.round((onTimeLoads / scheduledDeliveredCount) * 100) : 0;
+  const avgDelayMinutes = lateLoads > 0 ? Math.round(totalDelayMinutes / lateLoads) : null;
   const avgPickupDwellMinutes = pickupDwellCount > 0 ? Math.round(pickupDwellSum / pickupDwellCount) : null;
   const avgDeliveryDwellMinutes = deliveryDwellCount > 0 ? Math.round(deliveryDwellSum / deliveryDwellCount) : null;
 
@@ -163,17 +164,22 @@ export async function getAnalyticsOverview(
   for (const [driverId, { driver, loads: driverLoads }] of Array.from(driverMap.entries())) {
     const driverDelivered = driverLoads.filter((l: typeof loadsData[0]) => l.status === "DELIVERED");
     let driverOnTime = 0;
+    let driverLate = 0;
+    let driverScheduledCount = 0;
 
     for (const load of driverDelivered) {
       if (load.deliveredAt) {
         const deliveryStop = load.stops.find((s: typeof load.stops[0]) => s.type === "DELIVERY");
         const plannedDelivery = deliveryStop?.windowTo;
         if (plannedDelivery) {
+          driverScheduledCount++;
           const gracePeriod = GRACE_MINUTES * 60 * 1000;
           const plannedTime = new Date(plannedDelivery).getTime() + gracePeriod;
           const actualTime = new Date(load.deliveredAt).getTime();
           if (actualTime <= plannedTime) {
             driverOnTime++;
+          } else {
+            driverLate++;
           }
         }
       }
@@ -185,8 +191,8 @@ export async function getAnalyticsOverview(
       totalLoads: driverLoads.length,
       deliveredLoads: driverDelivered.length,
       onTimeLoads: driverOnTime,
-      lateLoads: driverDelivered.length - driverOnTime,
-      onTimePercent: driverDelivered.length > 0 ? Math.round((driverOnTime / driverDelivered.length) * 100) : 0,
+      lateLoads: driverLate,
+      onTimePercent: driverScheduledCount > 0 ? Math.round((driverOnTime / driverScheduledCount) * 100) : 0,
     });
   }
 
@@ -203,17 +209,22 @@ export async function getAnalyticsOverview(
   for (const [shipperName, shipperLoads] of Array.from(shipperMap.entries())) {
     const shipperDelivered = shipperLoads.filter((l: typeof loadsData[0]) => l.status === "DELIVERED");
     let shipperOnTime = 0;
+    let shipperLate = 0;
+    let shipperScheduledCount = 0;
 
     for (const load of shipperDelivered) {
       if (load.deliveredAt) {
         const deliveryStop = load.stops.find((s: typeof load.stops[0]) => s.type === "DELIVERY");
         const plannedDelivery = deliveryStop?.windowTo;
         if (plannedDelivery) {
+          shipperScheduledCount++;
           const gracePeriod = GRACE_MINUTES * 60 * 1000;
           const plannedTime = new Date(plannedDelivery).getTime() + gracePeriod;
           const actualTime = new Date(load.deliveredAt).getTime();
           if (actualTime <= plannedTime) {
             shipperOnTime++;
+          } else {
+            shipperLate++;
           }
         }
       }
@@ -225,8 +236,8 @@ export async function getAnalyticsOverview(
       totalLoads: shipperLoads.length,
       deliveredLoads: shipperDelivered.length,
       onTimeLoads: shipperOnTime,
-      lateLoads: shipperDelivered.length - shipperOnTime,
-      onTimePercent: shipperDelivered.length > 0 ? Math.round((shipperOnTime / shipperDelivered.length) * 100) : 0,
+      lateLoads: shipperLate,
+      onTimePercent: shipperScheduledCount > 0 ? Math.round((shipperOnTime / shipperScheduledCount) * 100) : 0,
     });
   }
 

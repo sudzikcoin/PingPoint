@@ -51,6 +51,14 @@ Preferred communication style: Simple, everyday language.
     - **Broker Notifications**: Styled HTML emails sent to broker on status changes (EMAIL_BROKER_STATUS preference).
     - **Client Notifications**: Optional emails to shipper/receiver contacts if EMAIL_CLIENT_STATUS enabled and contacts available.
     - **Preferences**: Notification settings managed in Settings page with toggles for each channel.
+- **Analytics & CO₂ Tracking**:
+    - **Metrics**: Total loads, on-time %, average delay, pickup/delivery dwell times, CO₂ emissions.
+    - **Breakdowns**: Performance stats by driver and by shipper.
+    - **CO₂ Estimation**: Uses broker-configurable co2FactorGramPerMile (default 1610 g/mi for Class 8 trucks) and load distanceMiles.
+    - **Date Filtering**: Quick presets (7d, 30d, 90d) with plan-based limitations.
+    - **Plan Gating**: Free plan limited to 30-day history and 50 loads export; Pro has full access.
+    - **CSV Export**: Download analytics data via /api/analytics/loads.csv.
+    - **UI**: Dedicated Analytics page (/app/analytics) with overview cards, driver/shipper tables, and loads detail tab.
 
 ### System Design Choices
 
