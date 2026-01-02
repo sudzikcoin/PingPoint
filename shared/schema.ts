@@ -563,7 +563,9 @@ export const driverRewardTransactions = pgTable("driver_reward_transactions", {
   points: integer("points").notNull(),
   description: text("description"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`now()`),
-});
+}, (table) => [
+  uniqueIndex("unique_once_per_load_reward").on(table.rewardAccountId, table.loadId, table.eventType),
+]);
 
 export const driverRewardTransactionsRelations = relations(driverRewardTransactions, ({ one }) => ({
   rewardAccount: one(driverRewardAccounts, {

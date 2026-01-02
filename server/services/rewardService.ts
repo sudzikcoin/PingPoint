@@ -1,7 +1,12 @@
 import { db } from "../db";
 import { driverRewardAccounts, driverRewardTransactions } from "@shared/schema";
 import type { RewardEventType, DriverRewardAccount } from "@shared/schema";
-import { eq, sql } from "drizzle-orm";
+import { eq, and, sql } from "drizzle-orm";
+
+const ONCE_PER_LOAD_EVENTS: Set<RewardEventType> = new Set([
+  'FIRST_LOCATION_SHARE',
+  'LOAD_ON_TIME',
+]);
 
 const POINTS_MAP: Record<RewardEventType, number> = {
   FIRST_LOCATION_SHARE: 10,
@@ -83,16 +88,46 @@ export async function awardPointsForEvent(
       return null;
     }
 
+    // Idempotency check for once-per-load events
+    if (ONCE_PER_LOAD_EVENTS.has(eventType) && loadId) {
+      const [existing] = await db
+        .select()
+        .from(driverRewardTransactions)
+        .where(
+          and(
+            eq(driverRewardTransactions.rewardAccountId, account.id),
+            eq(driverRewardTransactions.loadId, loadId),
+            eq(driverRewardTransactions.eventType, eventType)
+          )
+        );
+
+      if (existing) {
+        console.log(
+          `[Reward] Skipping duplicate ${eventType} for load ${loadId}, already awarded`
+        );
+        return null;
+      }
+    }
+
     const points = POINTS_MAP[eventType];
     const description = DESCRIPTION_MAP[eventType];
 
-    await db.insert(driverRewardTransactions).values({
+    // Use onConflictDoNothing for atomic idempotency on once-per-load events
+    const insertResult = await db.insert(driverRewardTransactions).values({
       rewardAccountId: account.id,
       loadId: loadId || null,
       eventType,
       points,
       description,
-    });
+    }).onConflictDoNothing().returning();
+
+    // If no row was inserted (conflict), skip the balance update
+    if (insertResult.length === 0) {
+      console.log(
+        `[Reward] Skipping duplicate ${eventType} for load ${loadId} (unique constraint)`
+      );
+      return null;
+    }
 
     const [updated] = await db
       .update(driverRewardAccounts)
