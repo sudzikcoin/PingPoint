@@ -1,0 +1,338 @@
+
+You are a senior full-stack engineer working on the PingPoint project.
+
+CONTEXT
+- PingPoint is a load tracking app for brokers and drivers.
+- There is already:
+  - Broker side: creating loads, generating driver & public links, tracking statuses (Arrive/Depart), billing, Stripe, admin, etc.
+  - Driver side: a web page opened by a driver via a magic link (or similar token), with buttons like “Arrive Pickup”, “Depart Pickup”, “Arrive Delivery”, “Depart Delivery”.
+  - Status updates already propagate to the public tracking page and broker UI.
+- Tech stack (use what is already configured in this repo):
+  - Backend: Node / TypeScript (Express or similar) with a database ORM (likely Drizzle or Prisma) and PostgreSQL.
+  - Frontend: React / Next.js (App Router) + TypeScript + Tailwind CSS.
+  - Emails: Resend (already working).
+  - Billing: Stripe (already integrated and working for Pro / extra loads).
+- IMPORTANT:
+  - Do NOT break any existing flows:
+    - broker registration & magic link auth,
+    - load creation, load limits,
+    - driver tracking links,
+    - status updates & geofences,
+    - Stripe billing,
+    - admin pages.
+  - All changes must be additive and backward compatible.
+
+GOAL OF THIS PROMPT
+Implement a simple “tap-to-earn” loyalty system for drivers:
+
+1) Add database tables to store:
+   - driver reward accounts (balance in points),
+   - reward transactions (history).
+2) Add a backend service that:
+   - awards points when a driver performs key actions:
+     - Arrive / Depart at pickup,
+     - Arrive / Depart at delivery,
+     - (optionally) load completed on time.
+3) Update existing driver status update logic to call this service.
+4) Update the driver web UI to:
+   - show the current points balance,
+   - show a small “+X points” feedback when a reward is granted.
+
+We are NOT integrating Solana or on-chain logic yet. This is a pure off-chain points system stored in our DB.
+
+==================================================
+STEP 0 – DISCOVER EXISTING STRUCTURE
+==================================================
+
+1. Find the database schema files (Drizzle/Prisma/etc) that define:
+   - loads table (or equivalent),
+   - any “driver” entity (drivers table) if it already exists,
+   - any table that stores the token used in the driver link (e.g. `driverToken`, `driverLinkId`, `trackingToken`, etc).
+
+2. Find backend code that handles:
+   - driver status updates:
+     - endpoints like `POST /api/driver/arrive`, `POST /api/driver/status`, or similar,
+     - or server actions called from the driver page component when the driver clicks “Arrive” / “Depart”.
+   - It is important to locate the single place where we:
+     - validate the driver link token,
+     - update the load status (Arrive/Depart for pickup/delivery).
+
+3. Find the driver page component:
+   - The page that is opened when a driver clicks the tracking link from SMS/email.
+   - It should render buttons: Arrive / Depart (pickup/delivery) and possibly location permission messages.
+   - Note whether it is a Next.js page (e.g. `app/driver/[token]/page.tsx`) or a React page under `src/pages`.
+
+DO NOT change anything yet; just identify these places and use them in the next steps.
+
+==================================================
+STEP 1 – DATABASE: REWARD TABLES
+==================================================
+
+We need two tables:
+
+1. Reward account per driver (or per driver link, if no persistent driver entity exists).
+2. Reward transactions for history and debugging.
+
+Implement them in the existing ORM style (Drizzle/Prisma/etc) and migrations.
+
+### 1.1. Driver reward accounts
+
+Create a new table, e.g. `driver_reward_accounts` (name can be adjusted to match conventions), with at least:
+
+- `id` – UUID primary key.
+- Either:
+  - `driverId` – nullable FK to an existing `drivers` table, if such a table exists and is used for identifying drivers across loads.
+  - OR, if there is no drivers table, a link-scoped identifier:
+    - `driverToken` or `trackingToken` (text) – the same token that is used to identify the driver session.
+- `balancePoints` – integer, NOT NULL, default 0.
+- `createdAt` – timestamptz (or DateTime), default now.
+- `updatedAt` – timestamptz, auto-updated.
+
+Rules:
+
+- If a persistent `drivers` table exists and loads already have `driverId`, prefer using `driverId` as the main link.
+- If not, use the driver link token (e.g. `driverToken`) as the identifier and make `driverId` nullable.
+- There must be a unique constraint on the identifier:
+  - Either unique(driverId) or unique(driverToken), depending on which field is used.
+- Keep naming consistent with existing schema style.
+
+### 1.2. Reward transactions
+
+Create a table `driver_reward_transactions` with:
+
+- `id` – UUID primary key.
+- `rewardAccountId` – FK to `driver_reward_accounts.id`.
+- `loadId` – FK to loads table (optional, nullable).
+- `eventType` – text, NOT NULL, one of:
+  - `'FIRST_LOCATION_SHARE' | 'ARRIVE_PICKUP' | 'DEPART_PICKUP' | 'ARRIVE_DELIVERY' | 'DEPART_DELIVERY' | 'LOAD_ON_TIME'`.
+- `points` – integer, NOT NULL (may be positive; no negative in this MVP).
+- `description` – text, nullable (human-readable like `Arrive at pickup`).
+- `createdAt` – timestamptz, default now.
+
+Add indexes on:
+- `rewardAccountId`,
+- `loadId`.
+
+Create and apply migrations according to the existing project workflow (e.g. Drizzle `drizzle-kit` or Prisma `prisma migrate`).
+
+==================================================
+STEP 2 – BACKEND SERVICE: AWARD POINTS
+==================================================
+
+Create a dedicated service module for reward logic, for example:
+
+- `server/services/rewardService.ts` (or similar path that fits the repo structure).
+
+Implement functions:
+
+```ts
+export type RewardEventType =
+  | 'FIRST_LOCATION_SHARE'
+  | 'ARRIVE_PICKUP'
+  | 'DEPART_PICKUP'
+  | 'ARRIVE_DELIVERY'
+  | 'DEPART_DELIVERY'
+  | 'LOAD_ON_TIME';
+
+export interface AwardPointsParams {
+  loadId?: string;
+  driverId?: string | null;
+  driverToken?: string | null;
+  eventType: RewardEventType;
+}
+
+export interface AwardPointsResult {
+  pointsAwarded: number;
+  newBalance: number;
+}
+
+And the main function:
+
+export async function awardPointsForEvent(params: AwardPointsParams): Promise<AwardPointsResult | null> { ... }
+
+Behavior:
+	1.	Determine how to identify the account:
+	•	If driverId is provided, use it to find or create a driver_reward_accounts record for this driver.
+	•	Else if driverToken is provided, use it to find or create a reward account keyed by token.
+	•	If neither is available, return null and do nothing (we don’t want to crash tracking if something is missing).
+	2.	Decide how many points to award for each eventType:
+Use simple constants, e.g.:
+	•	FIRST_LOCATION_SHARE: 10
+	•	ARRIVE_PICKUP: 20
+	•	DEPART_PICKUP: 20
+	•	ARRIVE_DELIVERY: 20
+	•	DEPART_DELIVERY: 30
+	•	LOAD_ON_TIME: 50
+	3.	Create a driver_reward_transactions row with:
+	•	rewardAccountId,
+	•	loadId (if provided),
+	•	eventType,
+	•	points,
+	•	description (optional, nice human-readable text).
+	4.	Update the driver_reward_accounts.balancePoints by adding the awarded points.
+	5.	Return:
+	•	{ pointsAwarded, newBalance }.
+
+Make sure the function is transactional / consistent according to the project’s DB approach:
+	•	Use a transaction if the ORM supports it easily.
+	•	Handle concurrency issues in a simple and safe way (e.g. UPDATE ... SET balance = balance + X).
+
+==================================================
+STEP 3 – HOOK REWARD SERVICE INTO STATUS UPDATES
+
+Locate the existing backend logic that processes driver actions:
+	•	When driver clicks “Arrive Pickup”:
+	•	there is a handler that:
+	•	validates the driver link token,
+	•	finds the load,
+	•	updates its status to “arrived at pickup”,
+	•	possibly logs an event.
+	•	Similarly for:
+	•	“Depart Pickup”,
+	•	“Arrive Delivery”,
+	•	“Depart Delivery”.
+
+Update these handlers to:
+	1.	Extract identifiers:
+	•	loadId from the load entity,
+	•	driverId from load (if exists),
+	•	driver link token (the parameter that comes from the URL, e.g. driverToken, trackingId, etc).
+	2.	After successfully updating the status (and in the same request), call:
+
+const reward = await awardPointsForEvent({
+  loadId,
+  driverId: driverId ?? null,
+  driverToken: driverTokenFromUrlOrContext ?? null,
+  eventType: 'ARRIVE_PICKUP' // or corresponding event type
+});
+
+where eventType is:
+	•	'ARRIVE_PICKUP' when driver hits Arrive at pickup,
+	•	'DEPART_PICKUP' when Depart at pickup,
+	•	'ARRIVE_DELIVERY' when Arrive at delivery,
+	•	'DEPART_DELIVERY' when Depart at delivery.
+
+	3.	For the very first time a driver successfully shares location (if there is a dedicated endpoint / event for location permission / first GPS update), you can also call:
+
+awardPointsForEvent({ ..., eventType: 'FIRST_LOCATION_SHARE' });
+
+
+	4.	For the LOAD_ON_TIME event:
+	•	If there is already logic that marks a load as delivered on time vs late, you can hook in awardPointsForEvent at the moment a load is finalized as “delivered on time”.
+	•	If such logic does not exist yet, skip this part for now (or leave TODO comments, but do not break anything).
+
+==================================================
+STEP 4 – API RESPONSE: INCLUDE REWARD INFO
+
+We want the driver front-end to know when points were awarded.
+
+For each endpoint that handles driver actions (Arrive/Depart/etc):
+	1.	Extend the JSON response to include optional fields:
+
+{
+  success: boolean;
+  // existing fields…
+  reward?: {
+    pointsAwarded: number;
+    newBalance: number;
+    eventType: RewardEventType;
+  } | null;
+}
+
+
+	2.	When awardPointsForEvent returns a non-null result:
+	•	set reward to:
+	•	pointsAwarded,
+	•	newBalance,
+	•	eventType.
+	3.	If the service returned null (no account / no identifier), reward may be null or omitted.
+
+Do NOT change or remove existing fields in the response; only extend the shape in a backward compatible way.
+
+==================================================
+STEP 5 – FRONTEND: DRIVER PAGE – SHOW BALANCE & “+X POINTS”
+
+Now update the driver page UI.
+	1.	Locate the driver page component that renders:
+	•	the buttons “Arrive / Depart” for pickup and delivery,
+	•	any status messages like “requesting location access”.
+	2.	Add a small “points header” at the top of the driver UI, something like:
+	•	On mobile: a bar or small text, e.g.:
+
+Balance: 120 PingPoints
+
+
+	•	Use Tailwind styles consistent with the rest of the driver page.
+
+	3.	The driver page needs to know:
+	•	initial balance,
+	•	and when new points are awarded.
+
+To do this:
+	•	On page load:
+	•	Either call a dedicated endpoint like GET /api/driver/rewards?token=... to fetch current balance,
+	•	Or re-use an existing “load by driver token” endpoint and extend its response to include rewardBalance for this driver / token.
+
+Choose the approach that minimally changes existing code.
+	4.	In the React component state:
+	•	Add a balance state variable (number).
+	•	Initialize it from the fetched data.
+	5.	When driver clicks any action button (Arrive/Depart):
+	•	You already send a request to the backend.
+	•	After the request resolves:
+	•	Check if response.reward exists and has pointsAwarded and newBalance.
+	•	If yes:
+	•	Update the state balance = response.reward.newBalance.
+	•	Show a small “toast” or inline animation, e.g.:
+	•	A transient element like:
+
++20 PingPoints 🎯
+
+that appears near the top and fades out after ~2–3 seconds.
+
+	•	Keep the UI consistent with the existing design (no new design system).
+
+	•	If response.reward is missing or null, behave as before (no error, no points shown).
+
+	6.	Make sure the driver page remains fully functional even if reward endpoints fail:
+	•	If the GET balance call fails:
+	•	Default to balance 0 and maybe hide the header.
+	•	If the Arrive/Depart call succeeds on status but fails in reward handling:
+	•	Status update must still work; reward is just skipped.
+
+==================================================
+STEP 6 – OPTIONAL: BROKER / ADMIN VIEW (READ-ONLY)
+
+This is optional, but if it’s easy in this project:
+	1.	In the admin pages (or broker driver list, if exists), you can extend driver data:
+	•	Show balancePoints from driver_reward_accounts if there is a persistent driverId.
+	•	This is read-only; no admin UI changes are required as part of this prompt, unless it’s trivial.
+
+If this requires too many changes, leave it for a future sprint and do NOT break anything.
+
+==================================================
+STEP 7 – TESTING & SUMMARY
+
+After implementing all steps:
+	1.	Make sure:
+	•	TypeScript builds,
+	•	migrations apply cleanly,
+	•	the app runs without runtime errors.
+	2.	In dev mode, simulate a realistic flow:
+	•	Create a load as a broker and get a driver link.
+	•	Open the driver link in a browser.
+	•	Ensure:
+	•	initial balance is shown (0 or previous value),
+	•	when you press “Arrive Pickup”:
+	•	load status updates as before,
+	•	the driver UI shows +20 PingPoints (or whatever you configured),
+	•	the balance increases.
+	•	Same for Depart Pickup, Arrive Delivery, Depart Delivery.
+	3.	Confirm that:
+	•	Public tracking page and broker view still work as before.
+	•	Stripe billing, email, and other flows are untouched.
+	4.	Finally, output a short markdown summary of:
+	•	new tables and fields,
+	•	new service functions,
+	•	where in the driver UI the balance and “+X points” feedback appear.
+

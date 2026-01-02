@@ -20,6 +20,8 @@ import { evaluateGeofencesForActiveLoad, getGeofenceDebugInfo } from "./geofence
 import { getOrCreateWebhookConfigForUser, updateWebhookConfigForUser, emitLoadEvent } from "./webhooks/webhookService";
 import { notifyLoadStatusChange } from "./services/notificationService";
 import * as analyticsService from "./services/analyticsService";
+import { awardPointsForEvent, getRewardBalance } from "./services/rewardService";
+import type { RewardEventType } from "@shared/schema";
 
 const uploadsDir = path.join(process.cwd(), "uploads", "rate-confirmations");
 if (!fs.existsSync(uploadsDir)) {
@@ -1196,6 +1198,7 @@ export async function registerRoutes(
       }
 
       const loadStops = await storage.getStopsByLoad(load.id);
+      const rewardBalance = await getRewardBalance(load.driverId, token);
 
       return res.json({
         id: load.id,
@@ -1203,9 +1206,32 @@ export async function registerRoutes(
         customerRef: load.customerRef,
         status: load.status,
         stops: loadStops,
+        rewardBalance,
       });
     } catch (error) {
       console.error("Error in /api/driver/:token:", error);
+      return res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  // GET /api/driver/:token/rewards - Get driver reward balance
+  app.get("/api/driver/:token/rewards", async (req: Request, res: Response) => {
+    try {
+      const { token } = req.params;
+      const load = await storage.getLoadByToken(token, 'driver');
+
+      if (!load) {
+        return res.status(404).json({ error: "Load not found" });
+      }
+
+      const balance = await getRewardBalance(load.driverId, token);
+
+      return res.json({
+        balance,
+        driverId: load.driverId || null,
+      });
+    } catch (error) {
+      console.error("Error in /api/driver/:token/rewards:", error);
       return res.status(500).json({ error: "Internal server error" });
     }
   });
@@ -1243,6 +1269,10 @@ export async function registerRoutes(
         return res.status(409).json({ error: "Tracking ended", trackingEnded: true });
       }
 
+      // Check if this is the first ping for this load (for first location share reward)
+      const existingPings = await storage.getTrackingPings(load.id, 1);
+      const isFirstPing = existingPings.length === 0;
+
       const ping = await storage.createTrackingPing({
         loadId: load.id,
         driverId: load.driverId,
@@ -1256,12 +1286,32 @@ export async function registerRoutes(
 
       console.log(`[TrackingPing] stored load=${load.loadNumber} driver=${load.driverId} lat=${lat} lng=${lng} acc=${accuracy ?? 'unknown'}m`);
 
+      // Award FIRST_LOCATION_SHARE bonus for first ping
+      let rewardResult: { pointsAwarded: number; newBalance: number; eventType: RewardEventType } | null = null;
+      if (isFirstPing) {
+        try {
+          rewardResult = await awardPointsForEvent({
+            loadId: load.id,
+            driverId: load.driverId,
+            driverToken: token,
+            eventType: 'FIRST_LOCATION_SHARE',
+          });
+          console.log(`[TrackingPing] awarded FIRST_LOCATION_SHARE for load=${load.loadNumber}`);
+        } catch (err) {
+          console.error("Error awarding first location share:", err);
+        }
+      }
+
       // Evaluate geofences for auto-arrive/depart (non-blocking)
       const parsedAccuracy = accuracy != null ? parseFloat(accuracy.toString()) : null;
       evaluateGeofencesForActiveLoad(load.driverId, load.id, parseFloat(lat.toString()), parseFloat(lng.toString()), parsedAccuracy)
         .catch(err => console.error("Error evaluating geofences:", err));
 
-      return res.json({ ok: true, pingId: ping.id });
+      return res.json({ 
+        ok: true, 
+        pingId: ping.id,
+        reward: rewardResult || undefined,
+      });
     } catch (error) {
       console.error("Error in /api/driver/:token/ping:", error);
       return res.status(500).json({ error: "Internal server error" });
@@ -1353,6 +1403,27 @@ export async function registerRoutes(
 
       const stop = await storage.updateStop(stopId, updateData);
 
+      // Award points for manual status updates
+      let reward: { pointsAwarded: number; newBalance: number; eventType: RewardEventType } | null = null;
+      
+      if (arrivedAt && !existingStop.arrivedAt) {
+        const eventType: RewardEventType = existingStop.type === 'PICKUP' ? 'ARRIVE_PICKUP' : 'ARRIVE_DELIVERY';
+        reward = await awardPointsForEvent({
+          loadId: load.id,
+          driverId: load.driverId,
+          driverToken: token,
+          eventType,
+        });
+      } else if (departedAt && !existingStop.departedAt) {
+        const eventType: RewardEventType = existingStop.type === 'PICKUP' ? 'DEPART_PICKUP' : 'DEPART_DELIVERY';
+        reward = await awardPointsForEvent({
+          loadId: load.id,
+          driverId: load.driverId,
+          driverToken: token,
+          eventType,
+        });
+      }
+
       // If this is a DELIVERY stop and we're setting departedAt, mark load as DELIVERED
       if (existingStop.type === 'DELIVERY' && departedAt && !existingStop.departedAt) {
         const now = new Date();
@@ -1364,6 +1435,21 @@ export async function registerRoutes(
           deliveredAt: now,
           trackingEndedAt: trackingEndTime,
         });
+
+        // Check if delivery was on time (within 15 minutes of expected window)
+        const deliveryWindow = existingStop.windowEnd || existingStop.windowTo;
+        if (deliveryWindow) {
+          const expectedTime = new Date(deliveryWindow);
+          const graceMs = 15 * 60 * 1000; // 15 minutes grace period
+          if (now.getTime() <= expectedTime.getTime() + graceMs) {
+            awardPointsForEvent({
+              loadId: load.id,
+              driverId: load.driverId,
+              driverToken: token,
+              eventType: 'LOAD_ON_TIME',
+            }).catch(err => console.error("Error awarding on-time bonus:", err));
+          }
+        }
 
         // Emit webhook events for status change and load completion
         emitLoadEvent({
@@ -1393,11 +1479,12 @@ export async function registerRoutes(
           ok: true, 
           stop, 
           loadDelivered: true,
-          trackingEndsAt: trackingEndTime.toISOString()
+          trackingEndsAt: trackingEndTime.toISOString(),
+          reward: reward || undefined,
         });
       }
 
-      return res.json({ ok: true, stop });
+      return res.json({ ok: true, stop, reward: reward || undefined });
     } catch (error) {
       console.error("Error in /api/driver/:token/stop/:stopId:", error);
       return res.status(500).json({ error: "Internal server error" });

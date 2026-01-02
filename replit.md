@@ -68,11 +68,17 @@ Preferred communication style: Simple, everyday language.
     - **Plan Gating**: Free plan limited to 30-day history and 50 loads export; Pro has full access.
     - **CSV Export**: Download analytics data via /api/analytics/loads.csv.
     - **UI**: Dedicated Analytics page (/app/analytics) with overview cards, driver/shipper tables, and loads detail tab.
+- **Driver Loyalty Points (Tap-to-Earn)**:
+    - **Points System**: Off-chain loyalty points stored in driver_reward_accounts table.
+    - **Event Types**: FIRST_LOCATION_SHARE (10pts), ARRIVE_PICKUP (20pts), DEPART_PICKUP (20pts), ARRIVE_DELIVERY (20pts), DEPART_DELIVERY (30pts), LOAD_ON_TIME (50pts).
+    - **Triggers**: Points awarded automatically on geofence auto-arrive/depart and manual stop status updates.
+    - **API**: GET /api/driver/:token includes rewardBalance; GET /api/driver/:token/rewards returns balance details; PATCH /api/driver/:token/stop/:stopId returns reward info in response.
+    - **Driver UI**: Balance displayed in driver dashboard header; animated "+X PingPoints" popup on reward earned.
 
 ### System Design Choices
 
 - **Database**: PostgreSQL via Drizzle ORM.
-    - **Schema**: 28 tables managing brokers, loads, drivers, stops, tracking pings, billing (entitlements, credits, payments), exceptions, notification preferences, shippers, receivers, and audit logs.
+    - **Schema**: 30 tables managing brokers, loads, drivers, stops, tracking pings, billing (entitlements, credits, payments), exceptions, notification preferences, shippers, receivers, driver rewards, and audit logs.
     - **Migrations**: Drizzle Kit for schema-first migrations, with auto-migration on server startup.
 - **API Design**: RESTful endpoints under `/api/*`.
 - **Security**: JWT secret from environment variables, secure and HTTP-only cookies, SameSite: lax for CSRF protection, rate limiting on critical endpoints.

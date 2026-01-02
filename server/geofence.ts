@@ -1,7 +1,9 @@
 import { db } from "./db";
 import { stops, stopGeofenceState, loads, trackingPings } from "@shared/schema";
+import type { RewardEventType } from "@shared/schema";
 import { eq, and, isNull, isNotNull, desc } from "drizzle-orm";
 import { ensureStopCoords } from "./geocode";
+import { awardPointsForEvent } from "./services/rewardService";
 
 const CONSECUTIVE_PINGS_REQUIRED = 2;
 const MIN_TIME_GAP_MS = 60 * 1000;
@@ -73,16 +75,38 @@ async function updateGeofenceState(
   return updated;
 }
 
-async function markStopArrived(stopId: string) {
+async function markStopArrived(
+  stopId: string,
+  stopType: string,
+  driverId: string,
+  loadId: string
+): Promise<void> {
   const now = new Date();
   await db.update(stops).set({ arrivedAt: now, updatedAt: now }).where(eq(stops.id, stopId));
   console.log(`[Geofence] Auto-ARRIVE triggered for stop ${stopId}`);
+
+  const eventType: RewardEventType =
+    stopType === "PICKUP" ? "ARRIVE_PICKUP" : "ARRIVE_DELIVERY";
+  awardPointsForEvent({ loadId, driverId, eventType }).catch((err) =>
+    console.error("[Geofence] Error awarding points for arrive:", err)
+  );
 }
 
-async function markStopDeparted(stopId: string) {
+async function markStopDeparted(
+  stopId: string,
+  stopType: string,
+  driverId: string,
+  loadId: string
+): Promise<void> {
   const now = new Date();
   await db.update(stops).set({ departedAt: now, updatedAt: now }).where(eq(stops.id, stopId));
   console.log(`[Geofence] Auto-DEPART triggered for stop ${stopId}`);
+
+  const eventType: RewardEventType =
+    stopType === "PICKUP" ? "DEPART_PICKUP" : "DEPART_DELIVERY";
+  awardPointsForEvent({ loadId, driverId, eventType }).catch((err) =>
+    console.error("[Geofence] Error awarding points for depart:", err)
+  );
 }
 
 export async function evaluateGeofencesForActiveLoad(
@@ -169,7 +193,7 @@ export async function evaluateGeofencesForActiveLoad(
 
           if (canTrigger) {
             console.log(`[Geofence] TRIGGER ARRIVE stop=${stop.id} type=${stop.type} dist=${Math.round(distance)}m radius=${radius}m streak=${newInsideStreak} acc=${parsedAccuracy ?? 'unknown'}m`);
-            await markStopArrived(stop.id);
+            await markStopArrived(stop.id, stop.type, driverId, loadId);
             await updateGeofenceState(stop.id, driverId, { lastArriveAttemptAt: now });
           }
         }
@@ -191,7 +215,7 @@ export async function evaluateGeofencesForActiveLoad(
 
         if (canTrigger) {
           console.log(`[Geofence] TRIGGER DEPART stop=${stop.id} type=${stop.type} dist=${Math.round(distance)}m streak=${newOutsideStreak}`);
-          await markStopDeparted(stop.id);
+          await markStopDeparted(stop.id, stop.type, driverId, loadId);
           await updateGeofenceState(stop.id, driverId, { lastDepartAttemptAt: now });
         }
       }

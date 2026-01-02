@@ -533,6 +533,49 @@ export const webhookDeliveryLogsRelations = relations(webhookDeliveryLogs, ({ on
   }),
 }));
 
+// Driver Reward Accounts - stores driver points balance
+export const driverRewardAccounts = pgTable("driver_reward_accounts", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  driverId: uuid("driver_id").references(() => drivers.id),
+  driverToken: text("driver_token"),
+  balancePoints: integer("balance_points").notNull().default(0),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`now()`),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().default(sql`now()`),
+}, (table) => [
+  uniqueIndex("driver_reward_accounts_driver_id_idx").on(table.driverId),
+  uniqueIndex("driver_reward_accounts_driver_token_idx").on(table.driverToken),
+]);
+
+export const driverRewardAccountsRelations = relations(driverRewardAccounts, ({ one, many }) => ({
+  driver: one(drivers, {
+    fields: [driverRewardAccounts.driverId],
+    references: [drivers.id],
+  }),
+  transactions: many(driverRewardTransactions),
+}));
+
+// Driver Reward Transactions - history of points earned
+export const driverRewardTransactions = pgTable("driver_reward_transactions", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  rewardAccountId: uuid("reward_account_id").notNull().references(() => driverRewardAccounts.id),
+  loadId: uuid("load_id").references(() => loads.id),
+  eventType: text("event_type").notNull(),
+  points: integer("points").notNull(),
+  description: text("description"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`now()`),
+});
+
+export const driverRewardTransactionsRelations = relations(driverRewardTransactions, ({ one }) => ({
+  rewardAccount: one(driverRewardAccounts, {
+    fields: [driverRewardTransactions.rewardAccountId],
+    references: [driverRewardAccounts.id],
+  }),
+  load: one(loads, {
+    fields: [driverRewardTransactions.loadId],
+    references: [loads.id],
+  }),
+}));
+
 // Insert schemas
 export const insertBrokerSchema = createInsertSchema(brokers).pick({
   name: true,
@@ -756,3 +799,30 @@ export type InsertNotificationPreference = {
   channel: string;
   enabled?: boolean;
 };
+
+// Driver Reward Account types
+export type DriverRewardAccount = typeof driverRewardAccounts.$inferSelect;
+export type InsertDriverRewardAccount = {
+  driverId?: string | null;
+  driverToken?: string | null;
+  balancePoints?: number;
+};
+
+// Driver Reward Transaction types
+export type DriverRewardTransaction = typeof driverRewardTransactions.$inferSelect;
+export type InsertDriverRewardTransaction = {
+  rewardAccountId: string;
+  loadId?: string | null;
+  eventType: string;
+  points: number;
+  description?: string | null;
+};
+
+// Reward event types
+export type RewardEventType =
+  | 'FIRST_LOCATION_SHARE'
+  | 'ARRIVE_PICKUP'
+  | 'DEPART_PICKUP'
+  | 'ARRIVE_DELIVERY'
+  | 'DEPART_DELIVERY'
+  | 'LOAD_ON_TIME';

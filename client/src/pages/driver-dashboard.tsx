@@ -42,6 +42,13 @@ interface LoadData {
   customerRef: string | null;
   status: string;
   stops: Stop[];
+  rewardBalance?: number;
+}
+
+interface RewardInfo {
+  pointsAwarded: number;
+  newBalance: number;
+  eventType: string;
 }
 
 export default function DriverDashboard() {
@@ -51,6 +58,8 @@ export default function DriverDashboard() {
   const [load, setLoad] = useState<LoadData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [rewardBalance, setRewardBalance] = useState<number>(0);
+  const [showRewardAnimation, setShowRewardAnimation] = useState<{ points: number; show: boolean }>({ points: 0, show: false });
   
   // Tracking state
   const [trackingStatus, setTrackingStatus] = useState<TrackingStatus>('idle');
@@ -95,6 +104,9 @@ export default function DriverDashboard() {
         }
         const data = await res.json();
         setLoad(data);
+        if (data.rewardBalance !== undefined) {
+          setRewardBalance(data.rewardBalance);
+        }
       } catch (err) {
         console.error("Failed to fetch driver load:", err);
         setError("Invalid or expired driver link");
@@ -393,6 +405,16 @@ export default function DriverDashboard() {
     };
   }, [load, driverToken, trackingStatus, startTracking, addDebugLog]);
 
+  const showRewardFeedback = (reward: RewardInfo | null | undefined) => {
+    if (reward && reward.pointsAwarded > 0) {
+      setRewardBalance(reward.newBalance);
+      setShowRewardAnimation({ points: reward.pointsAwarded, show: true });
+      setTimeout(() => {
+        setShowRewardAnimation({ points: 0, show: false });
+      }, 3000);
+    }
+  };
+
   const markArrived = async (stopId: string) => {
     if (!driverToken) return;
 
@@ -404,11 +426,20 @@ export default function DriverDashboard() {
       });
 
       if (res.ok) {
+        const data = await res.json();
         toast.success("Marked as arrived!");
+        
+        if (data.reward) {
+          showRewardFeedback(data.reward);
+        }
+        
         const loadRes = await fetch(`/api/driver/${driverToken}`);
         if (loadRes.ok) {
-          const data = await loadRes.json();
-          setLoad(data);
+          const loadData = await loadRes.json();
+          setLoad(loadData);
+          if (loadData.rewardBalance !== undefined) {
+            setRewardBalance(loadData.rewardBalance);
+          }
         }
       } else {
         toast.error("Failed to update stop");
@@ -432,6 +463,10 @@ export default function DriverDashboard() {
       if (res.ok) {
         const data = await res.json();
         
+        if (data.reward) {
+          showRewardFeedback(data.reward);
+        }
+        
         // Check if this was a delivery depart that triggered load completion
         if (data.loadDelivered && data.trackingEndsAt) {
           toast.success("Delivery completed! Tracking will stop in 1 minute.");
@@ -451,6 +486,9 @@ export default function DriverDashboard() {
         if (loadRes.ok) {
           const loadData = await loadRes.json();
           setLoad(loadData);
+          if (loadData.rewardBalance !== undefined) {
+            setRewardBalance(loadData.rewardBalance);
+          }
         }
       } else {
         toast.error("Failed to update stop");
@@ -749,6 +787,20 @@ export default function DriverDashboard() {
     <div className={cn("min-h-screen pb-20 font-sans transition-colors duration-300", 
       theme === "arcade90s" ? "arcade-bg text-arc-text" : "bg-brand-bg text-brand-text"
     )}>
+      {/* Reward Animation Popup */}
+      {showRewardAnimation.show && (
+        <div className="fixed top-20 left-1/2 -translate-x-1/2 z-50 animate-bounce">
+          <div className={cn(
+            "px-4 py-2 rounded-full font-bold text-lg shadow-lg",
+            theme === "arcade90s"
+              ? "bg-arc-secondary text-arc-bg arcade-pixel-font"
+              : "bg-gradient-to-r from-brand-gold-light via-brand-gold to-brand-gold-dark text-black"
+          )}>
+            +{showRewardAnimation.points} PingPoints
+          </div>
+        </div>
+      )}
+
       {/* Header */}
       <header className="w-full mb-4">
         <div
@@ -759,8 +811,19 @@ export default function DriverDashboard() {
               : "bg-brand-bg border-brand-border/70"
           )}
         >
+          <div className={cn(
+            "flex items-center gap-2 px-3 py-1.5 rounded-full",
+            theme === "arcade90s"
+              ? "bg-arc-bg border border-arc-secondary"
+              : "bg-brand-dark-pill border border-brand-border"
+          )} data-testid="text-reward-balance">
+            <span className={cn("text-xs", theme === "arcade90s" ? "text-arc-muted" : "text-brand-muted")}>Balance:</span>
+            <span className={cn("font-bold", theme === "arcade90s" ? "text-arc-secondary arcade-pixel-font" : "text-brand-gold")}>
+              {rewardBalance}
+            </span>
+          </div>
           <h1 className={cn(
-            "text-center flex-1 ml-8",
+            "text-center flex-1",
             theme === "arcade90s"
               ? "arcade-pixel-font arcade-title text-lg tracking-widest"
               : "text-sm sm:text-base md:text-lg font-semibold tracking-[0.25em] uppercase text-brand-text/80"
