@@ -80,6 +80,7 @@ Preferred communication style: Simple, everyday language.
 - **Database**: PostgreSQL via Drizzle ORM.
     - **Schema**: 30 tables managing brokers, loads, drivers, stops, tracking pings, billing (entitlements, credits, payments), exceptions, notification preferences, shippers, receivers, driver rewards, and audit logs.
     - **Migrations**: Drizzle Kit for schema-first migrations, with auto-migration on server startup.
+    - **Performance Indexes**: 40+ indexes across all tables optimizing dashboard queries, exception filtering, and high-volume tracking_pings operations. Unique constraints provide automatic indexes on key columns. See `docs/database.md` for details.
 - **API Design**: RESTful endpoints under `/api/*`.
 - **Security**: JWT secret from environment variables, secure and HTTP-only cookies, SameSite: lax for CSRF protection, rate limiting on critical endpoints.
 - **Admin Panel**: Protected admin dashboard at /app/admin with tabs for Users, Subscriptions, Audit Logs, and Promotions. Requires separate admin auth (not broker auth). Admin login disabled if ADMIN_EMAIL, ADMIN_PASSWORD, or JWT_SECRET is missing.

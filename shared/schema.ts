@@ -1,6 +1,6 @@
 import { sql } from "drizzle-orm";
 import { relations } from "drizzle-orm";
-import { pgTable, text, varchar, boolean, timestamp, decimal, integer, uuid, uniqueIndex } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, boolean, timestamp, decimal, integer, uuid, uniqueIndex, index } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
@@ -34,7 +34,9 @@ export const brokerFieldHints = pgTable("broker_field_hints", {
   value: text("value").notNull(),
   usageCount: integer("usage_count").notNull().default(1),
   lastUsedAt: timestamp("last_used_at", { withTimezone: true }).notNull().default(sql`now()`),
-});
+}, (table) => [
+  index("bfh_broker_field_idx").on(table.brokerId, table.fieldKey),
+]);
 
 export const brokerFieldHintsRelations = relations(brokerFieldHints, ({ one }) => ({
   broker: one(brokers, {
@@ -51,7 +53,9 @@ export const verificationTokens = pgTable("verification_tokens", {
   expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
   used: boolean("used").notNull().default(false),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`now()`),
-});
+}, (table) => [
+  index("vt_broker_idx").on(table.brokerId),
+]);
 
 export const verificationTokensRelations = relations(verificationTokens, ({ one }) => ({
   broker: one(brokers, {
@@ -68,7 +72,10 @@ export const brokerDevices = pgTable("broker_devices", {
   userAgent: text("user_agent"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`now()`),
   lastUsedAt: timestamp("last_used_at", { withTimezone: true }).notNull().default(sql`now()`),
-});
+}, (table) => [
+  index("bd_broker_idx").on(table.brokerId),
+  index("bd_broker_device_idx").on(table.brokerId, table.deviceId),
+]);
 
 export const brokerDevicesRelations = relations(brokerDevices, ({ one }) => ({
   broker: one(brokers, {
@@ -94,7 +101,10 @@ export const drivers = pgTable("drivers", {
   statsLateLoads: integer("stats_late_loads").notNull().default(0),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`now()`),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().default(sql`now()`),
-});
+}, (table) => [
+  index("drivers_broker_idx").on(table.brokerId),
+  index("drivers_phone_idx").on(table.phone),
+]);
 
 export const driversRelations = relations(drivers, ({ one, many }) => ({
   broker: one(brokers, {
@@ -120,7 +130,9 @@ export const shippers = pgTable("shippers", {
   email: text("email"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`now()`),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().default(sql`now()`),
-});
+}, (table) => [
+  index("shippers_broker_idx").on(table.brokerId),
+]);
 
 export const shippersRelations = relations(shippers, ({ one, many }) => ({
   broker: one(brokers, {
@@ -145,7 +157,9 @@ export const receivers = pgTable("receivers", {
   email: text("email"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`now()`),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().default(sql`now()`),
-});
+}, (table) => [
+  index("receivers_broker_idx").on(table.brokerId),
+]);
 
 export const receiversRelations = relations(receivers, ({ one, many }) => ({
   broker: one(brokers, {
@@ -182,7 +196,12 @@ export const loads = pgTable("loads", {
   distanceMiles: decimal("distance_miles", { precision: 10, scale: 2 }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`now()`),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().default(sql`now()`),
-});
+}, (table) => [
+  index("loads_broker_idx").on(table.brokerId),
+  index("loads_broker_status_idx").on(table.brokerId, table.status),
+  index("loads_created_at_idx").on(table.createdAt),
+  index("loads_driver_idx").on(table.driverId),
+]);
 
 export const loadsRelations = relations(loads, ({ one, many }) => ({
   broker: one(brokers, {
@@ -225,7 +244,10 @@ export const stops = pgTable("stops", {
   departedAt: timestamp("departed_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`now()`),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().default(sql`now()`),
-});
+}, (table) => [
+  index("stops_load_idx").on(table.loadId),
+  index("stops_load_type_idx").on(table.loadId, table.type),
+]);
 
 export const stopsRelations = relations(stops, ({ one }) => ({
   load: one(loads, {
@@ -246,7 +268,11 @@ export const trackingPings = pgTable("tracking_pings", {
   heading: decimal("heading", { precision: 5, scale: 2 }),
   source: text("source").notNull(), // DRIVER_APP, MANUAL, ELD, etc.
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`now()`),
-});
+}, (table) => [
+  index("tp_load_idx").on(table.loadId),
+  index("tp_load_created_idx").on(table.loadId, table.createdAt),
+  index("tp_driver_idx").on(table.driverId),
+]);
 
 export const trackingPingsRelations = relations(trackingPings, ({ one }) => ({
   load: one(loads, {
@@ -269,7 +295,10 @@ export const rateConfirmationFiles = pgTable("rate_confirmation_files", {
   mimeType: text("mime_type"),
   fileSize: integer("file_size"),
   uploadedAt: timestamp("uploaded_at", { withTimezone: true }).notNull().default(sql`now()`),
-});
+}, (table) => [
+  index("rcf_broker_idx").on(table.brokerId),
+  index("rcf_load_idx").on(table.loadId),
+]);
 
 export const rateConfirmationFilesRelations = relations(rateConfirmationFiles, ({ one }) => ({
   broker: one(brokers, {
@@ -293,7 +322,9 @@ export const brokerEntitlements = pgTable("broker_entitlements", {
   loadsUsed: integer("loads_used").notNull().default(0),
   status: text("status").notNull().default("active"),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().default(sql`now()`),
-});
+}, (table) => [
+  index("be_plan_idx").on(table.plan),
+]);
 
 export const brokerEntitlementsRelations = relations(brokerEntitlements, ({ one }) => ({
   broker: one(brokers, {
@@ -336,7 +367,9 @@ export const stripePayments = pgTable("stripe_payments", {
   status: text("status").notNull(),
   creditsGranted: integer("credits_granted"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`now()`),
-});
+}, (table) => [
+  index("sp_broker_idx").on(table.brokerId),
+]);
 
 export const stripePaymentsRelations = relations(stripePayments, ({ one }) => ({
   broker: one(brokers, {
@@ -357,7 +390,10 @@ export const solanaPaymentIntents = pgTable("solana_payment_intents", {
   expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
   confirmedAt: timestamp("confirmed_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`now()`),
-});
+}, (table) => [
+  index("spi_broker_idx").on(table.brokerId),
+  index("spi_status_idx").on(table.status),
+]);
 
 export const solanaPaymentIntentsRelations = relations(solanaPaymentIntents, ({ one }) => ({
   broker: one(brokers, {
@@ -374,7 +410,9 @@ export const brokerUsage = pgTable("broker_usage", {
   cycleEndAt: timestamp("cycle_end_at", { withTimezone: true }).notNull(),
   loadsCreated: integer("loads_created").notNull().default(0),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().default(sql`now()`),
-});
+}, (table) => [
+  index("bu_broker_cycle_idx").on(table.brokerId, table.cycleStartAt),
+]);
 
 export const brokerUsageRelations = relations(brokerUsage, ({ one }) => ({
   broker: one(brokers, {
@@ -421,7 +459,10 @@ export const activityLogs = pgTable("activity_logs", {
   newValue: text("new_value"),
   metadata: text("metadata"), // JSON string for extra context
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`now()`),
-});
+}, (table) => [
+  index("al_entity_idx").on(table.entityType, table.entityId),
+  index("al_created_at_idx").on(table.createdAt),
+]);
 
 // Admin Audit Log model
 export const adminAuditLogs = pgTable("admin_audit_logs", {
@@ -432,7 +473,11 @@ export const adminAuditLogs = pgTable("admin_audit_logs", {
   action: text("action").notNull(), // ADD_CREDITS, BLOCK_USER, UPDATE_USAGE, etc.
   metadata: text("metadata"), // JSON string for details
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`now()`),
-});
+}, (table) => [
+  index("aal_target_idx").on(table.targetBrokerId),
+  index("aal_actor_idx").on(table.actorBrokerId),
+  index("aal_created_at_idx").on(table.createdAt),
+]);
 
 export const adminAuditLogsRelations = relations(adminAuditLogs, ({ one }) => ({
   actorBroker: one(brokers, {
@@ -456,7 +501,9 @@ export const promotions = pgTable("promotions", {
   maxRedemptions: integer("max_redemptions"),
   redemptionCount: integer("redemption_count").notNull().default(0),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`now()`),
-});
+}, (table) => [
+  index("promo_active_idx").on(table.active),
+]);
 
 // Promotion Redemptions - tracks per-user redemption
 export const promotionRedemptions = pgTable("promotion_redemptions", {
@@ -470,7 +517,10 @@ export const promotionRedemptions = pgTable("promotion_redemptions", {
   discountApplied: boolean("discount_applied").notNull().default(false),
   status: text("status").notNull().default("PENDING"), // PENDING, COMPLETED, EXPIRED
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`now()`),
-});
+}, (table) => [
+  index("pr_broker_idx").on(table.brokerId),
+  index("pr_promotion_idx").on(table.promotionId),
+]);
 
 // Referrals model - tracks each referral relationship
 export const referrals = pgTable("referrals", {
@@ -486,7 +536,11 @@ export const referrals = pgTable("referrals", {
   referredLoadsGranted: integer("referred_loads_granted").notNull().default(0),
   status: text("status").notNull().default("REGISTERED"), // REGISTERED, PRO_SUBSCRIBED, REWARDS_GRANTED
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`now()`),
-});
+}, (table) => [
+  index("ref_referrer_idx").on(table.referrerId),
+  index("ref_referred_idx").on(table.referredId),
+  index("ref_code_idx").on(table.referrerCode),
+]);
 
 export const referralsRelations = relations(referrals, ({ one }) => ({
   referrer: one(brokers, {
@@ -524,7 +578,11 @@ export const webhookDeliveryLogs = pgTable("webhook_delivery_logs", {
   errorMessage: text("error_message"),
   durationMs: integer("duration_ms").notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`now()`),
-});
+}, (table) => [
+  index("whdl_broker_idx").on(table.brokerId),
+  index("whdl_event_type_idx").on(table.eventType),
+  index("whdl_created_at_idx").on(table.createdAt),
+]);
 
 export const webhookDeliveryLogsRelations = relations(webhookDeliveryLogs, ({ one }) => ({
   broker: one(brokers, {
@@ -755,7 +813,12 @@ export const exceptionEvents = pgTable("exception_events", {
   resolvedAt: timestamp("resolved_at", { withTimezone: true }),
   details: text("details"), // JSON string for extra context
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`now()`),
-});
+}, (table) => [
+  index("ee_broker_idx").on(table.brokerId),
+  index("ee_load_idx").on(table.loadId),
+  index("ee_type_idx").on(table.type),
+  index("ee_broker_resolved_idx").on(table.brokerId, table.resolvedAt),
+]);
 
 export const exceptionEventsRelations = relations(exceptionEvents, ({ one }) => ({
   load: one(loads, {
@@ -776,7 +839,10 @@ export const notificationPreferences = pgTable("notification_preferences", {
   enabled: boolean("enabled").notNull().default(true),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`now()`),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().default(sql`now()`),
-});
+}, (table) => [
+  index("np_broker_idx").on(table.brokerId),
+  index("np_broker_channel_idx").on(table.brokerId, table.channel),
+]);
 
 export const notificationPreferencesRelations = relations(notificationPreferences, ({ one }) => ({
   broker: one(brokers, {

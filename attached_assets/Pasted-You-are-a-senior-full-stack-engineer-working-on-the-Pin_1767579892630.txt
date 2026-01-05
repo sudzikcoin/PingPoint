@@ -1,0 +1,311 @@
+You are a senior full-stack engineer working on the PingPoint project (broker/driver tracking app) in this Replit.
+
+Goal: strengthen the DATABASE LAYER for production WITHOUT changing any existing business logic, routes or UI. You will:
+- add proper indexes to the Drizzle schema for hot tables,
+- wire up a clean migration flow,
+- and add minimal documentation for DB & migrations.
+
+IMPORTANT GLOBAL RULES
+- DO NOT rename or remove any existing columns or tables.
+- DO NOT change any enum values or constraints.
+- DO NOT change any existing route/handler behaviour.
+- Only ADD indexes and small helper scripts/files.
+- Keep all changes backward-compatible so the current app continues to work exactly as it does now.
+
+--------------------------------------------------
+1. Inspect current DB setup
+--------------------------------------------------
+1. Open the project and locate:
+   - shared/schema.ts or any file that defines Drizzle Postgres tables.
+   - server/db.ts (or similar) where `drizzle()` is called.
+   - Any migration-related files (for example `drizzle.config.*`, `server/migrate.ts`, or a `drizzle/` folder).
+
+2. Understand:
+   - Which tables are used for:
+     - brokers
+     - loads
+     - stops
+     - tracking pings
+     - geofence state
+     - billing (entitlements/usage/credits)
+     - webhooks
+     - documents (rate confirmations)
+     - rewards
+     - admin/audit
+   - How migrations are currently run (if they are).
+
+Do NOT change anything yet in this step, just inspect and base the next steps on the real files.
+
+--------------------------------------------------
+2. Add indexes to Drizzle schema (non-breaking)
+--------------------------------------------------
+Now, in the main Drizzle schema file (likely shared/schema.ts), add **only indexes** to existing tables, using Drizzle’s `index()` helper in the third argument of `pgTable`.
+
+For each table below, add indexes as described. If some indexes already exist, don’t duplicate them; only add missing ones.
+
+2.1. brokers
+- Table name: whatever is used for brokers (for example `brokers`).
+- Add:
+  - index on email
+  - index on planType (or equivalent)
+
+Example (adapt the table/field names to the actual code):
+
+  (table) => ({
+    emailIdx: index('brokers_email_idx').on(table.email),
+    planIdx: index('brokers_plan_idx').on(table.planType),
+  })
+
+2.2. loads
+- Table name: the main loads table.
+- Add:
+  - index on brokerId
+  - combined index on (brokerId, status)
+  - index on createdAt
+
+Example:
+
+  (table) => ({
+    brokerIdx: index('loads_broker_idx').on(table.brokerId),
+    brokerStatusIdx: index('loads_broker_status_idx').on(table.brokerId, table.status),
+    createdAtIdx: index('loads_created_at_idx').on(table.createdAt),
+  })
+
+2.3. stops
+- Table: stops / load stops.
+- Add:
+  - index on loadId
+  - combined index on (loadId, type)
+
+Example:
+
+  (table) => ({
+    loadIdx: index('stops_load_idx').on(table.loadId),
+    loadTypeIdx: index('stops_load_type_idx').on(table.loadId, table.type),
+  })
+
+2.4. tracking pings
+- Table: trackingPings / tracking_pings.
+- Add:
+  - index on loadId
+  - combined index on (loadId, createdAt) to quickly fetch last pings
+  - index on driverId (if exists)
+
+Example:
+
+  (table) => ({
+    loadIdx: index('tp_load_idx').on(table.loadId),
+    loadCreatedIdx: index('tp_load_created_idx').on(table.loadId, table.createdAt),
+    driverIdx: index('tp_driver_idx').on(table.driverId),
+  })
+
+2.5. stop geofence state
+- Table: stopGeofenceState / stop_geofence_state.
+- Add:
+  - index on stopId
+
+Example:
+
+  (table) => ({
+    stopIdx: index('sgs_stop_idx').on(table.stopId),
+  })
+
+2.6. billing: entitlements, usage, credits
+Identify the three billing/limit tables (names may differ; adapt to real names):
+
+- brokerEntitlements
+  - index on brokerId:
+
+    (table) => ({
+      brokerIdx: index('be_broker_idx').on(table.brokerId),
+    })
+
+- brokerUsage
+  - index on (brokerId, cycleStart):
+
+    (table) => ({
+      brokerCycleIdx: index('bu_broker_cycle_idx').on(table.brokerId, table.cycleStart),
+    })
+
+- brokerCredits
+  - index on brokerId:
+
+    (table) => ({
+      brokerIdx: index('bc_broker_idx').on(table.brokerId),
+    })
+
+2.7. webhooks
+- webhookConfigs (or similar)
+  - index on brokerId:
+
+    (table) => ({
+      brokerIdx: index('whc_broker_idx').on(table.brokerId),
+    })
+
+- webhookDeliveries
+  - index on configId
+  - index on loadId
+  - index on status
+
+    (table) => ({
+      configIdx: index('whd_config_idx').on(table.configId),
+      loadIdx: index('whd_load_idx').on(table.loadId),
+      statusIdx: index('whd_status_idx').on(table.status),
+    })
+
+2.8. rewards
+- driverRewardAccounts
+  - index on driverId
+  - index on brokerId
+
+- driverRewardTransactions
+  - index on accountId
+  - index on loadId
+
+Examples:
+
+  (table) => ({
+    driverIdx: index('dra_driver_idx').on(table.driverId),
+    brokerIdx: index('dra_broker_idx').on(table.brokerId),
+  })
+
+  (table) => ({
+    accountIdx: index('drt_account_idx').on(table.accountId),
+    loadIdx: index('drt_load_idx').on(table.loadId),
+  })
+
+2.9. documents (rate confirmation files)
+- rateConfirmationFiles / rc files table
+  - index on brokerId
+  - index on loadId
+
+Example:
+
+  (table) => ({
+    brokerIdx: index('rcf_broker_idx').on(table.brokerId),
+    loadIdx: index('rcf_load_idx').on(table.loadId),
+  })
+
+2.10. admin audit logs
+- adminAuditLogs (or similar)
+  - index on (targetType, targetId)
+  - index on adminId
+
+Example:
+
+  (table) => ({
+    targetIdx: index('aal_target_idx').on(table.targetType, table.targetId),
+    adminIdx: index('aal_admin_idx').on(table.adminId),
+  })
+
+NOTE:
+- Use the REAL table and column names from the project.
+- If any suggested index already exists, skip creating a duplicate.
+- Don’t change or remove existing indexes that are already in use.
+
+--------------------------------------------------
+3. Wire up Drizzle migrations cleanly
+--------------------------------------------------
+Now make sure schema changes (including new indexes) are actually managed by migrations.
+
+3.1. Find or create Drizzle config
+- Look for an existing `drizzle.config.ts` or similar Drizzle config.
+- If it doesn’t exist, create one at the project root that:
+  - points to the correct Postgres DATABASE_URL (from env)
+  - points to the schema file (shared/schema.ts or equivalent)
+  - sets migrations folder (e.g., `./drizzle`)
+
+3.2. Make sure there is a migration runner
+- Check for an existing migration script like `server/migrate.ts` or a command that runs `drizzle-kit migrate`.
+- If a migration runner already exists, update it to use the current `drizzle.config.ts`.
+- If none exists:
+  - add a simple migration runner script (for example `server/migrate.ts`) that calls Drizzle migrations against the DB.
+  - It should:
+    - read `process.env.DATABASE_URL`,
+    - create a pg client,
+    - run `migrate()` for the `drizzle` folder,
+    - then close the connection.
+
+3.3. Add npm scripts
+In package.json, add or update scripts:
+
+- "db:migrate": runs migrations against the current DATABASE_URL, e.g.:
+
+  "scripts": {
+    ...,
+    "db:migrate": "drizzle-kit migrate",
+    "db:generate": "drizzle-kit generate"
+  }
+
+If you prefer a custom migrate.ts, then:
+
+  "db:migrate": "ts-node server/migrate.ts"
+
+Use the approach that matches the existing tooling in this project.
+
+3.4. Generate migration for the new indexes
+- Use drizzle-kit (or existing migration tool) to generate migrations reflecting the new indexes.
+- Make sure:
+  - The migration only adds indexes; no columns get dropped or changed.
+  - The migration is checked into the repo in the migrations folder.
+
+--------------------------------------------------
+4. Minimal DB README / documentation
+--------------------------------------------------
+Add or update a short documentation section, either:
+- in the main README.md, OR
+- in a new file `docs/database.md`.
+
+Content (adapt to actual names and paths):
+
+1. Short description of the DB:
+   - Tech stack: Postgres + Drizzle ORM.
+   - Main tables: brokers, loads, stops, tracking_pings, billing tables, webhooks, docs, rewards, admin.
+
+2. How to run migrations locally:
+   - Example:
+
+     - Set DATABASE_URL in `.env.local`.
+     - Run: `npm run db:generate` (if schema changed).
+     - Run: `npm run db:migrate`.
+
+3. How to run migrations on production server:
+   - Example (text only, do not create scripts for the remote server here):
+
+     - SSH into server.
+     - Export DATABASE_URL for production.
+     - Run: `npm run db:migrate`.
+
+4. Notes about performance:
+   - Mention that indexes were added for:
+     - loads by broker/status,
+     - stops by load/type,
+     - tracking_pings by loadId/createdAt,
+     - billing tables by brokerId,
+     - webhooks by config/load/status,
+     - rewards, admin logs, documents, etc.
+   - Mention that `tracking_pings` can grow large and should be periodically archived in the future.
+
+Keep this doc short and practical.
+
+--------------------------------------------------
+5. Final checks
+--------------------------------------------------
+After all code changes:
+
+1. Ensure TypeScript builds without errors:
+   - Run: `npm run build` (or the appropriate build command used in this repo).
+
+2. Ensure existing tests still pass (if there are tests).
+
+3. Do NOT change:
+   - Any route URLs.
+   - Any response shapes of existing APIs.
+   - Any behaviour of auth, billing, tracking, or UI.
+
+4. Summarize (in comments or docstring if appropriate) what you changed:
+   - “Added indexes to core tables for production performance.”
+   - “Added Drizzle migration config and npm scripts for DB migrations.”
+   - “Added short DB/migrations README.”
+
+Execute all steps now and modify the project files accordingly.
