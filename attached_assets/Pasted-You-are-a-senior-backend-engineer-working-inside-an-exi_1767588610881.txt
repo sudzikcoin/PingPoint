@@ -1,0 +1,214 @@
+You are a senior backend engineer working inside an existing PingPoint project.
+Your task is to FIX the Analytics API so the Analytics UI stops failing and starts returning real data.
+
+IMPORTANT RULES:
+- Do NOT refactor existing architecture
+- Do NOT break existing endpoints
+- ONLY add missing analytics endpoints
+- Reuse existing DB, Drizzle ORM, auth logic
+- Assume broker authentication already exists via getBrokerFromRequest(req)
+- Work ONLY in server/routes.ts (and imports if needed)
+
+PROJECT CONTEXT:
+- Backend: Express + TypeScript
+- DB: PostgreSQL + Drizzle ORM
+- Tables already exist:
+  - loads
+  - trackingPings
+- CSV export already works, but Analytics UI fails because analytics endpoints are missing
+
+GOAL:
+Implement two endpoints required by the frontend:
+
+1) GET /api/analytics/overview?days=7|30|90
+2) GET /api/analytics/loads-detail?days=7|30|90&limit=200
+
+These endpoints MUST:
+- Filter data by current brokerId
+- Support date ranges (default = 30 days)
+- Return stable JSON for charts and tables
+- Never crash if no data exists
+- Fill missing days with zero values (important for charts)
+
+STEP 1 — ADD IMPORTS (top of server/routes.ts):
+
+Add the following imports if they are missing:
+
+import { db } from "./db";
+import { loads, trackingPings } from "@shared/schema";
+import { and, eq, gte, desc, sql } from "drizzle-orm";
+
+STEP 2 — ADD ANALYTICS ROUTES
+
+Inside registerRoutes(app) add the following code:
+
+--------------------------------------------------
+
+function parseDaysParam(raw: unknown): number {
+  const n = Number(raw);
+  if ([7, 30, 90].includes(n)) return n;
+  return 30;
+}
+
+function startOfDayUTC(d: Date): Date {
+  const x = new Date(d);
+  x.setUTCHours(0, 0, 0, 0);
+  return x;
+}
+
+function isoDateOnlyUTC(d: Date): string {
+  return d.toISOString().slice(0, 10);
+}
+
+app.get("/api/analytics/overview", async (req, res) => {
+  try {
+    const broker = await getBrokerFromRequest(req);
+    if (!broker) return res.status(401).json({ error: "Unauthorized" });
+
+    const days = parseDaysParam(req.query.days);
+    const now = new Date();
+    const start = startOfDayUTC(new Date(now.getTime() - days * 86400000));
+
+    const summaryRows = await db
+      .select({
+        status: loads.status,
+        count: sql`count(*)::int`,
+        revenue: sql`coalesce(sum(${loads.rateAmount}), 0)::text`
+      })
+      .from(loads)
+      .where(
+        and(
+          eq(loads.brokerId, broker.id),
+          eq(loads.isArchived, false),
+          gte(loads.createdAt, start)
+        )
+      )
+      .groupBy(loads.status);
+
+    let totalLoads = 0;
+    let totalRevenue = 0;
+    const byStatus: Record<string, number> = {};
+
+    for (const r of summaryRows) {
+      const c = Number(r.count || 0);
+      totalLoads += c;
+      byStatus[r.status] = c;
+      totalRevenue += Number(r.revenue || "0");
+    }
+
+    const createdRows = await db
+      .select({
+        day: sql`to_char(date_trunc('day', ${loads.createdAt}), 'YYYY-MM-DD')`,
+        count: sql`count(*)::int`
+      })
+      .from(loads)
+      .where(
+        and(
+          eq(loads.brokerId, broker.id),
+          eq(loads.isArchived, false),
+          gte(loads.createdAt, start)
+        )
+      )
+      .groupBy(sql`date_trunc('day', ${loads.createdAt})`);
+
+    const deliveredRows = await db
+      .select({
+        day: sql`to_char(date_trunc('day', ${loads.updatedAt}), 'YYYY-MM-DD')`,
+        count: sql`count(*)::int`
+      })
+      .from(loads)
+      .where(
+        and(
+          eq(loads.brokerId, broker.id),
+          eq(loads.status, "DELIVERED"),
+          gte(loads.updatedAt, start)
+        )
+      )
+      .groupBy(sql`date_trunc('day', ${loads.updatedAt})`);
+
+    const createdMap = new Map(createdRows.map(r => [r.day, Number(r.count)]));
+    const deliveredMap = new Map(deliveredRows.map(r => [r.day, Number(r.count)]));
+
+    const series = [];
+    for (let i = days - 1; i >= 0; i--) {
+      const d = startOfDayUTC(new Date(now.getTime() - i * 86400000));
+      const key = isoDateOnlyUTC(d);
+      series.push({
+        date: key,
+        loadsCreated: createdMap.get(key) ?? 0,
+        loadsDelivered: deliveredMap.get(key) ?? 0
+      });
+    }
+
+    res.json({
+      range: { days },
+      summary: { totalLoads, totalRevenue, byStatus },
+      series
+    });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: "Analytics overview failed" });
+  }
+});
+
+app.get("/api/analytics/loads-detail", async (req, res) => {
+  try {
+    const broker = await getBrokerFromRequest(req);
+    if (!broker) return res.status(401).json({ error: "Unauthorized" });
+
+    const days = parseDaysParam(req.query.days);
+    const limit = Math.min(Number(req.query.limit || 200), 500);
+    const start = startOfDayUTC(new Date(Date.now() - days * 86400000));
+
+    const pingStats = db
+      .select({
+        loadId: trackingPings.loadId,
+        pingsCount: sql`count(*)::int`,
+        lastPingAt: sql`max(${trackingPings.createdAt})`
+      })
+      .from(trackingPings)
+      .where(gte(trackingPings.createdAt, start))
+      .groupBy(trackingPings.loadId)
+      .as("ping_stats");
+
+    const rows = await db
+      .select({
+        id: loads.id,
+        loadNumber: loads.loadNumber,
+        status: loads.status,
+        rateAmount: loads.rateAmount,
+        createdAt: loads.createdAt,
+        updatedAt: loads.updatedAt,
+        pingsCount: sql`coalesce(${pingStats.pingsCount}, 0)::int`,
+        lastPingAt: pingStats.lastPingAt
+      })
+      .from(loads)
+      .leftJoin(pingStats, sql`${pingStats.loadId} = ${loads.id}`)
+      .where(
+        and(
+          eq(loads.brokerId, broker.id),
+          eq(loads.isArchived, false),
+          gte(loads.createdAt, start)
+        )
+      )
+      .orderBy(desc(loads.createdAt))
+      .limit(limit);
+
+    res.json({ items: rows });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: "Analytics loads detail failed" });
+  }
+});
+
+--------------------------------------------------
+
+STEP 3 — VERIFY
+- Restart backend
+- Open:
+  /api/analytics/overview?days=30
+  /api/analytics/loads-detail?days=30
+- Confirm JSON is returned (no 404 / no 500)
+
+DELIVERABLE:
+Analytics UI must stop showing "Failed to load data" and begin rendering charts using real backend data.

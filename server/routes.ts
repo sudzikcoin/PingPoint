@@ -3101,16 +3101,12 @@ export async function registerRoutes(
   // ============================================
 
   // GET /api/analytics/overview - Get analytics overview
-  // Fix: Added debug logging to diagnose UI loading failures
   app.get("/api/analytics/overview", async (req: Request, res: Response) => {
     try {
-      console.log("[Analytics] GET /api/analytics/overview", { query: req.query });
       const broker = await getBrokerFromRequest(req);
       if (!broker) {
-        console.log("[Analytics] Not authenticated");
         return res.status(401).json({ error: "Not authenticated" });
       }
-      console.log("[Analytics] Broker:", broker.id);
 
       const { from, to } = req.query;
       const fromDate = from ? new Date(from as string) : undefined;
