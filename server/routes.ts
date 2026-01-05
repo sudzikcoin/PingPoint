@@ -23,6 +23,19 @@ import { notifyLoadStatusChange } from "./services/notificationService";
 import * as analyticsService from "./services/analyticsService";
 import { awardPointsForEvent, getRewardBalance } from "./services/rewardService";
 import type { RewardEventType } from "@shared/schema";
+import {
+  checkPublicTrackingRateLimit,
+  getCachedResponse,
+  setCachedResponse,
+  isTrackingLinkExpired,
+  sanitizeStopForPublic,
+  validateGpsAccuracy,
+  validateGpsTimestamp,
+  haversineDistanceMeters,
+  calculateSpeedMph,
+  GPS_MAX_SPEED_MPH,
+  GPS_MAX_ACCURACY_METERS,
+} from "./utils/securityUtils";
 
 const uploadsDir = path.join(process.cwd(), "uploads", "rate-confirmations");
 if (!fs.existsSync(uploadsDir)) {
@@ -1180,34 +1193,59 @@ export async function registerRoutes(
     }
   });
 
-  // Public tracking endpoint
+  // Public tracking endpoint (secured with rate limiting, TTL, and safe response)
   // GET /api/track/:token
   app.get("/api/track/:token", async (req: Request, res: Response) => {
     try {
       const { token } = req.params;
+      const clientIp = req.ip || req.socket.remoteAddress || "unknown";
+
+      // Rate limiting check
+      if (!checkPublicTrackingRateLimit(clientIp, token)) {
+        console.log(`[PublicTracking] RATE_LIMITED ip=${clientIp} token=${token.substring(0, 8)}...`);
+        return res.status(429).json({ error: "Too many requests" });
+      }
+
+      // Check response cache first
+      const cached = getCachedResponse(token);
+      if (cached) {
+        return res.json(cached);
+      }
+
       const load = await storage.getLoadByToken(token, 'tracking');
 
       if (!load) {
         return res.status(404).json({ error: "Load not found" });
       }
 
+      // Check TTL for delivered loads
+      if (isTrackingLinkExpired(load.deliveredAt)) {
+        console.log(`[PublicTracking] EXPIRED token=${token.substring(0, 8)}... deliveredAt=${load.deliveredAt}`);
+        return res.status(410).json({ error: "Tracking link expired" });
+      }
+
       const loadStops = await storage.getStopsByLoad(load.id);
       const trackingPingsList = await storage.getTrackingPingsByLoad(load.id);
       const latestPing = trackingPingsList[0]; // First is most recent due to desc order
-      const geofenceDebug = await getGeofenceDebugInfo(load.id);
 
-      return res.json({
+      // Build safe response (no PII, no internal IDs)
+      const safeResponse = {
         loadNumber: load.loadNumber,
         status: load.status,
-        shipperName: load.shipperName,
-        stops: loadStops,
+        createdAt: load.createdAt,
+        deliveredAt: load.deliveredAt || null,
+        stops: loadStops.map(sanitizeStopForPublic),
         lastLocation: latestPing ? {
           lat: latestPing.lat,
           lng: latestPing.lng,
           timestamp: latestPing.createdAt,
         } : null,
-        geofenceDebug,
-      });
+      };
+
+      // Cache the response
+      setCachedResponse(token, safeResponse);
+
+      return res.json(safeResponse);
     } catch (error) {
       console.error("Error in /api/track/:token:", error);
       return res.status(500).json({ error: "Internal server error" });
@@ -1268,7 +1306,7 @@ export async function registerRoutes(
   app.post("/api/driver/:token/ping", strictRateLimit(60, 60000), async (req: Request, res: Response) => {
     try {
       const { token } = req.params;
-      const { lat, lng, accuracy, speed, heading } = req.body;
+      const { lat, lng, accuracy, speed, heading, timestamp } = req.body;
       const ua = req.headers['user-agent'] || 'unknown';
       
       console.log(`[TrackingPing] recv token=${token ? token.substring(0, 8) + '...' : 'missing'} lat=${lat} lng=${lng} ua=${ua.substring(0, 50)}`);
@@ -1285,6 +1323,22 @@ export async function registerRoutes(
         return res.status(400).json({ ok: false, error: "invalid_coords" });
       }
 
+      // Validate accuracy (if provided)
+      const accuracyError = validateGpsAccuracy(accuracy);
+      if (accuracyError) {
+        console.log(`[TrackingPing] REJECTED reason=${accuracyError} accuracy=${accuracy}`);
+        return res.status(422).json({ ok: false, error: accuracyError });
+      }
+
+      // Validate timestamp (if provided)
+      if (timestamp != null) {
+        const timestampError = validateGpsTimestamp(timestamp);
+        if (timestampError) {
+          console.log(`[TrackingPing] REJECTED reason=${timestampError} timestamp=${timestamp}`);
+          return res.status(422).json({ ok: false, error: timestampError });
+        }
+      }
+
       const load = await storage.getLoadByToken(token, 'driver');
       if (!load || !load.driverId) {
         console.log(`[TrackingPing] rejected reason=load_not_found token=${token}`);
@@ -1297,6 +1351,25 @@ export async function registerRoutes(
         return res.status(409).json({ error: "Tracking ended", trackingEnded: true });
       }
 
+      // Anti-teleport detection: check speed against last ping
+      const lastPings = await storage.getTrackingPingsByLoad(load.id);
+      const lastPing = lastPings[0]; // Most recent ping
+      if (lastPing && lastPing.lat && lastPing.lng) {
+        const lastLat = parseFloat(lastPing.lat);
+        const lastLng = parseFloat(lastPing.lng);
+        const distanceM = haversineDistanceMeters(lastLat, lastLng, lat, lng);
+        const timeDeltaMs = Date.now() - new Date(lastPing.createdAt).getTime();
+        
+        // Only check speed if enough time has passed (> 5 seconds)
+        if (timeDeltaMs > 5000) {
+          const speedMph = calculateSpeedMph(distanceM, timeDeltaMs);
+          if (speedMph > GPS_MAX_SPEED_MPH) {
+            console.log(`[TrackingPing] REJECTED reason=teleport_detected speed=${speedMph.toFixed(1)}mph dist=${distanceM.toFixed(0)}m delta=${timeDeltaMs}ms`);
+            return res.status(422).json({ ok: false, error: "Unrealistic GPS jump" });
+          }
+        }
+      }
+
       // Per-load rate limiting: max 1 ping per 30 seconds
       const rateKey = `load:${load.id}:${load.driverId}`;
       if (!shouldAcceptPing(rateKey)) {
@@ -1305,7 +1378,7 @@ export async function registerRoutes(
       }
 
       // Check if this is the first ping for this load (for first location share reward)
-      const hasPriorPings = await storage.hasTrackingPingsForLoad(load.id);
+      const hasPriorPings = lastPings.length > 0;
       const isFirstPing = !hasPriorPings;
 
       const ping = await storage.createTrackingPing({
@@ -1378,6 +1451,22 @@ export async function registerRoutes(
         return res.status(400).json({ ok: false, error: "invalid_coords" });
       }
 
+      // Validate accuracy (if provided)
+      const accuracyError = validateGpsAccuracy(accuracy);
+      if (accuracyError) {
+        console.log(`[TrackingPing] REJECTED reason=${accuracyError} accuracy=${accuracy}`);
+        return res.status(422).json({ ok: false, error: accuracyError });
+      }
+
+      // Validate timestamp (if provided)
+      if (timestamp != null) {
+        const timestampError = validateGpsTimestamp(timestamp);
+        if (timestampError) {
+          console.log(`[TrackingPing] REJECTED reason=${timestampError} timestamp=${timestamp}`);
+          return res.status(422).json({ ok: false, error: timestampError });
+        }
+      }
+
       const load = await storage.getLoadByToken(token, 'driver');
       if (!load || !load.driverId) {
         console.log(`[TrackingPing] rejected reason=load_not_found token=${token}`);
@@ -1388,6 +1477,24 @@ export async function registerRoutes(
       if (load.trackingEndedAt && new Date() >= new Date(load.trackingEndedAt)) {
         console.log(`[TrackingPing] rejected load=${load.loadNumber} driver=${load.driverId} reason=tracking_ended`);
         return res.status(409).json({ error: "Tracking ended", trackingEnded: true });
+      }
+
+      // Anti-teleport detection: check speed against last ping
+      const lastPings = await storage.getTrackingPingsByLoad(load.id);
+      const lastPing = lastPings[0];
+      if (lastPing && lastPing.lat && lastPing.lng) {
+        const lastLat = parseFloat(lastPing.lat);
+        const lastLng = parseFloat(lastPing.lng);
+        const distanceM = haversineDistanceMeters(lastLat, lastLng, lat, lng);
+        const timeDeltaMs = Date.now() - new Date(lastPing.createdAt).getTime();
+        
+        if (timeDeltaMs > 5000) {
+          const speedMph = calculateSpeedMph(distanceM, timeDeltaMs);
+          if (speedMph > GPS_MAX_SPEED_MPH) {
+            console.log(`[TrackingPing] REJECTED reason=teleport_detected speed=${speedMph.toFixed(1)}mph`);
+            return res.status(422).json({ ok: false, error: "Unrealistic GPS jump" });
+          }
+        }
       }
 
       // Per-load rate limiting: max 1 ping per 30 seconds

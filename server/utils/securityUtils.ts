@@ -164,18 +164,18 @@ setInterval(() => {
   const now = Date.now();
   
   // Clean rate limit buckets
-  for (const [key, bucket] of publicTrackingBuckets.entries()) {
+  Array.from(publicTrackingBuckets.entries()).forEach(([key, bucket]) => {
     if (now >= bucket.resetAt + 60000) { // Keep for 1 extra minute
       publicTrackingBuckets.delete(key);
     }
-  }
+  });
   
   // Clean response cache
-  for (const [key, cached] of responseCache.entries()) {
+  Array.from(responseCache.entries()).forEach(([key, cached]) => {
     if (now >= cached.expiresAt) {
       responseCache.delete(key);
     }
-  }
+  });
 }, 60000);
 
 /**
