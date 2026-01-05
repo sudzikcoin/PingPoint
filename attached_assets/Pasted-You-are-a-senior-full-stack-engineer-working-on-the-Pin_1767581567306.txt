@@ -1,0 +1,184 @@
+You are a senior full-stack engineer working on the PingPoint project (broker/driver tracking app) in this Replit.
+
+GOAL
+Implement a simple, safe RATE-LIMITING for driver location pings so that:
+- each driver/load can send location updates no more often than once every 30 seconds,
+- WITHOUT breaking existing UI or API contracts,
+- WITHOUT changing any existing business logic (geofencing, auto-arrive/depart, etc.) for accepted pings.
+
+Very important:
+- Do NOT remove or rename any existing functions, routes, or DB fields.
+- Do NOT change the shape of existing API responses.
+- For rate-limited requests: just silently skip DB insert / heavy logic, but still return a normal 200 success like now.
+- Everything must remain backward-compatible.
+
+==================================================
+1. Find the driver location ping endpoint
+==================================================
+
+1. Search the codebase for the API handler that receives driver location updates, for example:
+   - files under `app/api/**` or `pages/api/**` with names like:
+     - `send-location`, `driver-location`, `tracking`, `location`, `ping`, etc.
+   - places where we insert into the tracking pings table (`tracking_pings`, `trackingPings`, etc.).
+
+2. Identify the main handler that:
+   - reads coordinates (lat/lng, maybe accuracy/speed),
+   - associates them with a `loadId`, `driverId` or a driver token,
+   - and writes them into the DB (tracking pings) and/or triggers geofence / status auto-update.
+
+Call this “DRIVER PING HANDLER”. You will add rate-limiting inside it.
+
+3. If there are multiple endpoints for pings, apply the same pattern to the ONE that is used by the driver tracking link (the URL the driver opens from SMS).
+
+==================================================
+2. Create a small rate-limiting helper (in-memory)
+==================================================
+
+1. In a shared server-side folder (for example `lib/` or `server/utils/`), create a new file:
+
+   - `lib/rateLimit.ts`   (if `lib` already exists), OR
+   - use the closest existing “utils” folder used by API routes.
+
+2. In that file, implement a very simple in-memory rate limiter based on a Map:
+
+   - It should export:
+     - a constant `MIN_PING_INTERVAL_MS` (set to `30000` = 30 seconds),
+     - a function `shouldAcceptPing(key: string, nowMs = Date.now()): boolean`.
+
+3. Implementation details:
+
+   - Use a `Map<string, number>` to store the last accepted timestamp per key.
+
+   - Pseudocode to actually implement:
+
+     - Create at module scope (top of file):
+
+       `const pingBuckets = new Map<string, number>();`
+
+     - Implement:
+
+       - `export const MIN_PING_INTERVAL_MS = 30000;`
+
+       - `export function shouldAcceptPing(key: string, nowMs = Date.now()): boolean {`
+         - `const last = pingBuckets.get(key) ?? 0;`
+         - `if (nowMs - last < MIN_PING_INTERVAL_MS) {`
+           - `return false;`
+         - `}`
+         - `pingBuckets.set(key, nowMs);`
+         - `return true;`
+       - `}`
+
+   - Optionally (not mandatory), you can add a simple clean-up mechanism that periodically clears very old entries, but do NOT over-engineer this. Keeping the map in memory is fine for now.
+
+4. This helper must be fully TypeScript-typed and compatible with the project’s TS config.
+
+==================================================
+3. Ensure ping endpoint uses Node.js runtime
+==================================================
+
+1. Open the DRIVER PING HANDLER file you found in step 1.
+
+2. At the top of that file, if it is an App Router route handler, ensure it is not using Edge runtime for this endpoint. If there is a runtime export, it should be:
+
+   - `export const runtime = 'nodejs';`
+
+3. If there is no runtime export at all, you may add:
+
+   - `export const runtime = 'nodejs';`
+
+This is required so that the in-memory Map (`pingBuckets`) behaves as expected and is allowed (Edge runtime does not support this pattern properly).
+
+Do NOT change any other runtime settings for other routes.
+
+==================================================
+4. Plug rate-limiting into the ping handler
+==================================================
+
+Now integrate the rate limiter in the DRIVER PING HANDLER without breaking behaviour for allowed pings.
+
+1. Import the helper at the top of the handler file:
+
+   - `import { shouldAcceptPing, MIN_PING_INTERVAL_MS } from '@/lib/rateLimit';`
+   - Adjust the import path (`@/lib/...` or relative path) to match the actual project structure.
+
+2. Identify what uniquely represents a “ping stream” for one driver/load.
+
+   Typical options (use what exists in the code):
+
+   - If the handler has access to `loadId` and optionally `driverId`:
+     - Use key: ``const rateKey = `load:${loadId}:${driverId ?? 'anon'}`;``
+   - If it uses some `driverToken` or `trackingToken` from the URL or body:
+     - Use key: ``const rateKey = `token:${driverToken}`;``
+
+   Choose the most stable and available identifier in this endpoint so that:
+   - all pings from one driver for a specific load use the SAME key.
+
+3. BEFORE inserting into the DB or triggering geofence logic, call:
+
+   - `const accept = shouldAcceptPing(rateKey);`
+
+4. If `accept` is `false` (rate-limited):
+
+   - Do NOT write a tracking ping into the database.
+   - Do NOT run heavy geofence/auto-status logic.
+   - Still return the same kind of success response the API would normally send for a valid ping.
+
+   Example logic (adapt to the real handler):
+
+   ```ts
+   const accept = shouldAcceptPing(rateKey);
+
+   if (!accept) {
+     // Optionally log for debugging:
+     console.info('[ping-rate-limit] Dropped extra ping for', rateKey);
+     // Return the same successful shape as usual, but without doing any DB work.
+     return NextResponse.json({ ok: true });
+   }
+
+   // existing code: validate body, insert tracking ping, geofence check, etc.
+
+	•	Ensure that the JSON structure (keys and types) is the same as before when it was successful, so UI does not break.
+	•	If the handler used e.g. { success: true } or similar, keep that.
+
+	5.	If accept is true:
+	•	Execute the existing behaviour exactly as it was:
+	•	validate input,
+	•	write tracking ping,
+	•	update geofence/stop statuses,
+	•	return the standard response.
+	6.	Do NOT change any error paths (400/401/500 etc.). Only insert a new if (!accept) guard.
+
+==================================================
+5. Optional debug logging (low impact)
+
+You may add tiny logs to help during testing:
+	•	When the first ping for a key is accepted:
+	•	console.info('[ping-rate-limit] First ping for', rateKey);
+	•	When a ping is dropped:
+	•	console.info('[ping-rate-limit] Dropping ping (too frequent) for', rateKey, 'with interval <', MIN_PING_INTERVAL_MS, 'ms');
+
+BUT:
+	•	Do NOT spam logs with full request bodies or coordinates.
+	•	Keep logs short and safe for production.
+
+==================================================
+6. Keep everything else unchanged
+	•	Do NOT modify driver UI, broker UI, or any front-end components.
+	•	Do NOT modify any business logic around geofencing, auto-arrival, departure, etc., except that this logic should simply not run when a ping is dropped by rate-limiting.
+	•	Do NOT change the shape of existing API responses (status codes, JSON structure) for successful pings.
+
+==================================================
+7. Sanity checks
+	1.	Run typecheck and build:
+	•	npm run build
+	•	Fix any TypeScript or import errors introduced by the new helper.
+	2.	Manual test scenario (in Replit / dev URL):
+	•	Open a driver tracking link in the browser.
+	•	Ensure the first ping after page load still behaves exactly as before (DB ping inserted, geofence logic works).
+	•	Then trigger multiple quick pings (e.g. by reloading or forcing the app to send location very often):
+	•	The API should respond 200 as before.
+	•	The DB should NOT get flooded (only one ping per ~30 seconds for that driver/load).
+	•	Normal usage with 1–2 minute intervals must work exactly as before.
+
+After you finish, the rate limiting for driver location pings should be active, protecting the DB and backend from too frequent pings, without breaking any existing behaviour in the app.
+

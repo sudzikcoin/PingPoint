@@ -119,6 +119,7 @@ export interface IStorage {
   // Tracking ping operations
   createTrackingPing(ping: InsertTrackingPing): Promise<TrackingPing>;
   getTrackingPingsByLoad(loadId: string): Promise<TrackingPing[]>;
+  hasTrackingPingsForLoad(loadId: string): Promise<boolean>;
 
   // Rate confirmation file operations
   createRateConfirmationFile(data: { brokerId: string; loadId?: string | null; fileUrl: string; originalName: string; mimeType?: string; fileSize?: number }): Promise<RateConfirmationFile>;
@@ -582,6 +583,15 @@ export class DatabaseStorage implements IStorage {
       .from(trackingPings)
       .where(eq(trackingPings.loadId, loadId))
       .orderBy(desc(trackingPings.createdAt));
+  }
+
+  async hasTrackingPingsForLoad(loadId: string): Promise<boolean> {
+    const [result] = await db
+      .select({ id: trackingPings.id })
+      .from(trackingPings)
+      .where(eq(trackingPings.loadId, loadId))
+      .limit(1);
+    return !!result;
   }
 
   // Rate confirmation file operations

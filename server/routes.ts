@@ -12,6 +12,7 @@ import fs from "fs";
 import express from "express";
 import { sendBrokerVerificationEmail, sendDriverAppLink } from "./email";
 import { strictRateLimit } from "./middleware/rateLimit";
+import { shouldAcceptPing, MIN_PING_INTERVAL_MS } from "./utils/rateLimit";
 import { checkAndConsumeLoadAllowance, rollbackLoadAllowance, getBillingSummary, FREE_INCLUDED_LOADS } from "./billing/entitlements";
 import { createCheckoutSession, createSubscriptionCheckoutSession, createBillingPortalSession, getStripeCustomerByEmail, verifyWebhookSignature, processStripeEvent, grantReferralRewardsIfEligible } from "./billing/stripe";
 import { incrementLoadsCreated, getUsageSummary } from "./billing/usage";
@@ -1236,7 +1237,7 @@ export async function registerRoutes(
     }
   });
 
-  // POST /api/driver/:token/ping - Submit location ping (rate limited: 60 per minute)
+  // POST /api/driver/:token/ping - Submit location ping (rate limited: 60 per minute, 1 per 30s per load)
   app.post("/api/driver/:token/ping", strictRateLimit(60, 60000), async (req: Request, res: Response) => {
     try {
       const { token } = req.params;
@@ -1269,9 +1270,16 @@ export async function registerRoutes(
         return res.status(409).json({ error: "Tracking ended", trackingEnded: true });
       }
 
+      // Per-load rate limiting: max 1 ping per 30 seconds
+      const rateKey = `load:${load.id}:${load.driverId}`;
+      if (!shouldAcceptPing(rateKey)) {
+        console.info(`[ping-rate-limit] Dropping ping (too frequent, interval <${MIN_PING_INTERVAL_MS}ms) for ${rateKey}`);
+        return res.json({ ok: true });
+      }
+
       // Check if this is the first ping for this load (for first location share reward)
-      const existingPings = await storage.getTrackingPings(load.id, 1);
-      const isFirstPing = existingPings.length === 0;
+      const hasPriorPings = await storage.hasTrackingPingsForLoad(load.id);
+      const isFirstPing = !hasPriorPings;
 
       const ping = await storage.createTrackingPing({
         loadId: load.id,
@@ -1318,7 +1326,7 @@ export async function registerRoutes(
     }
   });
 
-  // POST /api/driver/location - Alternative endpoint for location updates (matches spec)
+  // POST /api/driver/location - Alternative endpoint for location updates (matches spec, 1 per 30s per load)
   app.post("/api/driver/location", strictRateLimit(60, 60000), async (req: Request, res: Response) => {
     try {
       const { token, lat, lng, accuracy, speed, heading, timestamp } = req.body;
@@ -1353,6 +1361,13 @@ export async function registerRoutes(
       if (load.trackingEndedAt && new Date() >= new Date(load.trackingEndedAt)) {
         console.log(`[TrackingPing] rejected load=${load.loadNumber} driver=${load.driverId} reason=tracking_ended`);
         return res.status(409).json({ error: "Tracking ended", trackingEnded: true });
+      }
+
+      // Per-load rate limiting: max 1 ping per 30 seconds
+      const rateKey = `load:${load.id}:${load.driverId}`;
+      if (!shouldAcceptPing(rateKey)) {
+        console.info(`[ping-rate-limit] Dropping ping (too frequent, interval <${MIN_PING_INTERVAL_MS}ms) for ${rateKey}`);
+        return res.json({ ok: true });
       }
 
       const ping = await storage.createTrackingPing({
@@ -1437,7 +1452,7 @@ export async function registerRoutes(
         });
 
         // Check if delivery was on time (within 15 minutes of expected window)
-        const deliveryWindow = existingStop.windowEnd || existingStop.windowTo;
+        const deliveryWindow = existingStop.windowTo;
         if (deliveryWindow) {
           const expectedTime = new Date(deliveryWindow);
           const graceMs = 15 * 60 * 1000; // 15 minutes grace period
