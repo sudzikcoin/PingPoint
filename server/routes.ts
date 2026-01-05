@@ -3113,8 +3113,17 @@ export async function registerRoutes(
   // ANALYTICS ENDPOINTS
   // ============================================
 
+  // Helper to parse days from various query param names
+  function parseDaysParam(query: Record<string, unknown>): number {
+    const raw = query.days ?? query.range ?? query.period;
+    const n = Number(raw);
+    if ([7, 30, 90].includes(n)) return n;
+    return 30;
+  }
+
   // GET /api/analytics/overview - Get analytics overview
-  app.get("/api/analytics/overview", async (req: Request, res: Response) => {
+  // Also handles /api/analytics for backward compatibility
+  const analyticsOverviewHandler = async (req: Request, res: Response) => {
     try {
       const broker = await getBrokerFromRequest(req);
       if (!broker) {
@@ -3155,10 +3164,15 @@ export async function registerRoutes(
       console.error("Error in GET /api/analytics/overview:", error);
       return res.status(500).json({ error: "Internal server error" });
     }
-  });
+  };
+  
+  // Register analytics overview on multiple routes for backward compatibility
+  app.get("/api/analytics/overview", analyticsOverviewHandler);
+  app.get("/api/analytics", analyticsOverviewHandler);
 
   // GET /api/analytics/loads - Get paginated loads with analytics
-  app.get("/api/analytics/loads", async (req: Request, res: Response) => {
+  // Also handles /api/analytics/loads-detail for backward compatibility
+  const analyticsLoadsHandler = async (req: Request, res: Response) => {
     try {
       const broker = await getBrokerFromRequest(req);
       if (!broker) {
@@ -3183,7 +3197,11 @@ export async function registerRoutes(
       console.error("Error in GET /api/analytics/loads:", error);
       return res.status(500).json({ error: "Internal server error" });
     }
-  });
+  };
+  
+  // Register analytics loads on multiple routes for backward compatibility
+  app.get("/api/analytics/loads", analyticsLoadsHandler);
+  app.get("/api/analytics/loads-detail", analyticsLoadsHandler);
 
   // GET /api/analytics/loads.csv - Export loads as CSV
   app.get("/api/analytics/loads.csv", async (req: Request, res: Response) => {
