@@ -1,0 +1,107 @@
+You are a senior full-stack engineer working in the existing PingPoint repo on Replit.
+
+PROBLEM:
+Analytics page shows "Failed to load analytics" (or gets stuck on Loading). This means the frontend request fails, but the UI hides the real reason (401/500/CORS/endpoint mismatch/JSON shape mismatch). We must expose and fix the root cause permanently.
+
+STRICT RULES:
+- Minimal localized changes
+- Do not refactor the whole project
+- Do not break existing flows
+- Keep analytics endpoints protected by auth (must still 401 if no session)
+- Implement a deterministic debug flow and make Analytics show exact errors
+
+GOAL:
+1) Add a backend endpoint that proves whether browser session cookies reach the API.
+2) Update frontend analytics fetch to always include cookies, use same-origin relative URLs, and display exact errors.
+3) Prevent infinite loading forever (always end loading in finally).
+
+PART A — BACKEND: add session debug endpoint
+In server/routes.ts inside registerRoutes(app):
+
+Add GET /api/debug/session
+- const broker = await getBrokerFromRequest(req)
+- if (!broker) return res.status(401).json({ ok:false, error:"Unauthorized" })
+- else return res.json({ ok:true, brokerId: broker.id, email: broker.email ?? null })
+
+This is ONLY for diagnosis and should not reveal sensitive data.
+
+PART B — FRONTEND: create a shared fetch helper that ALWAYS includes cookies and returns rich errors
+Create or use an existing file like client/src/lib/api.ts (or client/src/lib/fetch.ts).
+Add:
+
+export async function apiGet<T>(path: string): Promise<T> {
+  const res = await fetch(path, {
+    method: "GET",
+    credentials: "include",
+    headers: { Accept: "application/json" },
+    cache: "no-store",
+  });
+
+  const text = await res.text();
+  let data: any = null;
+  try { data = text ? JSON.parse(text) : null; } catch { data = { raw: text }; }
+
+  if (!res.ok) {
+    const msg = data?.error || data?.message || data?.raw || `HTTP ${res.status}`;
+    const err: any = new Error(msg);
+    err.status = res.status;
+    err.body = data;
+    throw err;
+  }
+  return data as T;
+}
+
+IMPORTANT:
+- The helper must be used with RELATIVE paths like "/api/analytics/overview?days=30".
+- Do NOT use absolute URLs or NEXT_PUBLIC_API_URL in analytics calls (that breaks cookies on Replit subdomains).
+
+PART C — FRONTEND: fix Analytics page to show real error details
+Find analytics page file (agent previously opened something like client/src/pages/app-analytics...).
+Modify it:
+
+- Replace any fetch(...) with apiGet(...)
+- Add state: errorDetails string
+- On load:
+  1) First call apiGet("/api/debug/session")
+     - If throws with status 401 => set errorDetails = "AUTH ERROR: Not logged in / session cookie missing (401)."
+       Stop further loading (return).
+  2) Then call overview endpoint:
+     try "/api/analytics/overview?days=X" else fallback "/api/analytics?days=X"
+  3) Normalize response shape:
+     series = r.series || r.chartData || r.data?.series || []
+     summary = r.summary || r.metrics || r.data?.summary || {}
+  4) In catch(err):
+     set errorDetails = `Analytics error: HTTP ${err.status || "?"} - ${err.message}\n` +
+                        `Body: ${JSON.stringify(err.body || {}, null, 2)}`
+  5) In finally: setLoading(false)
+
+UI:
+- If loading: show Loading analytics…
+- If errorDetails: render it on the page (monospace block) so the user sees the real reason.
+- Otherwise render charts.
+
+PART D — VERIFY (agent must do these checks)
+After restarting:
+1) While logged in, open /api/debug/session in the same browser session.
+   - MUST return 200 { ok:true, ... }.
+   - If returns 401, the cookie/session is not reaching /api. Fix that before anything else.
+2) Open /api/analytics/overview?days=30
+   - MUST return 200 JSON.
+3) Open Analytics page:
+   - Must not show generic "Failed…" without details.
+   - Must either show data or show exact error reason (401/500/schema).
+
+ROOT-CAUSE FIXES (apply depending on what errorDetails shows):
+- If 401 on /api/debug/session:
+  - Analytics calls are going cross-origin. Replace any absolute API base URL with relative "/api/..."
+  - Ensure fetch uses credentials:"include"
+- If 404:
+  - Frontend calling wrong path; update to correct analytics endpoint
+- If 500 with a DB field error (e.g. isArchived missing):
+  - Remove/adjust that filter in queries to match schema
+- If JSON shape mismatch:
+  - Adjust mapping using normalization described above
+
+DELIVERABLE:
+Analytics page must either render analytics data OR display the exact actionable error message (no more guessing, no more wasted Replit runs).
+Implement now.
