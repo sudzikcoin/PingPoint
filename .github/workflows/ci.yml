@@ -26,18 +26,16 @@ jobs:
           --health-retries=10
 
     env:
-      NODE_ENV: test
-      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/pingpoint_test
+  NODE_ENV: test
+  DATABASE_URL: postgresql://postgres:postgres@localhost:5432/pingpoint_test
 
-      # safe dummy envs (чтобы тесты не падали из-за отсутствия секретов)
-      JWT_SECRET: test_secret
-      SESSION_SECRET: test_secret
-      STRIPE_SECRET_KEY: sk_test_dummy
-      STRIPE_WEBHOOK_SECRET: whsec_dummy
-      RESEND_API_KEY: re_dummy
+  JWT_SECRET: 01234567890123456789012345678901
+  SESSION_SECRET: 01234567890123456789012345678901
 
-      # если где-то в коде ожидаются URL-ы
-      APP_URL: http://localhost:5000
+  STRIPE_SECRET_KEY: sk_test_dummy
+  STRIPE_WEBHOOK_SECRET: whsec_dummy
+  RESEND_API_KEY: re_dummy
+  APP_URL: http://localhost:5000
 
     steps:
       - name: Checkout
