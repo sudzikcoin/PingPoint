@@ -1,6 +1,6 @@
-# PingPoint
+[![CI](https://github.com/sudzikcoin/PingPoint/actions/workflows/ci.yml/badge.svg)](https://github.com/sudzikcoin/PingPoint/actions/workflows/ci.yml)
 
-[![CI](https://github.com/OWNER/pingpoint/actions/workflows/ci.yml/badge.svg)](https://github.com/OWNER/pingpoint/actions/workflows/ci.yml)
+# PingPoint
 
 **Real-time logistics tracking for brokers, dispatchers, and drivers.**
 
