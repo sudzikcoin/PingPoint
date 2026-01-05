@@ -1,66 +1,228 @@
 # Security
 
-## Authentication
+## Access Models
 
-### Session Management
+PingPoint uses three distinct authentication models:
 
-PingPoint uses JWT tokens stored in HTTP-only cookies:
+| Access Type | Authentication | Scope | Description |
+|-------------|----------------|-------|-------------|
+| **Broker Session** | JWT cookie (`pingpoint_session`) | Full broker account | Web console access, all CRUD operations |
+| **Driver Token** | URL token (`driverToken`) | Single load | Mobile-friendly load updates, location pings |
+| **Public Tracking** | URL token (`trackingToken`) | Single load, read-only | Customer-facing tracking link |
 
-```
-Cookie: pingpoint_session=<jwt>
-```
+### Broker Console (Session Auth)
 
-**Security properties:**
-- `httpOnly: true` - Not accessible via JavaScript
-- `secure: true` - HTTPS only (in production)
-- `sameSite: lax` - CSRF protection
+- JWT stored in HTTP-only, secure cookie
 - 24-hour expiration
+- SameSite: lax for CSRF protection
+- All queries scoped by `brokerId`
 
-### Passwordless Login
+### Driver App (Token Auth)
 
-Authentication uses email-based magic links:
+- Token embedded in URL (magic link sent via SMS/email)
+- Token tied to specific load
+- Can submit location pings and update stop status
+- Cannot access other loads or broker data
 
+### Public Tracking (Token Auth)
+
+- Read-only access token
+- Shared with shippers/receivers
+- Returns minimal data (no PII)
+- Subject to TTL and rate limiting
+
+## Public Tracking Links
+
+### Token Requirements
+
+- **Entropy**: 32 bytes of cryptographic randomness
+- **Format**: Base64url encoded (URL-safe)
+- **Generation**: `crypto.randomBytes(32).toString('base64url')`
+
+### TTL (Time-to-Live)
+
+Public tracking links expire after delivery:
+
+- **Active loads**: Always accessible
+- **Delivered loads**: Accessible for `PUBLIC_TRACKING_TTL_DAYS` (default: 7 days) after delivery
+- **Expired**: Returns HTTP 410 Gone
+
+### Rate Limiting
+
+Public tracking endpoints are rate-limited:
+
+- **Limit**: `PUBLIC_TRACKING_RPM` requests per minute per IP+token (default: 60)
+- **Caching**: Responses cached for 10 seconds to reduce database load
+- **Exceeded**: Returns HTTP 429 Too Many Requests
+
+### Response Minimization
+
+Public tracking responses include only safe fields:
+
+**Included:**
+- Load number, status, creation date
+- Stop locations (city/state only), scheduled times, actual arrival/departure
+- Last known location (lat/lng), timestamp
+
+**Excluded:**
+- Broker ID, driver ID, driver contact info
+- Rate/billing information
+- Webhook configurations
+- Internal notes
+
+## GPS Ping Validation
+
+### Coordinate Validation
+
+All GPS pings are validated:
+
+| Check | Requirement | Action |
+|-------|-------------|--------|
+| Latitude range | -90 to +90 | Reject if out of range |
+| Longitude range | -180 to +180 | Reject if out of range |
+| Type validation | Must be finite numbers | Reject if invalid |
+
+### Timestamp Sanity
+
+- **Future limit**: Reject if timestamp > now + `GPS_MAX_FUTURE_SKEW_SECONDS` (default: 300s / 5 min)
+- **Age limit**: Reject if timestamp < now - `GPS_MAX_AGE_HOURS` (default: 24 hours)
+
+### Accuracy Bounds
+
+- **Maximum accuracy**: `GPS_MAX_ACCURACY_METERS` (default: 5000m)
+- Pings with accuracy > threshold are rejected
+- Geofence evaluation skipped for low-accuracy pings
+
+### Anti-Teleport Detection
+
+Detects physically impossible location jumps:
+
+1. Fetch last accepted ping for same driver+load
+2. Calculate distance (Haversine formula)
+3. Calculate time delta
+4. Compute implied speed (mph)
+5. If speed > `GPS_MAX_SPEED_MPH` (default: 120), reject with 422
+
+### Ownership Enforcement
+
+Before accepting a ping:
+
+1. Verify driver is assigned to the load
+2. Verify load belongs to the broker context
+3. Reject with 403 if unauthorized
+
+### Logging Strategy
+
+- Rejected pings logged with reason code (not raw PII)
+- Format: `[TrackingPing] REJECTED reason=<code> token=<truncated>`
+- Console logging for MVP; production should use structured logging
+
+## Rate Limiting
+
+### Driver Ping Endpoint
+
+| Limiter | Key | Limit | Window |
+|---------|-----|-------|--------|
+| Per-load | `load:{loadId}:{driverId}` | 1 ping | 30 seconds |
+| IP burst | IP address | `TRACKING_PING_RPM` (120) | 1 minute |
+
+### Public Tracking Endpoint
+
+| Limiter | Key | Limit | Window |
+|---------|-----|-------|--------|
+| Token+IP | `{ip}:{token}` | `PUBLIC_TRACKING_RPM` (60) | 1 minute |
+
+### Implementation Notes
+
+- MVP uses in-memory rate limiting
+- State cleared on server restart
+- Production should use Redis for distributed rate limiting
+
+## Authentication Strategy
+
+### Broker Authentication Flow
+
+```
 1. User enters email
-2. Server generates verification token (expires in 15 minutes)
-3. Link sent via email
-4. User clicks link to authenticate
-5. JWT session cookie set
+2. Server generates verification token (15 min TTL)
+3. Magic link sent via email
+4. User clicks link
+5. Server verifies token, creates JWT session
+6. JWT stored in HTTP-only cookie
+```
 
-**No passwords are stored.**
+All broker API calls:
+1. Extract JWT from cookie
+2. Verify signature and expiration
+3. Load broker from database
+4. Scope all queries by `brokerId`
 
-### Admin Authentication
+### Driver Authentication Flow
 
-Admin panel uses separate credentials:
+```
+1. Broker assigns driver to load
+2. System generates unique driverToken
+3. Magic link sent to driver (SMS/email)
+4. Driver accesses load via token URL
+5. Token validated on each request
+```
 
-- Configured via `ADMIN_EMAIL` and `ADMIN_PASSWORD`
+Driver API calls:
+1. Extract token from URL parameter
+2. Look up load by `driverToken`
+3. Verify load exists and has assigned driver
+4. Validate ownership before mutations
+
+### Public Tracking Flow
+
+```
+1. Load created with trackingToken
+2. Broker shares tracking URL
+3. Customer accesses via token
+4. Read-only data returned
+```
+
+Public API calls:
+1. Extract token from URL parameter
+2. Look up load by `trackingToken`
+3. Check TTL (if delivered)
+4. Return safe response shape
+
+## Admin Authentication
+
+Separate from broker authentication:
+
+- Uses `ADMIN_EMAIL` and `ADMIN_PASSWORD` environment variables
 - Separate cookie: `pingpoint_admin_session`
-- Should use strong, unique password
+- 24-hour session expiration
 - Not connected to broker accounts
 
-## Authorization
+## Environment Variables
 
-### Multi-Tenant Data Isolation
+### Security Configuration
 
-All data is scoped by `brokerId`:
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `JWT_SECRET` | Required | Secret for signing JWT tokens |
+| `PUBLIC_TRACKING_TTL_DAYS` | 7 | Days after delivery before tracking link expires |
+| `PUBLIC_TRACKING_RPM` | 60 | Rate limit for public tracking (requests/min) |
+| `GPS_MAX_ACCURACY_METERS` | 5000 | Maximum acceptable GPS accuracy |
+| `GPS_MAX_FUTURE_SKEW_SECONDS` | 300 | Maximum timestamp in future (seconds) |
+| `GPS_MAX_AGE_HOURS` | 24 | Maximum ping age (hours) |
+| `GPS_MAX_SPEED_MPH` | 120 | Maximum speed before anti-teleport triggers |
+| `TRACKING_PING_RPM` | 120 | Rate limit for ping endpoint (requests/min) |
 
-```typescript
-// Example: Get loads for authenticated broker
-const loads = await db.query.loads.findMany({
-  where: eq(loads.brokerId, broker.id) // Always filtered
-});
-```
+## Security TODOs
 
-Brokers cannot access other brokers' data.
+Future security enhancements:
 
-### Token-Based Access
-
-- **Driver Token**: Access only to assigned load
-- **Public Token**: Read-only access to load tracking
-
-Tokens are:
-- Randomly generated (cryptographically secure)
-- Load-specific
-- Cannot access other loads
+- [ ] **Token hashing**: Store token hashes instead of plaintext for new tokens
+- [ ] **PostGIS/Geofencing**: Server-side coordinate validation against known locations
+- [ ] **WAF/CDN caching**: Edge caching for public tracking responses
+- [ ] **Redis rate limiting**: Distributed rate limiting for multi-instance deployments
+- [ ] **Anomaly scoring**: ML-based detection of suspicious ping patterns
+- [ ] **Token rotation**: Allow brokers to regenerate tracking tokens
+- [ ] **Audit logging**: Comprehensive audit trail to database
 
 ## Webhook Security
 
@@ -100,35 +262,16 @@ const event = stripe.webhooks.constructEvent(
 ### Sensitive Data Handling
 
 - Passwords: Not stored (passwordless auth)
-- Tokens: Stored as plain text (random, high-entropy)
+- Tokens: High-entropy, cryptographically random
 - API keys: Environment variables only
 - Payment data: Handled by Stripe (PCI compliant)
-
-### Environment Variables
-
-Secrets stored in:
-- `.env` file (development, gitignored)
-- Replit Secrets (production)
-
-**Never commit secrets to repository.**
 
 ### Logging
 
 Sensitive data excluded from logs:
 - Session tokens truncated
-- Passwords never logged
+- Full tokens never logged
 - API keys masked
-
-## Rate Limiting
-
-Protection against abuse:
-
-| Endpoint | Limit |
-|----------|-------|
-| Email verification | 5/minute |
-| Login attempts | 10/minute |
-| Driver pings | 1/30s per load |
-| General API | 100/minute |
 
 ## Input Validation
 
@@ -182,22 +325,6 @@ app.use(cors({
 ```
 
 Public tracking endpoints allow any origin (read-only data).
-
-## Security Recommendations
-
-### For Operators
-
-1. **Use strong secrets** - Generate random values for SESSION_SECRET, JWT_SECRET
-2. **Enable HTTPS** - Required for secure cookies
-3. **Monitor logs** - Watch for unusual activity
-4. **Keep dependencies updated** - Run `npm audit` regularly
-
-### For Development
-
-1. **Never commit secrets**
-2. **Use `.env.example`** with placeholder values
-3. **Run security scans** - `npm audit`, Snyk, etc.
-4. **Review PRs** for security issues
 
 ## Reporting Security Issues
 
