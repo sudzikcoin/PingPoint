@@ -1,5 +1,7 @@
 # PingPoint
 
+[![CI](https://github.com/OWNER/pingpoint/actions/workflows/ci.yml/badge.svg)](https://github.com/OWNER/pingpoint/actions/workflows/ci.yml)
+
 **Real-time logistics tracking for brokers, dispatchers, and drivers.**
 
 PingPoint is a MacroPoint-style tracking platform that's simpler and more affordable. It enables freight brokers to monitor driver locations in real-time, share tracking links with customers, and gain insights through analytics.
