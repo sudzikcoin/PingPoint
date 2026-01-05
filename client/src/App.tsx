@@ -21,6 +21,7 @@ import AppExceptions from "@/pages/app-exceptions";
 import AppAnalytics from "@/pages/app-analytics";
 import VerifyPage from "@/pages/verify";
 import LoginPage from "@/pages/login";
+import SignupPage from "@/pages/signup";
 import LandingPage from "@/pages/landing";
 import { useEffect } from "react";
 import { ThemeProvider } from "@/context/theme-context";
@@ -34,6 +35,7 @@ function Router() {
       {/* Auth */}
       <Route path="/verify" component={VerifyPage} />
       <Route path="/login" component={LoginPage} />
+      <Route path="/signup" component={SignupPage} />
 
       {/* Driver Zone */}
       <Route path="/driver" component={DriverDashboard} />

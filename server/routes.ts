@@ -224,7 +224,88 @@ export async function registerRoutes(
 
   // Broker endpoints
 
-  // POST /api/brokers/ensure - Find or create broker
+  // POST /api/brokers/signup - Create a new broker account (rate limited: 5 per minute)
+  app.post("/api/brokers/signup", strictRateLimit(5, 60000), async (req: Request, res: Response) => {
+    try {
+      const { email, name, referralCode } = req.body;
+      
+      if (!email) {
+        return res.status(400).json({ error: "Email is required", code: "EMAIL_REQUIRED" });
+      }
+
+      if (!email.includes('@')) {
+        return res.status(400).json({ error: "Invalid email address", code: "INVALID_EMAIL" });
+      }
+
+      const emailNormalized = email.trim().toLowerCase();
+      const brokerName = (name || "Broker").trim();
+
+      // Check if broker already exists
+      const existingBroker = await storage.getBrokerByEmail(emailNormalized);
+      
+      if (existingBroker) {
+        return res.status(409).json({
+          error: "An account with this email already exists. Please log in instead.",
+          code: "ACCOUNT_ALREADY_EXISTS",
+        });
+      }
+
+      // Create new broker
+      const broker = await storage.createBroker({
+        email: emailNormalized,
+        name: brokerName,
+      });
+      
+      // Create referral relationship if referral code provided
+      if (referralCode) {
+        try {
+          const referrer = await storage.getBrokerByReferralCode(referralCode.toUpperCase());
+          if (referrer && referrer.id !== broker.id) {
+            await storage.createReferral({
+              referrerId: referrer.id,
+              referredId: broker.id,
+              referredEmail: emailNormalized,
+              referrerCode: referralCode.toUpperCase(),
+              status: "REGISTERED",
+            });
+            console.log(`[Referral] Created referral for new broker: referrer=${referrer.email}, referred=${emailNormalized}`);
+          }
+        } catch (refErr: any) {
+          console.error(`[Referral] Error creating referral:`, refErr.message);
+        }
+      }
+
+      // Auto-send verification email
+      const token = randomBytes(32).toString('hex');
+      const expiresAt = new Date();
+      expiresAt.setDate(expiresAt.getDate() + 2);
+      await storage.createVerificationToken(broker.id, token, expiresAt);
+
+      const origin = getBaseUrl(req);
+      const verificationUrl = `${origin}/verify?token=${token}`;
+      console.log(`[Signup] New broker account created: ${broker.email}, sending verification email`);
+
+      const sent = await sendVerificationEmail(broker.email, verificationUrl, broker.name);
+
+      return res.status(201).json({
+        id: broker.id,
+        email: broker.email,
+        name: broker.name,
+        emailVerified: broker.emailVerified,
+        createdAt: broker.createdAt,
+        code: "ACCOUNT_CREATED",
+        message: sent 
+          ? "Account created! Check your email for a verification link."
+          : "Account created, but email could not be sent. Please request a new verification link.",
+      });
+    } catch (error) {
+      console.error("Error in /api/brokers/signup:", error);
+      return res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  // POST /api/brokers/ensure - Find or create broker (deprecated, use signup for new accounts)
+  // Kept for backward compatibility but respects AUTH_AUTO_CREATE_BROKER feature flag
   app.post("/api/brokers/ensure", async (req: Request, res: Response) => {
     try {
       const { email, name, referralCode } = req.body;
@@ -240,6 +321,17 @@ export async function registerRoutes(
       let isNewBroker = false;
       
       if (!broker) {
+        // Check feature flag - default is false (don't auto-create)
+        const autoCreate = process.env.AUTH_AUTO_CREATE_BROKER === 'true';
+        
+        if (!autoCreate) {
+          return res.status(404).json({
+            error: "Account not found. Please create an account first.",
+            code: "ACCOUNT_NOT_FOUND",
+          });
+        }
+
+        // Auto-create is enabled (legacy behavior)
         broker = await storage.createBroker({
           email: emailNormalized,
           name: brokerName,

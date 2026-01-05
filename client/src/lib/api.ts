@@ -113,6 +113,25 @@ export const api = {
       return res.json();
     },
 
+    signup: async (email: string, name: string, referralCode?: string): Promise<{ id: string; email: string; name: string; code: string; message: string }> => {
+      const res = await fetch('/api/brokers/signup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ email, name, referralCode }),
+      });
+      
+      const data = await res.json();
+      
+      if (!res.ok) {
+        const err = new Error(data.error || data.message || 'Failed to create account') as any;
+        err.code = data.code;
+        throw err;
+      }
+      
+      return data;
+    },
+
     login: async (email: string): Promise<{ code: string; message: string; redirect?: string }> => {
       const res = await fetch('/api/brokers/login', {
         method: 'POST',

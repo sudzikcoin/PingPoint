@@ -1,0 +1,113 @@
+You are the Replit Backend Agent working inside the existing PingPoint repo. Goal: “normal login” where LOGIN does NOT create accounts. Only SIGNUP (Create Account) creates a broker. Keep changes minimal/localized. Do NOT break existing DB schema unless explicitly instructed; prefer app-level checks. After changes, existing brokers can log in, but unknown emails cannot request a magic link.
+
+CONTEXT / CURRENT BUG
+- The current passwordless/magic-link flow sends a login link to ANY email and then creates a new broker on verification if none exists (“login = signup”). We must stop this.
+- Desired behavior:
+  1) SIGNUP page / Create Account: creates broker record + sends verification/login link.
+  2) LOGIN page: only sends login link if broker exists. If not exists → return 404/400 and UI should show “Account not found. Create account”.
+
+REQUIREMENTS
+1) Backend: Block magic-link login requests for non-existent brokers.
+2) Backend: Verification endpoint MUST NOT auto-create broker records.
+3) Frontend: Login UI must handle “not found” response and show a clear CTA to Create Account.
+4) Normalize email consistently: trim + lowercase everywhere (login + signup + verification).
+5) Add a feature flag env var: AUTH_AUTO_CREATE_BROKER=false (default false). Even if old code had auto-create, keep it behind this flag for safety.
+6) Add basic rate limiting on “request login link” endpoint (per IP + per email) to avoid spam (simple in-memory is fine for now).
+7) Add tests: at least 2 vitest tests for auth:
+   - login request with unknown email → 404 (or 400) and does not create broker
+   - verification with unknown email token → 401/404 and does not create broker
+8) Update docs: add short section to docs/ or README explaining auth flow: Login vs Signup.
+
+IMPLEMENTATION STEPS (DO THESE IN ORDER)
+A) Locate auth endpoints
+- In /server, search for routes/controllers/services containing keywords:
+  “magic”, “login link”, “request”, “send”, “auth”, “verify”, “token”, “email”, “broker”, “create”, “upsert”
+- Identify:
+  1) Endpoint that requests/sends the magic link (e.g., POST /api/auth/request-link or /api/auth/login).
+  2) Endpoint that verifies the magic link (e.g., GET /api/auth/verify?token=... or /api/auth/callback).
+  3) Any helper that currently “findOrCreate broker by email” / “upsert broker”.
+
+B) Add shared email normalization helper
+- Create a tiny utility in server (e.g., server/src/utils/normalizeEmail.ts or similar):
+  export function normalizeEmail(email: string) { return email.trim().toLowerCase(); }
+- Use it everywhere we read email.
+
+C) Enforce “login requires existing broker”
+1) In “request login link” endpoint:
+   - normalize email
+   - query brokers table by email (normalized)
+   - IF NOT FOUND:
+       return 404 with JSON: { error: "ACCOUNT_NOT_FOUND" }
+       IMPORTANT: do NOT send email, do NOT create broker
+   - IF FOUND:
+       proceed to generate token + send email as before
+2) Add a secondary endpoint for signup if it exists already; if it exists, keep it:
+   - signup endpoint should:
+       normalize email
+       if broker exists → return 409 { error: "ACCOUNT_ALREADY_EXISTS" } (or allow resend link)
+       else create broker with email + name/company from request body
+       send link
+   - If signup endpoint does not exist yet, create one minimally:
+       POST /api/auth/signup
+       body: { email, name/companyName }
+       create broker row
+       send link
+
+D) Verification endpoint must not auto-create
+- In verify/callback handler:
+  - decode/validate token
+  - get email from token, normalize it
+  - lookup broker by email
+  - IF NOT FOUND:
+      return 404/401 { error: "ACCOUNT_NOT_FOUND" } and DO NOT create anything
+  - IF FOUND:
+      proceed to issue session/cookie/jwt exactly as current implementation
+- Add feature flag:
+  - read process.env.AUTH_AUTO_CREATE_BROKER (default "false")
+  - if true, you may keep previous auto-create behavior for emergency, but default false and in production example env set false.
+
+E) Rate limiting for login-link requests
+- Add a simple in-memory limiter in server:
+  - key by `${ip}:${email}` and also `${ip}` to cap abuse
+  - e.g. max 5 requests / 10 minutes per ip+email; max 20 / 10 minutes per ip
+  - On exceed → 429 { error: "RATE_LIMITED" }
+
+F) Frontend changes (Next.js client)
+- Find login page component in /client (or root app) that posts email to the backend auth endpoint.
+- Update it:
+  - If response is 404/ACCOUNT_NOT_FOUND → show message:
+    “Account not found. Create an account to get started.”
+    and show a button linking to Create Account (signup page).
+  - If response ok → show “Check your email”.
+- Ensure the login page does not silently succeed for unknown email.
+
+G) Tests (vitest)
+- Add tests in server test folder (where existing tests live; if none, create server/src/__tests__/auth.test.ts).
+- Use test DB strategy consistent with repo (if they already use a test database, follow it; otherwise:
+  - mock broker lookup/service layer
+  - or spin up a lightweight in-memory approach if their architecture supports it)
+- Tests must assert:
+  - Unknown email login request returns 404 and brokers table remains unchanged.
+  - Unknown email verification returns 404/401 and brokers table remains unchanged.
+
+H) Docs
+- Update docs/auth.md (or README) with:
+  - Login: only existing brokers, does not create account
+  - Signup: creates broker + sends link
+  - Feature flag: AUTH_AUTO_CREATE_BROKER (default false)
+  - Security: rate limit + email normalization
+
+DELIVERABLES
+- A list of changed files
+- Short explanation of what changed and why
+- Confirmed behavior:
+  - Unknown email on login → no email sent, no broker created
+  - Signup → broker created, email sent
+  - Verify token for unknown broker → rejected
+
+DO NOT
+- Do not wipe DB, do not change unrelated billing/loads logic.
+- Do not remove magic-link approach; only separate login from signup.
+- Do not introduce heavy new dependencies unless necessary.
+
+NOW IMPLEMENT.
