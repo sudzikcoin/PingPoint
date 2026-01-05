@@ -26,16 +26,22 @@ jobs:
           --health-retries=10
 
     env:
-  NODE_ENV: test
-  DATABASE_URL: postgresql://postgres:postgres@localhost:5432/pingpoint_test
+      NODE_ENV: test
+      DATABASE_URL: "postgresql://postgres:postgres@localhost:5432/pingpoint_test"
 
-  JWT_SECRET: 01234567890123456789012345678901
-  SESSION_SECRET: 01234567890123456789012345678901
+      # safe dummy envs (чтобы тесты не падали из-за отсутствия секретов)
+      JWT_SECRET: "01234567890123456789012345678901"
+      SESSION_SECRET: "01234567890123456789012345678901"
+      STRIPE_SECRET_KEY: "sk_test_dummy"
+      STRIPE_WEBHOOK_SECRET: "whsec_dummy"
+      RESEND_API_KEY: "re_dummy"
 
-  STRIPE_SECRET_KEY: sk_test_dummy
-  STRIPE_WEBHOOK_SECRET: whsec_dummy
-  RESEND_API_KEY: re_dummy
-  APP_URL: http://localhost:5000
+      # если где-то в коде ожидаются URL-ы
+      APP_URL: "http://localhost:5000"
+
+      # optional: if your app references Stripe price ids etc, keep them as dummies
+      STRIPE_PRICE_ID: "price_dummy"
+      STRIPE_PRO_PRICE_ID: "price_dummy_pro"
 
     steps:
       - name: Checkout
@@ -90,4 +96,4 @@ jobs:
       - name: Run e2e smoke tests
         run: npm run e2e
         env:
-          PLAYWRIGHT_BASE_URL: http://localhost:5000
+          PLAYWRIGHT_BASE_URL: "http://localhost:5000"
