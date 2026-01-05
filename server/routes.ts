@@ -1225,8 +1225,7 @@ export async function registerRoutes(
       }
 
       const loadStops = await storage.getStopsByLoad(load.id);
-      const trackingPingsList = await storage.getTrackingPingsByLoad(load.id);
-      const latestPing = trackingPingsList[0]; // First is most recent due to desc order
+      const latestPing = await storage.getMostRecentPing(load.id);
 
       // Build safe response (no PII, no internal IDs)
       const safeResponse = {
@@ -1351,14 +1350,17 @@ export async function registerRoutes(
         return res.status(409).json({ error: "Tracking ended", trackingEnded: true });
       }
 
-      // Anti-teleport detection: check speed against last ping
-      const lastPings = await storage.getTrackingPingsByLoad(load.id);
-      const lastPing = lastPings[0]; // Most recent ping
+      // Anti-teleport detection: check speed against last ping (efficient single-row fetch)
+      const lastPing = await storage.getMostRecentPing(load.id);
+      const isFirstPing = !lastPing;
+      
       if (lastPing && lastPing.lat && lastPing.lng) {
         const lastLat = parseFloat(lastPing.lat);
         const lastLng = parseFloat(lastPing.lng);
         const distanceM = haversineDistanceMeters(lastLat, lastLng, lat, lng);
-        const timeDeltaMs = Date.now() - new Date(lastPing.createdAt).getTime();
+        // Use provided timestamp if available, otherwise use current time
+        const pingTime = timestamp ? new Date(timestamp).getTime() : Date.now();
+        const timeDeltaMs = pingTime - new Date(lastPing.createdAt).getTime();
         
         // Only check speed if enough time has passed (> 5 seconds)
         if (timeDeltaMs > 5000) {
@@ -1376,10 +1378,6 @@ export async function registerRoutes(
         console.info(`[ping-rate-limit] Dropping ping (too frequent, interval <${MIN_PING_INTERVAL_MS}ms) for ${rateKey}`);
         return res.json({ ok: true });
       }
-
-      // Check if this is the first ping for this load (for first location share reward)
-      const hasPriorPings = lastPings.length > 0;
-      const isFirstPing = !hasPriorPings;
 
       const ping = await storage.createTrackingPing({
         loadId: load.id,
@@ -1479,14 +1477,15 @@ export async function registerRoutes(
         return res.status(409).json({ error: "Tracking ended", trackingEnded: true });
       }
 
-      // Anti-teleport detection: check speed against last ping
-      const lastPings = await storage.getTrackingPingsByLoad(load.id);
-      const lastPing = lastPings[0];
+      // Anti-teleport detection: check speed against last ping (efficient single-row fetch)
+      const lastPing = await storage.getMostRecentPing(load.id);
       if (lastPing && lastPing.lat && lastPing.lng) {
         const lastLat = parseFloat(lastPing.lat);
         const lastLng = parseFloat(lastPing.lng);
         const distanceM = haversineDistanceMeters(lastLat, lastLng, lat, lng);
-        const timeDeltaMs = Date.now() - new Date(lastPing.createdAt).getTime();
+        // Use provided timestamp if available, otherwise use current time
+        const pingTime = timestamp ? new Date(timestamp).getTime() : Date.now();
+        const timeDeltaMs = pingTime - new Date(lastPing.createdAt).getTime();
         
         if (timeDeltaMs > 5000) {
           const speedMph = calculateSpeedMph(distanceM, timeDeltaMs);
