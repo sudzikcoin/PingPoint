@@ -1,0 +1,187 @@
+You are a senior full-stack engineer working inside the existing PingPoint repo (Next.js client/ + Express server/ + Postgres/Drizzle). 
+
+GOAL (documentation + real code hardening):
+1) Add clear security documentation (docs/SECURITY.md + links from README/docs).
+2) Actually harden:
+   - Public tracking links (unguessable + TTL + rate limiting + safe response shape)
+   - GPS ping validation (range/accuracy/time/teleport + ownership checks)
+   - Rate limiting (pings + public tracking)
+   - Make auth strategy explicit in code/docs (what is broker auth, driver auth, public token auth)
+
+NON-NEGOTIABLE RULES:
+- Minimal localized changes. Do NOT refactor unrelated files.
+- Do NOT break existing public tracking links (backward compatible).
+- No secrets in repo. Use env vars with safe defaults.
+- Keep endpoints stable; if you add new ones, do not remove existing.
+- Add small helper utilities if needed, but keep scope tight.
+
+========================
+PART A — DOCUMENTATION
+========================
+1) Create/Update `docs/SECURITY.md` with these sections (use crisp, product-level language):
+   - Access Models (Broker session, Driver access, Public tracking token)
+   - Public Tracking Links:
+       * token requirements (random, high entropy)
+       * storage strategy (hash)
+       * TTL strategy (deliveredAt + grace window)
+       * rate limiting + caching
+       * response minimization (no PII)
+       * token rotation (optional)
+   - GPS Ping Validation:
+       * lat/lon range checks
+       * timestamp sanity (future/too old)
+       * accuracy bounds
+       * anti-teleport (speed threshold)
+       * ownership/assignment enforcement
+       * logging strategy
+   - Rate Limiting:
+       * ping endpoint: driverId+loadId + IP burst
+       * public tracking: token+IP
+   - Auth Strategy (explicit):
+       * Broker Console: cookie session; server derives brokerId; all queries are brokerId scoped
+       * Driver App: whatever exists today (magic link/session). Document it and enforce ownership
+       * Public: token only, read-only, TTL
+   - “Security TODOs” (future: PostGIS/geofencing, WAF/CDN caching, Redis rate-limit, anomaly scoring)
+
+2) Update README.md “Documentation” section to link to docs/SECURITY.md.
+
+3) (Optional but recommended) add a short section in docs/API.md describing:
+   - which endpoints are public vs authenticated
+   - public tracking endpoint returns “safe fields only”.
+
+========================
+PART B — CODE HARDENING
+========================
+
+------------------------------
+B1) Public tracking link hardening
+------------------------------
+You must locate the existing public tracking route(s). It might be something like:
+- server: GET /api/public/track/:token or GET /api/tracking/public/:token
+- client route: /t/:token
+DO NOT assume exact paths — find them in the repo via search for "/t/" or "tracking token".
+
+Implement all of the following:
+
+(1) High-entropy tokens for NEW loads
+- When a load is created (or when a public link is generated), ensure token is generated using `crypto.randomBytes(32)` and encoded as base64url or hex.
+- Tokens must be at least 32 bytes of randomness.
+
+(2) Store token as HASH (backward compatible)
+- If the DB already stores a plaintext token in loads table, keep it for backward compatibility but introduce hashed storage for new tokens.
+- Add DB columns (via Drizzle schema + migration) ONLY if needed:
+   * loads.publicTrackingTokenHash (text, nullable)
+   * loads.publicTrackingTokenCreatedAt (timestamp, nullable)
+   * loads.publicTrackingTokenExpiresAt (timestamp, nullable)
+- For NEW tokens, store ONLY hash in `publicTrackingTokenHash` (and set created/expires).
+- For existing records with old plaintext token: continue to accept them, but do not regenerate automatically.
+
+Hashing requirements:
+- Use SHA-256: hash = sha256(token) hex.
+- Compare with timing-safe compare where possible.
+
+(3) TTL / expiration rules
+- Add env var: `PUBLIC_TRACKING_TTL_DAYS` default 7
+- Token access rules:
+   * If load is not delivered: allow.
+   * If deliveredAt exists:
+        - if now > deliveredAt + TTL days => return HTTP 410 Gone with { error: "Tracking link expired" }
+        - else allow.
+- Also allow explicit expiresAt if stored; use that if present.
+
+(4) Safe response shape (no PII)
+For public tracking response, return ONLY:
+- load: id (optional), reference/loadNumber, status, createdAt, deliveredAt (optional)
+- stops: type, sequence/order, city/state (or formatted location), scheduled window times (if present), arriveAt/departAt (if present)
+- lastLocation: lat/lon (optionally rounded), timestamp, accuracy (optional)
+DO NOT return:
+- brokerId, driverId, driver email/phone, webhook configs, billing info, internal notes
+If the current public endpoint returns more fields, implement a mapper that strips to safe shape.
+
+(5) Rate limiting for public tracking endpoint
+- Add a simple in-memory rate limiter keyed by (ip + token) with defaults:
+   * PUBLIC_TRACKING_RPM default 60 requests/min per ip+token
+- If exceeded, return 429 { error: "Too many requests" }
+- Add a tiny response cache (in-memory) for 5–10 seconds per token to reduce DB load (optional but helpful).
+
+(6) Optional: Token rotation endpoint (broker-authenticated)
+- Add POST /api/loads/:id/public-link/rotate (or similar) behind broker auth that generates a new token hash and returns the new plaintext token once.
+- This is optional; implement only if you can do it without touching UI.
+
+------------------------------
+B2) GPS ping validation + ownership enforcement
+------------------------------
+Locate existing ping endpoint (e.g. POST /api/tracking/ping). Implement:
+
+(1) Payload validation (reject bad input)
+- lat, lon must be numbers within valid ranges
+- accuracy must be a number >=0 (if provided)
+- timestamp must be parseable
+- reject if timestamp > now + 5 minutes
+- reject if timestamp < now - 24 hours (configurable)
+- reject if accuracy > 5000m (configurable) OR store but mark invalid (choose one strategy; prefer reject for now)
+
+Add env vars with safe defaults:
+- GPS_MAX_ACCURACY_METERS default 5000
+- GPS_MAX_FUTURE_SKEW_SECONDS default 300
+- GPS_MAX_AGE_HOURS default 24
+- GPS_MAX_SPEED_MPH default 120
+
+(2) Anti-teleport / speed sanity
+- Fetch the last accepted ping for the same (driverId + loadId)
+- Compute time delta seconds; compute distance (Haversine)
+- Compute mph; if mph > GPS_MAX_SPEED_MPH => reject with 422 { error: "Unrealistic GPS jump" }
+- If delta too small (< 5 sec), just rely on rate limit and reject/ignore
+
+(3) Ownership checks
+- Ensure the sender is authorized to ping this load:
+   * driver is assigned to the load OR has active invite token to that load
+   * AND the load belongs to the same broker context if broker-scoped
+- If not authorized => 403
+
+(4) Logging
+- When rejecting, log a lightweight reason (do not log raw PII).
+- If you have a logs table, optionally insert an audit record; otherwise console log with consistent prefix.
+
+------------------------------
+B3) Rate limiting improvements (pings)
+------------------------------
+Keep existing “min interval per driverId+loadId” logic (you already had 30s).
+Add:
+- IP burst limiter for ping endpoint:
+   * TRACKING_PING_RPM default 120 per IP
+- If exceeded => 429
+
+Do NOT store rate limit state in DB for now (in-memory is fine for MVP); document in SECURITY.md that production should use Redis.
+
+========================
+PART C — VERIFICATION (MUST DO)
+========================
+After implementing:
+1) Run server locally (or in Replit dev) and verify:
+   - Public tracking link still works for existing tokens.
+   - New loads generate strong tokens and store hash fields.
+   - Expired delivered loads return 410 after TTL.
+2) Confirm public tracking endpoint response does NOT leak:
+   - brokerId, driverId, emails, phones, webhook config, billing
+3) Test ping endpoint with:
+   - valid coordinates => 200
+   - invalid lat/lon => 422
+   - future timestamp => 422
+   - teleport (simulate far coords with small delta) => 422
+   - rate limit => 429
+4) Ensure migrations run successfully (if you added columns).
+
+========================
+DELIVERABLES (COMMIT)
+========================
+- docs/SECURITY.md (new)
+- README.md (link to security doc)
+- server changes for:
+   * public tracking hardening (token hash + TTL + safe response + rate limit)
+   * gps validation + ownership checks
+   * rate limiting improvements
+- Drizzle schema + migration files IF you added DB columns (keep backward compatible)
+- If you add env vars, update `.env.production.example` accordingly (placeholders, no secrets)
+
+DO IT NOW with minimal changes, and keep existing behavior working while adding security.
