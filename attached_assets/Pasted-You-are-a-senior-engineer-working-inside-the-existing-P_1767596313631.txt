@@ -1,0 +1,56 @@
+You are a senior engineer working inside the existing PingPoint repo on GitHub.
+
+GOAL:
+Add a single GitHub Actions CI workflow that runs on push + pull_request and shows a CI badge in README.md.
+
+STRICT RULES:
+- Minimal localized changes only
+- Do NOT modify application logic
+- Only add CI workflow files and update README.md
+- CI must be reliable and not require production secrets
+- If some commands (lint/typecheck) do not exist in package.json, do NOT invent them; detect and run what exists
+- Must run tests in CI:
+  - `npm run test:run` if it exists, otherwise `npm test` if it exists, otherwise `npx vitest run`
+- If e2e exists (`npm run e2e`), run it only as a smoke step AFTER unit tests, and allow skipping if Playwright browsers are not installed (but prefer installing them in CI if reasonable).
+
+TASKS:
+
+A) Create workflow file:
+Create `.github/workflows/ci.yml` with:
+- name: CI
+- triggers: push and pull_request on all branches
+- job: build-test (ubuntu-latest)
+Steps:
+1) checkout
+2) setup-node (Node 18 or 20) with npm cache
+3) npm ci (or npm install if lockfile missing; prefer npm ci when package-lock exists)
+4) Run unit tests:
+   - If package.json has script "test:run" -> npm run test:run
+   - Else if has "test" -> npm test
+   - Else -> npx vitest run
+5) Run coverage (optional but preferred if "test:coverage" exists):
+   - npm run test:coverage
+   - Upload ./coverage as an artifact (actions/upload-artifact)
+6) Run e2e smoke (only if script "e2e" exists):
+   - Install Playwright browsers: npx playwright install --with-deps
+   - npm run e2e
+If e2e fails due to missing server start, do NOT force it in CI; keep the workflow green by skipping e2e with a clear log message. (Use a simple conditional check for script existence; and for e2e, only run if app can start or if tests use request-based health checks that don’t require a running server.)
+
+B) Add a CI badge to README.md
+At the top of README.md (first lines), add a GitHub Actions badge for this workflow.
+Use this exact format (do not hardcode the repo owner incorrectly; read it from repo context):
+![CI](https://github.com/<OWNER>/<REPO>/actions/workflows/ci.yml/badge.svg)
+
+Optionally link it:
+[![CI](...badge...)](https://github.com/<OWNER>/<REPO>/actions/workflows/ci.yml)
+
+C) Verification
+- Ensure the workflow YAML is valid
+- Ensure README badge path matches workflow filename `ci.yml`
+- Commit changes
+
+DELIVERABLE:
+Commit:
+- .github/workflows/ci.yml
+- README.md (badge added)
+Do it now.
