@@ -1,0 +1,99 @@
+You are a senior engineer working inside the existing PingPoint GitHub repo.
+
+GOAL:
+Add proper project documentation to the repository:
+- Main README with features, stack, structure, quick start, links to docs
+- docs/ folder with architecture, API reference, setup instructions, DB schema overview, deployment notes, troubleshooting
+All content must be created as real markdown files committed into the repo.
+
+STRICT RULES:
+- Do NOT change any application logic, database schema, or runtime behavior
+- Only add/modify documentation files (.md) and (optionally) a small docs asset folder if needed
+- Keep content accurate to the current PingPoint project: Next.js 14 + TS + Tailwind, Express server/, Postgres + Drizzle, Stripe, Webhooks, Replit, public tracking links, Arcade 90s dark neon design
+- Mention known TODOs: RC end-to-end attachment, deeper Admin broker detail page, referral program “coming soon”, telematics planned, DB scaling (indexes/PostGIS/archiving), CO2 calculations in progress
+- Use relative links between docs files
+- Do not include secrets or real tokens. Use placeholders.
+
+TASKS:
+
+1) Create `docs/` folder and add these files:
+- docs/ARCHITECTURE.md
+- docs/API.md
+- docs/SETUP.md
+- docs/DB_SCHEMA.md
+- docs/DEPLOYMENT.md
+- docs/TROUBLESHOOTING.md
+(Optional but nice: docs/SECURITY.md and docs/ROADMAP.md)
+
+2) Replace/Update root `README.md` to become the main landing page:
+Include:
+- What PingPoint is (MacroPoint-like but simpler/cheaper)
+- Roles: Broker Console (PingPoint Control), Driver App (PingPoint Driver), Admin, Public tracking links
+- Key features list
+- Tech stack
+- Repo structure
+- Quick start linking to docs/SETUP.md
+- Docs links section
+- Pricing (Free: 3 loads/mo, Pro: $99/mo 200 loads, extra credits ~$0.99/load; optional USDC discount mention)
+- Status/TODO section
+
+3) Content requirements per file:
+
+docs/ARCHITECTURE.md must include:
+- Overview: client/ (Next.js), server/ (Express), Postgres (Drizzle)
+- High-level flow: broker creates load -> driver pings -> public tracking -> analytics -> webhooks
+- Notes: multi-tenant brokerId filtering; public tracking read-only; rate-limited pings
+
+docs/API.md must include:
+- Endpoint groups (Auth, Loads, Stops, Tracking, Public Tracking, Analytics, Export CSV, Billing, Webhooks, Admin)
+- For each group provide a short list of routes (keep it concise but complete)
+- Provide at least 3 example curl commands:
+  - analytics overview
+  - loads list
+  - tracking ping
+Use placeholders for base URL and tokens.
+
+docs/SETUP.md must include:
+- Requirements (Node 18+, Postgres)
+- Env vars list (DATABASE_URL, SESSION_SECRET, STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET, APP_URL)
+- Optional: PINGPOINT_CO2_KG_PER_MILE
+- Install + run commands (npm install, npm run dev)
+- DB migrate command (use whatever scripts exist; if unsure, describe as “drizzle migrate” and note to check package.json scripts)
+- Notes about needing login for analytics
+
+docs/DB_SCHEMA.md must include:
+- High-level tables and relationships:
+  brokers, drivers, loads, stops, tracking_pings, subscriptions/credits/usage, rate_confirmation_files, webhook_config/webhook_delivery_logs, admin tables
+- Suggested future indexes: tracking_pings(loadId, createdAt), etc.
+- Mention optional future PostGIS + archiving
+
+docs/DEPLOYMENT.md must include:
+- Replit deployment notes
+- Environment/secrets setup in Replit
+- Stripe webhooks + callback URL notes (generic placeholders)
+- Webhook signing concept (mention signatures exist, do not expose secrets)
+
+docs/TROUBLESHOOTING.md must include:
+- Analytics stuck loading: check /api/analytics/overview returns 200; check auth session; mismatch response keys
+- Stripe webhook not firing: verify webhook secret, endpoint url
+- Tracking pings missing: driver permissions, rate-limiting, location permissions
+- Public link not showing: load token, access
+
+(Optional) docs/SECURITY.md:
+- Session cookie / auth
+- Webhook signature verification
+- Multi-tenant brokerId filtering
+
+(Optional) docs/ROADMAP.md:
+- Checklist of TODOs with priority
+
+4) After creating files:
+- Ensure README links to each docs file correctly
+- Ensure markdown formatting is clean
+
+DELIVERABLE:
+Commit the new/updated markdown files into the repo:
+- README.md
+- docs/*.md
+
+Do it now.
