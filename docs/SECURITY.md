@@ -142,14 +142,44 @@ Before accepting a ping:
 
 ### Broker Authentication Flow
 
+PingPoint separates login from signup to prevent unauthorized account creation:
+
+**Signup Flow (new accounts):**
 ```
-1. User enters email
-2. Server generates verification token (15 min TTL)
-3. Magic link sent via email
-4. User clicks link
-5. Server verifies token, creates JWT session
-6. JWT stored in HTTP-only cookie
+1. User enters email on /signup page
+2. POST /api/brokers/signup creates account
+3. Server generates verification token (48h TTL)
+4. Verification email sent automatically
+5. User clicks link
+6. Server verifies token, creates JWT session
+7. JWT stored in HTTP-only cookie
 ```
+
+**Login Flow (existing accounts):**
+```
+1. User enters email on /login page
+2. POST /api/brokers/login validates account exists
+3. If account not found → 404 ACCOUNT_NOT_FOUND (user redirected to signup)
+4. If email not verified → 403 EMAIL_NOT_VERIFIED
+5. If trusted device → instant login
+6. If untrusted device → magic link sent, user clicks to verify
+```
+
+**Feature Flag:**
+- `AUTH_AUTO_CREATE_BROKER` (default: false)
+- When false: `/api/brokers/ensure` returns 404 for unknown emails
+- When true: legacy behavior (auto-creates accounts)
+
+**Email Normalization:**
+- All auth operations use `email.trim().toLowerCase()`
+- Utility: `server/utils/normalizeEmail.ts`
+
+**Rate Limiting:**
+| Endpoint | Limit | Window |
+|----------|-------|--------|
+| `/api/brokers/signup` | 5 requests | 60 seconds |
+| `/api/brokers/login` | 10 requests | 60 seconds |
+| `/api/brokers/send-verification` | 5 requests | 60 seconds |
 
 All broker API calls:
 1. Extract JWT from cookie

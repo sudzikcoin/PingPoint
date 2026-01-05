@@ -1,7 +1,7 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, beforeAll, afterAll } from "vitest";
 import { getTestRequest } from "./utils/testApp";
 import { db } from "../db";
-import { brokers, verificationTokens, loads } from "@shared/schema";
+import { brokers, verificationTokens } from "@shared/schema";
 import { eq } from "drizzle-orm";
 
 vi.mock("../email", () => ({
@@ -12,9 +12,23 @@ vi.mock("../email", () => ({
 describe("Broker Magic Link Flow", () => {
   const testEmail = "broker-test@example.com";
   const testName = "Test Broker";
+  let originalEnv: string | undefined;
 
-  describe("POST /api/brokers/ensure", () => {
-    it("should create a new broker if none exists", async () => {
+  beforeAll(() => {
+    originalEnv = process.env.AUTH_AUTO_CREATE_BROKER;
+    process.env.AUTH_AUTO_CREATE_BROKER = 'true';
+  });
+
+  afterAll(() => {
+    if (originalEnv !== undefined) {
+      process.env.AUTH_AUTO_CREATE_BROKER = originalEnv;
+    } else {
+      delete process.env.AUTH_AUTO_CREATE_BROKER;
+    }
+  });
+
+  describe("POST /api/brokers/ensure (with AUTH_AUTO_CREATE_BROKER=true)", () => {
+    it("should create a new broker if none exists (legacy mode)", async () => {
       const request = await getTestRequest();
       
       const response = await request

@@ -23,30 +23,30 @@
         <div class='clearfix'>
             
             <div class='fl pad1y space-right2'>
-                <span class="strong">22.58% </span>
+                <span class="strong">0% </span>
                 <span class="quiet">Statements</span>
-                <span class='fraction'>14/62</span>
+                <span class='fraction'>0/62</span>
             </div>
         
             
             <div class='fl pad1y space-right2'>
-                <span class="strong">14.06% </span>
+                <span class="strong">0% </span>
                 <span class="quiet">Branches</span>
-                <span class='fraction'>9/64</span>
+                <span class='fraction'>0/64</span>
             </div>
         
             
             <div class='fl pad1y space-right2'>
-                <span class="strong">20% </span>
+                <span class="strong">0% </span>
                 <span class="quiet">Functions</span>
-                <span class='fraction'>1/5</span>
+                <span class='fraction'>0/5</span>
             </div>
         
             
             <div class='fl pad1y space-right2'>
-                <span class="strong">22.95% </span>
+                <span class="strong">0% </span>
                 <span class="quiet">Lines</span>
-                <span class='fraction'>14/61</span>
+                <span class='fraction'>0/61</span>
             </div>
         
             
@@ -388,24 +388,14 @@
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-no">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-yes">8x</span>
-<span class="cline-any cline-yes">8x</span>
-<span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-yes">8x</span>
-<span class="cline-any cline-yes">8x</span>
-<span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
 <span class="cline-any cline-no">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-no">&nbsp;</span>
 <span class="cline-any cline-no">&nbsp;</span>
 <span class="cline-any cline-no">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
@@ -425,6 +415,16 @@
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-no">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
@@ -461,18 +461,18 @@
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-yes">8x</span>
-<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-yes">8x</span>
-<span class="cline-any cline-yes">8x</span>
-<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-yes">8x</span>
-<span class="cline-any cline-yes">8x</span>
-<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-no">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
@@ -615,17 +615,17 @@ interface EmitLoadEventParams {
   previousStatus?: string | null;
 }
 &nbsp;
-export async function emitLoadEvent(params: EmitLoadEventParams): Promise&lt;void&gt; {
-  const { brokerId, loadId, eventType, previousStatus } = params;
+export async function <span class="fstat-no" title="function not covered" >emitLoadEvent(p</span>arams: EmitLoadEventParams): Promise&lt;void&gt; {
+  const { brokerId, loadId, eventType, previousStatus } = <span class="cstat-no" title="statement not covered" >params;</span>
 &nbsp;
-  try {
-    const [config] = await db
+<span class="cstat-no" title="statement not covered" >  try {</span>
+    const [config] = <span class="cstat-no" title="statement not covered" >await db</span>
       .select()
       .from(webhookConfigs)
       .where(eq(webhookConfigs.brokerId, brokerId));
 &nbsp;
-    <span class="missing-if-branch" title="else path not taken" >E</span>if (!config || <span class="branch-1 cbranch-no" title="branch not covered" >!config.enabled || <span class="branch-2 cbranch-no" title="branch not covered" >!</span>config.url) {</span>
-      return;
+<span class="cstat-no" title="statement not covered" >    if (!config || !config.enabled || !config.url) {</span>
+<span class="cstat-no" title="statement not covered" >      return;</span>
     }
 &nbsp;
     const [broker] = <span class="cstat-no" title="statement not covered" >await db</span>
@@ -667,14 +667,14 @@ export async function emitLoadEvent(params: EmitLoadEventParams): Promise&lt;voi
       data: {
         loadId: load.id,
         loadNumber: load.loadNumber,
-        reference: load.customerRef || <span class="branch-1 cbranch-no" title="branch not covered" >null,</span>
-        status: load.status || <span class="branch-1 cbranch-no" title="branch not covered" >null,</span>
-        previousStatus: previousStatus || <span class="branch-1 cbranch-no" title="branch not covered" >null,</span>
-        rateAmount: load.rateAmount || <span class="branch-1 cbranch-no" title="branch not covered" >null,</span>
+        reference: load.customerRef || null,
+        status: load.status || null,
+        previousStatus: previousStatus || null,
+        rateAmount: load.rateAmount || null,
         currency: "USD",
-        equipmentType: load.equipmentType || <span class="branch-1 cbranch-no" title="branch not covered" >null,</span>
-        shipperName: load.shipperName || <span class="branch-1 cbranch-no" title="branch not covered" >null,</span>
-        carrierName: load.carrierName || <span class="branch-1 cbranch-no" title="branch not covered" >null,</span>
+        equipmentType: load.equipmentType || null,
+        shipperName: load.shipperName || null,
+        carrierName: load.carrierName || null,
         stops: loadStops.map(<span class="fstat-no" title="function not covered" >(s</span>) =&gt; (<span class="cstat-no" title="statement not covered" >{</span>
           sequence: s.sequence,
           type: s.type,
@@ -689,18 +689,18 @@ export async function emitLoadEvent(params: EmitLoadEventParams): Promise&lt;voi
       },
     };
 &nbsp;
-    const body = JSON.stringify(payload);
-    const signature = crypto.createHmac("sha256", config.secret).update(body).digest("hex");
+    const body = <span class="cstat-no" title="statement not covered" >JSON.stringify(payload);</span>
+    const signature = <span class="cstat-no" title="statement not covered" >crypto.createHmac("sha256", config.secret).update(body).digest("hex");</span>
 &nbsp;
-    const startTime = Date.now();
-    let statusCode: number | null = null;
-    let errorMessage: string | null = null;
+    const startTime = <span class="cstat-no" title="statement not covered" >Date.now();</span>
+    let statusCode: number | null = <span class="cstat-no" title="statement not covered" >null;</span>
+    let errorMessage: string | null = <span class="cstat-no" title="statement not covered" >null;</span>
 &nbsp;
-    try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(<span class="fstat-no" title="function not covered" >() =&gt; <span class="cstat-no" title="statement not covered" >c</span>ontroller.abort(), 5</span>000);
+<span class="cstat-no" title="statement not covered" >    try {</span>
+      const controller = <span class="cstat-no" title="statement not covered" >new AbortController();</span>
+      const timeoutId = <span class="cstat-no" title="statement not covered" >setTimeout(<span class="fstat-no" title="function not covered" >() =&gt; <span class="cstat-no" title="statement not covered" >c</span>ontroller.abort(), 5</span>000);</span>
 &nbsp;
-      const response = await fetch(config.url, {
+      const response = <span class="cstat-no" title="statement not covered" >await fetch(config.url, {</span>
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -754,7 +754,7 @@ export async function emitLoadEvent(params: EmitLoadEventParams): Promise&lt;voi
             <div class='footer quiet pad2 space-top1 center small'>
                 Code coverage generated by
                 <a href="https://istanbul.js.org/" target="_blank" rel="noopener noreferrer">istanbul</a>
-                at 2026-01-05T08:44:32.713Z
+                at 2026-01-05T15:29:31.666Z
             </div>
         <script src="../../prettify.js"></script>
         <script>

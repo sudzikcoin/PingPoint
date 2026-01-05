@@ -21,6 +21,10 @@ Preferred communication style: Simple, everyday language.
 - **Frontend**: React 18 with Vite, Wouter for routing, React Query for server state, and React Context for theme management.
 - **Backend**: Express.js with TypeScript, providing RESTful APIs for brokers, loads, drivers, and tracking.
 - **Authentication**: JWT-based sessions for brokers (HTTP-only cookies) and token-based access for drivers and public tracking. Email verification for broker access.
+    - **Login/Signup Separation**: Login (/api/brokers/login) requires existing account; Signup (/api/brokers/signup) creates new accounts with auto-verification email.
+    - **Feature Flag**: AUTH_AUTO_CREATE_BROKER=false (default) prevents /api/brokers/ensure from auto-creating accounts.
+    - **Rate Limiting**: 5 req/min on signup, 10 req/min on login.
+    - **Email Normalization**: All auth operations use trim().toLowerCase() consistently.
 - **Admin Authentication**: Separate JWT-based admin session (pingpoint_admin_session cookie). Requires ADMIN_EMAIL, ADMIN_PASSWORD, and JWT_SECRET environment variables. 24-hour session expiry. Admin panel at /app/admin/login with protected data routes.
 - **Build Process**: Custom esbuild for server bundling and Vite for client-side.
 - **PWA Support**: Manifest and a comprehensive icon set for installability on mobile devices.
