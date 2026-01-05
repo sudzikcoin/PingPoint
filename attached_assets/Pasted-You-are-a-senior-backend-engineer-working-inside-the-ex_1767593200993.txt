@@ -1,0 +1,158 @@
+You are a senior backend engineer working inside the existing PingPoint repo on Replit.
+
+GOAL:
+Make CO2 real in Analytics (Overview + Loads Detail) and in Export CSV by computing:
+- distanceMi per load from stop coordinates (lat/lng, ordered by sequence)
+- co2Kg per load = distanceMi * emissionFactorKgPerMile
+- co2TotalKg in analytics overview = sum(co2Kg) for loads in selected date range
+
+STRICT RULES:
+- Minimal localized changes only
+- Do NOT refactor large parts of the app
+- Do NOT break existing endpoints or UI
+- Work primarily in server/routes.ts (add small helper functions there)
+- Use existing auth: getBrokerFromRequest(req)
+- Do NOT call external map APIs
+- Use same date-range logic already used by analytics endpoints (days=7/30/90)
+- Keep compatibility wrappers already added (summary/metrics/series/chartData/items/loads)
+
+EMISSION FACTOR:
+- Add env var PINGPOINT_CO2_KG_PER_MILE (string/number), default = 1.68
+- Use: const factor = Number(process.env.PINGPOINT_CO2_KG_PER_MILE ?? "1.68"); fallback to 1.68 if NaN
+
+PART A — Add CO2 + distance helpers in server/routes.ts (near top, after existing helpers)
+
+Add:
+
+function toNum(v: any): number | null {
+  if (v === null || v === undefined) return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+function haversineMiles(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const R = 3958.7613; // Earth radius in miles
+  const toRad = (x: number) => (x * Math.PI) / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+}
+
+async function computeLoadDistanceAndCO2Kg(loadId: string): Promise<{ distanceMi: number | null; co2Kg: number | null }> {
+  // Use the existing storage helper if available:
+  // const stops = await storage.getStopsByLoad(loadId);
+  // If not available, query Drizzle for stops by loadId.
+  const stops = await storage.getStopsByLoad(loadId);
+
+  if (!stops || stops.length < 2) return { distanceMi: null, co2Kg: null };
+
+  const pts = stops
+    .map((s: any) => {
+      const lat = toNum(s.lat);
+      const lng = toNum(s.lng);
+      const seq = toNum(s.sequence) ?? 0;
+      if (lat === null || lng === null) return null;
+      return { lat, lng, seq };
+    })
+    .filter(Boolean) as Array<{ lat: number; lng: number; seq: number }>;
+
+  if (pts.length < 2) return { distanceMi: null, co2Kg: null };
+
+  pts.sort((a, b) => a.seq - b.seq);
+
+  let dist = 0;
+  for (let i = 0; i < pts.length - 1; i++) {
+    dist += haversineMiles(pts[i].lat, pts[i].lng, pts[i + 1].lat, pts[i + 1].lng);
+  }
+
+  const factorRaw = Number(process.env.PINGPOINT_CO2_KG_PER_MILE ?? "1.68");
+  const factor = Number.isFinite(factorRaw) ? factorRaw : 1.68;
+
+  const distanceMi = Math.round(dist * 10) / 10;           // 0.1 mi
+  const co2Kg = Math.round(distanceMi * factor * 100) / 100; // 0.01 kg
+
+  return { distanceMi, co2Kg };
+}
+
+PART B — Update Analytics Loads Detail endpoint to include distanceMi + co2Kg per row
+Find handler for:
+GET /api/analytics/loads-detail (and /api/analytics/loads alias)
+
+After you build the loads rows array (the rows you return under items/loads),
+enrich them in parallel:
+
+const enriched = await Promise.all(rows.map(async (r: any) => {
+  const { distanceMi, co2Kg } = await computeLoadDistanceAndCO2Kg(r.id);
+  return { ...r, distanceMi, co2Kg };
+}));
+
+Then return:
+res.json({
+  range: { days },
+  items: enriched,
+  loads: enriched,
+});
+
+PART C — Update Analytics Overview endpoint to return co2TotalKg (not null)
+Find handler for:
+GET /api/analytics/overview (and /api/analytics alias)
+
+You already compute totalLoads, deliveredLoads, etc.
+Now compute CO2 total over the same set of loads used for metrics.
+
+Implementation approach:
+1) Get the list of load ids in the date range for this broker (use the same query you already use for totals).
+2) For those load ids:
+   const computed = await Promise.all(loadIds.map(id => computeLoadDistanceAndCO2Kg(id)));
+3) Sum:
+   const co2TotalKg = Math.round(computed.reduce((sum, x) => sum + (x.co2Kg ?? 0), 0) * 100) / 100;
+
+Then include co2TotalKg:
+- top-level co2TotalKg
+- inside summary and metrics wrappers (must match UI card)
+
+Example:
+const summary = { ...existingSummaryFields, co2TotalKg };
+Return JSON includes:
+{ ..., co2TotalKg, summary, metrics: summary, ... }
+
+PART D — Update CSV Export to include Distance (mi) and CO2 (kg) and make them real
+Locate endpoint:
+GET /api/loads/export/csv (or similar existing CSV export)
+
+Modify:
+- Add headers at end: "Distance (mi)", "CO2 (kg)"
+- For each load, compute values:
+const { distanceMi, co2Kg } = await computeLoadDistanceAndCO2Kg(load.id);
+and add them to the row (blank if null)
+
+Use Promise.all to keep it simple.
+
+PART E — Add environment variable note (no UI change)
+Ensure project reads:
+PINGPOINT_CO2_KG_PER_MILE
+Default still works without it (1.68).
+
+VERIFICATION (must do now):
+1) Restart backend.
+2) Open as logged-in broker:
+   /api/analytics/overview?days=30
+   Confirm co2TotalKg is a NUMBER (not null) if loads have stop coordinates.
+3) Open:
+   /api/analytics/loads-detail?days=30
+   Confirm each item includes distanceMi and co2Kg (or null if missing coords).
+4) In UI:
+   Analytics Overview "CO2 Total" card shows a number in kg.
+5) Click Export CSV:
+   Confirm Distance (mi) and CO2 (kg) columns are filled.
+
+EDGE CASES:
+- If stop coordinates missing => distanceMi/co2Kg null (CSV blank), overview sum still numeric (0 if none)
+- Keep auth; if no session => 401
+
+DELIVERABLE:
+CO2 is calculated from stop coordinates for each load and shown in Analytics + CSV export.
