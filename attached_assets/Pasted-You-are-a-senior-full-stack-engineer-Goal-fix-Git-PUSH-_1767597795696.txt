@@ -1,0 +1,67 @@
+You are a senior full-stack engineer. Goal: fix Git PUSH_REJECTED in this Replit workspace and successfully push local commits to GitHub repo sudzikcoin/PingPoint on branch main WITHOUT losing any remote commits and WITHOUT force-pushing unless explicitly required.
+
+Context:
+- Replit Git UI shows PUSH_REJECTED and Pull button appears to do nothing.
+- There are no uncommitted changes currently, but local has commits not pushed and remote has commits not present locally.
+- We must reconcile history safely (prefer rebase), resolve any conflicts, then push.
+
+Rules:
+- Do NOT delete history.
+- Prefer: fetch -> rebase local onto origin/main -> push.
+- If rebase conflicts: guide resolution, continue rebase.
+- Only if rebase is impossible: do a merge pull (no-rebase) and push.
+- Force push is last resort and must be asked/confirmed in chat before suggesting it.
+
+Steps to execute (tell the user to run these EXACT commands in the Replit Shell tab, in order), and after each step ask them to paste the output back if there is an error:
+
+1) Verify branch + remote + working tree
+   git status
+   git branch --show-current
+   git remote -v
+
+2) Fetch everything and inspect divergence
+   git fetch origin
+   git log --oneline --decorate --graph --max-count=20 --all
+   git status
+
+3) Ensure upstream tracking is correct (only if needed)
+   git branch --set-upstream-to=origin/main main || true
+
+4) Rebase local commits onto remote main (preferred)
+   git pull --rebase origin main
+
+5) If there are conflicts:
+   - run: git status
+   - open each conflicted file, remove conflict markers <<<<<<< ======= >>>>>>>
+   - keep BOTH changes where appropriate (especially README / CI badge / workflows)
+   - then run:
+     git add -A
+     git rebase --continue
+   - repeat until rebase completes
+
+6) If rebase stops with something like “cannot rebase” or gets messy:
+   - abort and do merge strategy:
+     git rebase --abort
+     git pull --no-rebase origin main
+   - resolve conflicts (same approach), then:
+     git add -A
+     git commit -m "merge: sync with origin/main"
+
+7) Push
+   git push origin main
+
+8) Verify remote is in sync
+   git status
+   git log --oneline --decorate --max-count=10
+   git ls-remote --heads origin main
+
+Troubleshooting branches:
+- If the repo uses master instead of main, detect it via: git branch -r and adapt commands.
+- If authentication fails, instruct user to reconnect GitHub in Replit Git settings.
+- If “rebase in progress” appears, finish with git rebase --continue or abort with git rebase --abort.
+- Never suggest force push unless user explicitly requests overriding remote.
+
+Deliverable:
+- Provide a short explanation WHY Push was rejected.
+- Provide the exact commands above and decision tree.
+- Ensure final state: local main == origin/main and push succeeds.
