@@ -1,0 +1,104 @@
+[READ FIRST — NON-NEGOTIABLES / MINIMAL-CHANGE PROTOCOL]
+You are Replit Backend Agent working inside the existing PingPoint repo. Your job is to FIX ONE BUG: Analytics page UI shows “Loading analytics…” then “Failed to load data”, while “Export CSV” works. You MUST NOT break or refactor unrelated parts of the system. Follow these rules:
+1) Do the smallest possible, localized changes. No “big refactor”.
+2) Do NOT change existing DB schema or migrations unless absolutely required (should not be required for this fix).
+3) Do NOT rename routes/paths used by other pages. If you must add a new endpoint, keep old ones working.
+4) Preserve existing auth/session behavior. If analytics needs auth fixes, make them compatible with the rest of the app.
+5) Add logs only if needed; keep them minimal and remove noisy logs after confirming fix.
+6) After changes, run the app and verify: Loads page still works, Driver tracking still works, Billing still works, CSV export still works, Analytics UI now loads data.
+
+[GOAL]
+Fix Analytics UI data loading. The UI must render overview + loads detail without “Failed to load data”. CSV export continues working exactly as before.
+
+[CONTEXT / SYMPTOM]
+- Analytics UI fails to load data.
+- CSV export works and produces a file.
+=> This strongly suggests the UI endpoint is failing (401/403/500), or it returns a different JSON shape than the UI expects, or it’s calling the wrong route/base URL.
+
+[WHAT TO DO — STEP BY STEP]
+A) IDENTIFY FRONTEND CALLS
+1) Find the Analytics page component(s) and determine which API endpoints it calls.
+   - Search for “ANALYTICS”, “Failed to load data”, “Loading analytics”, “export csv”, “/api/analytics”.
+   - Locate the code for tabs: “Overview” and “Loads Detail”.
+2) Note exact fetch URLs, query params (range=7/30/90), and expected response shape used in UI rendering.
+
+B) IDENTIFY BACKEND ENDPOINTS
+1) Find the server routes/handlers for analytics:
+   - Express routes (server/*) OR Next API routes (app/api/*).
+   - Identify endpoints used by:
+     - UI data (overview + loads detail)
+     - CSV export
+2) Compare CSV logic vs UI logic:
+   - If CSV works, reuse the same data-source/service to produce UI JSON (not the other way around).
+   - Ensure UI endpoint returns consistent JSON shape that the UI expects.
+
+C) DIAGNOSE THE FAIL MODE (MUST CONFIRM)
+1) Add temporary logging to the UI endpoint (NOT global):
+   - Log request path, query params, current user/companyId, and error stack if thrown.
+2) Re-run and reproduce the Analytics UI call.
+3) Determine which of these is happening:
+   - (1) 401/403: auth/session not detected in analytics endpoint
+   - (2) 500: server error (companyId undefined, SQL error, parsing error)
+   - (3) 200 but wrong JSON shape: UI expects fields not present
+   - (4) wrong base URL / CORS / fetch to different origin
+Document the confirmed root cause in a short comment inside the PR/commit message (no long essay).
+
+D) IMPLEMENT THE FIX (MINIMAL CHANGE)
+Depending on the confirmed cause, apply the minimal patch:
+
+CASE 1 — AUTH/COMPANY ID MISSING (most common)
+- Ensure the analytics UI endpoint derives companyId the same way other working endpoints do (loads list, billing, etc).
+- If the app uses session middleware, make analytics route use it too.
+- If the UI is calling an absolute URL to another port/origin, change it to same-origin path OR ensure credentials are included safely.
+- Do NOT weaken security globally. Only align analytics with existing auth patterns.
+
+CASE 2 — WRONG JSON SHAPE
+- Make the analytics UI endpoint return exactly what the UI expects.
+- If UI expects {overview:{...}, loads:[...]} then return that shape.
+- If UI expects specific field names, map DB fields to those names.
+- Handle empty data as valid: return overview with zeros and loads: [] (NOT an error).
+
+CASE 3 — ENDPOINT PATH MISMATCH
+- If UI calls /api/analytics but backend exposes /api/analytics/overview, either:
+  - Add a small compatibility handler at /api/analytics that delegates internally, OR
+  - Update UI to call the correct existing endpoint ONLY if it does not affect other pages.
+Prefer adding a compatibility handler if there is any risk.
+
+CASE 4 — RANGE/DATE PARSING BUG
+- Validate range param (7/30/90). Default to 30 if invalid.
+- Ensure timezone handling doesn’t throw.
+- Ensure DB query uses correct column names.
+
+E) MAKE UI ERROR ACTIONABLE (SMALL IMPROVEMENT, OPTIONAL BUT RECOMMENDED)
+- If UI currently shows only “Failed to load data”, add a tiny improvement:
+  - If response is non-200, show “Analytics API error: <status>”
+  - But keep design consistent (do not redesign UI).
+This helps future debugging without changing core UX.
+
+F) VERIFICATION / ACCEPTANCE TESTS
+1) Start app. Go to Analytics page:
+   - Overview tab loads data (numbers render, not stuck loading).
+   - Loads Detail tab loads table/list (or empty state if no data).
+   - 7/30/90 toggles trigger reload and still work.
+2) Export CSV still works and matches prior behavior.
+3) Loads page still works.
+4) Driver pages still work.
+5) No new console/server errors during normal navigation.
+
+[DELIVERABLE]
+- Implement fix with minimal changes.
+- If you changed or added an endpoint, keep old ones working.
+- Provide a short summary in comments at top of the fixed endpoint file:
+  - “Fix analytics UI loading: <root cause>”
+- Ensure no unrelated formatting changes.
+
+[HARD CONSTRAINTS]
+- Do not introduce new paid dependencies.
+- Do not add new migrations.
+- Do not refactor the entire analytics module—only targeted fix.
+
+[NOW EXECUTE]
+1) Search codebase for analytics UI fetch + analytics endpoints.
+2) Identify failing request and root cause.
+3) Patch minimal code.
+4) Run and verify all acceptance criteria.
