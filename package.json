@@ -9,7 +9,10 @@
     "build": "tsx script/build.ts",
     "start": "NODE_ENV=production node dist/index.cjs",
     "check": "tsc",
-    "db:push": "drizzle-kit push"
+    "db:push": "drizzle-kit push",
+    "test": "vitest",
+    "test:run": "vitest run",
+    "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
     "@coinbase/wallet-sdk": "^4.3.7",
@@ -51,6 +54,7 @@
     "@types/multer": "^2.0.0",
     "@types/qrcode.react": "^1.0.5",
     "@types/supertest": "^6.0.3",
+    "@vitest/coverage-v8": "^4.0.16",
     "bignumber.js": "^9.3.1",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",

@@ -13,6 +13,21 @@ export default defineConfig({
     sequence: {
       shuffle: false,
     },
+    coverage: {
+      enabled: true,
+      provider: "v8",
+      reporter: ["text", "html", "lcov"],
+      reportsDirectory: "./coverage",
+      exclude: [
+        "**/node_modules/**",
+        "**/dist/**",
+        "**/build/**",
+        "**/.next/**",
+        "**/coverage/**",
+        "**/drizzle/**",
+        "**/migrations/**",
+      ],
+    },
   },
   resolve: {
     alias: {

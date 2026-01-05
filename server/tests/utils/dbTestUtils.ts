@@ -1,22 +1,39 @@
 import { db } from "../../db";
-import { brokers, verificationTokens, drivers, loads, stops, trackingPings, brokerFieldHints, brokerDevices, brokerEntitlements, brokerCredits, stripeWebhookEvents, stripePayments, brokerUsage, stopGeofenceState } from "@shared/schema";
+import { brokers, verificationTokens, drivers, loads, stops, trackingPings } from "@shared/schema";
 import { randomUUID } from "crypto";
+import { sql } from "drizzle-orm";
 
 export async function resetDatabase() {
-  await db.delete(stopGeofenceState);
-  await db.delete(trackingPings);
-  await db.delete(stops);
-  await db.delete(stripePayments);
-  await db.delete(loads);
-  await db.delete(verificationTokens);
-  await db.delete(brokerFieldHints);
-  await db.delete(brokerDevices);
-  await db.delete(brokerEntitlements);
-  await db.delete(brokerCredits);
-  await db.delete(brokerUsage);
-  await db.delete(stripeWebhookEvents);
-  await db.delete(drivers);
-  await db.delete(brokers);
+  // Use TRUNCATE CASCADE to handle all FK constraints automatically
+  await db.execute(sql`TRUNCATE TABLE 
+    stop_geofence_state,
+    tracking_pings,
+    stops,
+    stripe_payments,
+    exception_events,
+    webhook_delivery_logs,
+    webhook_configs,
+    rate_confirmation_files,
+    driver_reward_transactions,
+    driver_reward_accounts,
+    loads,
+    verification_tokens,
+    broker_field_hints,
+    broker_devices,
+    broker_entitlements,
+    broker_credits,
+    broker_usage,
+    stripe_webhook_events,
+    solana_payment_intents,
+    notification_preferences,
+    promotion_redemptions,
+    referrals,
+    shippers,
+    receivers,
+    activity_logs,
+    drivers,
+    brokers
+    CASCADE`);
 }
 
 export async function createTestBroker(options: {

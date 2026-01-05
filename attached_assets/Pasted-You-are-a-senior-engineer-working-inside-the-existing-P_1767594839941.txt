@@ -1,0 +1,67 @@
+You are a senior engineer working inside the existing PingPoint repo.
+
+GOAL:
+Add ONE stable E2E smoke test using Playwright that can be run locally via `npm run e2e`.
+The smoke test must not require real secrets or a real production DB, and must be deterministic.
+
+STRICT RULES:
+- Minimal localized changes only
+- Do NOT refactor application logic
+- Only add e2e test tooling + minimal safe endpoint if absolutely necessary
+- Prefer testing an existing public page or existing health endpoint
+- If no reliable public route exists, add a minimal safe endpoint: GET /api/health -> 200 { ok: true }
+- Do NOT expose sensitive info in any endpoint
+- Keep Playwright config simple and fast
+
+TASKS:
+
+A) Add Playwright dependencies (devDependencies)
+- Add: @playwright/test
+- Add: playwright
+If already present, do not duplicate.
+
+B) Add Playwright config at repo root:
+Create `playwright.config.ts` with:
+- testDir: "./e2e"
+- timeout: 30_000
+- use.baseURL from env `PLAYWRIGHT_BASE_URL` default "http://localhost:3000"
+- use.headless = true
+- retries: 0
+- reporter: "list"
+
+C) Add ONE smoke spec:
+Create `e2e/smoke.spec.ts` that:
+1) Requests the health endpoint (preferred):
+   - await request.get("/api/health") expecting 200 and JSON { ok: true }
+OR, if /api/health does not exist yet, test an existing endpoint that is public and stable (no auth), e.g. public tracking landing or a static page.
+2) Also verifies that the HTML page loads:
+   - page.goto("/") and assert status 200 and contains a known text from your landing page OR app shell (pick something that exists and is unlikely to change, like "PingPoint" in title/header).
+IMPORTANT: Avoid any login flows in smoke test.
+
+D) Add /api/health endpoint ONLY IF missing
+In `server/routes.ts` (inside registerRoutes(app)):
+Add:
+app.get("/api/health", (req, res) => res.json({ ok: true }));
+This is non-sensitive and safe.
+Do NOT add auth to /api/health.
+
+E) Add npm scripts in root package.json:
+- "e2e": "playwright test"
+- "e2e:ui": "playwright test --ui" (optional)
+- "e2e:install": "playwright install --with-deps" (optional)
+Do not remove existing scripts.
+
+F) Verification steps (must be performed now):
+1) Ensure app can run locally (or in Replit dev) on port 3000.
+2) Run:
+   - `npx playwright install --with-deps` (only if needed for first setup)
+   - `npm run e2e`
+3) Confirm the smoke test passes.
+
+DELIVERABLE:
+Commit new/changed files:
+- e2e/smoke.spec.ts
+- playwright.config.ts
+- package.json (devDependencies + scripts)
+- server/routes.ts (ONLY if /api/health had to be added)
+Do it now with minimal changes.
