@@ -5,7 +5,7 @@ import { useTheme } from "@/context/theme-context";
 import { cn } from "@/lib/utils";
 import { apiGet } from "@/lib/api";
 import { BarChart3, Clock, Package, Leaf, Download, ChevronLeft, ChevronRight, TrendingUp, AlertCircle, LogIn } from "lucide-react";
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 
@@ -77,24 +77,23 @@ export default function AppAnalytics() {
   const [loadsPage, setLoadsPage] = useState(1);
   const [activeTab, setActiveTab] = useState<'overview' | 'loads'>('overview');
 
-  const getDateRange = () => {
-    const to = new Date();
-    const from = new Date();
+  // Memoize date range to prevent query key changes on every render
+  const { from, to } = useMemo(() => {
+    const toDate = new Date();
+    const fromDate = new Date();
     switch (dateRange) {
       case '7d':
-        from.setDate(from.getDate() - 7);
+        fromDate.setDate(fromDate.getDate() - 7);
         break;
       case '30d':
-        from.setDate(from.getDate() - 30);
+        fromDate.setDate(fromDate.getDate() - 30);
         break;
       case '90d':
-        from.setDate(from.getDate() - 90);
+        fromDate.setDate(fromDate.getDate() - 90);
         break;
     }
-    return { from: from.toISOString(), to: to.toISOString() };
-  };
-
-  const { from, to } = getDateRange();
+    return { from: fromDate.toISOString(), to: toDate.toISOString() };
+  }, [dateRange]);
 
   // Session check query to verify authentication
   const { data: sessionData, error: sessionError, isLoading: sessionLoading } = useQuery({

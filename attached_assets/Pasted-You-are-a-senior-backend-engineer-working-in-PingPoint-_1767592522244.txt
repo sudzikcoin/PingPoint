@@ -1,0 +1,110 @@
+You are a senior backend engineer working in PingPoint.
+
+FACTS:
+- Express logs show GET /api/analytics/overview returns 200 with JSON, but Analytics UI still shows “Failed to load analytics” / “Loading loads…”
+- This indicates a RESPONSE SHAPE mismatch: frontend expects keys like summary/series/items, but backend returns only flat metrics (totalLoads, deliveredLoads, byDrivers, byShippers, etc).
+
+GOAL:
+Fix analytics “once and for all” by making backend responses backward-compatible:
+- Keep existing fields (totalLoads, deliveredLoads, etc)
+- ALSO return: summary + metrics + series + chartData
+- ALSO ensure loads detail returns: items + loads
+So frontend can render no matter what shape it expects.
+
+STRICT RULES:
+- Minimal localized changes
+- Work ONLY in server/routes.ts
+- Do NOT break auth; endpoints remain protected using getBrokerFromRequest(req)
+- Do NOT call external map APIs
+
+TASK 1 — OVERVIEW endpoint must return summary + series
+Find the existing endpoint that logs:
+[express] GET /api/analytics/overview 200 ... { "totalLoads":..., ... }
+
+Modify it to return this JSON shape (ALL keys included):
+
+{
+  "range": { "days": <number> },
+
+  // keep old top-level metrics (must remain)
+  "totalLoads": <number>,
+  "deliveredLoads": <number>,
+  "onTimeLoads": <number>,
+  "lateLoads": <number>,
+  "onTimePercent": <number>,
+  "avgDelayMinutes": <number>,
+  "avgPickupDwellMinutes": <number>,
+  "avgDeliveryDwellMinutes": <number>,
+  "co2TotalKg": <number|null>,
+  "byDrivers": [...],
+  "byShippers": [...],
+  "plan": "...",
+  "limited": false,
+
+  // NEW compatibility wrappers (frontend likely expects these)
+  "summary": {
+    "totalLoads": <number>,
+    "deliveredLoads": <number>,
+    "onTimeLoads": <number>,
+    "lateLoads": <number>,
+    "onTimePercent": <number>,
+    "avgDelayMinutes": <number>,
+    "avgPickupDwellMinutes": <number>,
+    "avgDeliveryDwellMinutes": <number>,
+    "co2TotalKg": <number|null>
+  },
+  "metrics":  (same object as summary),
+
+  // IMPORTANT: create a daily time-series for charts (even if UI currently doesn’t show it)
+  "series": [
+     { "date":"YYYY-MM-DD", "loadsCreated":0, "loadsDelivered":0, "lateLoads":0, "onTimeLoads":0 }
+  ],
+  "chartData": (same array as series)
+}
+
+Implementation details for series:
+- Parse days from query param days/range/period (default 30, allowed 7/30/90)
+- Build dates list for each day in range
+- Query DB (loads) grouped by date:
+  - created counts by day using loads.createdAt
+  - delivered counts by day using loads.updatedAt where status='DELIVERED'
+  - late/onTime counts if your schema supports it; otherwise fill 0
+- Fill missing days with zeros (critical for charts)
+- Always return arrays, never undefined
+
+TASK 2 — LOADS DETAIL endpoint must return items + loads
+Find existing loads detail endpoint (or create if missing) used by UI “Loads Detail”.
+It MUST respond with BOTH keys:
+
+{
+  "range": { "days": <number> },
+  "items": [ ...rows... ],
+  "loads": [ ...same rows... ]
+}
+
+Each row should include at minimum:
+- id, loadNumber, status, createdAt, updatedAt
+- optionally pingsCount, lastPingAt if available
+- optionally distanceMi and co2Kg if already implemented
+
+TASK 3 — Add route aliases (in case frontend calls different URLs)
+Map all these to the same handlers:
+- /api/analytics -> overview handler
+- /api/analytics/overview -> overview handler
+- /api/analytics/loads -> loads detail handler
+- /api/analytics/loads-detail -> loads detail handler
+
+TASK 4 — Ensure 401 is returned if not authenticated
+Use getBrokerFromRequest(req). If missing broker -> res.status(401).json({error:"Unauthorized"})
+
+DELIVERABLE TESTS (must run now):
+1) While logged in, open:
+   /api/analytics/overview?days=30
+   Confirm JSON includes keys: summary, series, chartData (and old keys still present)
+2) Open:
+   /api/analytics/loads-detail?days=30
+   Confirm JSON includes keys: items and loads
+3) Refresh Analytics UI page:
+   It must render data (no “Failed to load analytics”, no infinite “Loading loads…”)
+
+Do it now in server/routes.ts, restart, and verify.
