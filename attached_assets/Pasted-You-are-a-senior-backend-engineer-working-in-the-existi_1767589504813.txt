@@ -1,0 +1,71 @@
+You are a senior backend engineer working in the existing PingPoint repo.
+
+PROBLEM:
+Analytics page still shows “Loading analytics…” after prior changes. This usually means:
+- frontend calls different analytics URLs than the backend implemented (endpoint mismatch), OR
+- frontend expects different JSON shape (schema mismatch), OR
+- analytics requests return 401 (cookie/credentials issue)
+
+GOAL:
+Make Analytics API backward-compatible so the frontend will work even if it calls a different route or expects a different response shape.
+
+STRICT RULES:
+- Minimal localized changes only
+- Do NOT refactor the app
+- Do NOT break existing endpoints
+- Work ONLY in server/routes.ts (plus small imports if missing)
+- Use existing auth helper getBrokerFromRequest(req)
+- Keep all analytics endpoints protected (401 if not logged in)
+
+TASKS:
+
+1) Add a flexible range parser that accepts ANY of these query params:
+   - days, range, period
+   - values: 7 / 30 / 90
+   Default = 30
+
+2) Ensure these routes exist and all return working JSON:
+   - GET /api/analytics
+   - GET /api/analytics/overview
+   - GET /api/analytics/loads
+   - GET /api/analytics/loads-detail
+
+3) For OVERVIEW response, return the same data in multiple keys:
+   - summary AND metrics (same object)
+   - series AND chartData (same array)
+   Include a range object.
+
+Example output:
+{
+  "range": { "days": 30 },
+  "summary": {...},
+  "metrics": {...},
+  "series": [...],
+  "chartData": [...]
+}
+
+4) For LOADS DETAIL response, return list under multiple keys:
+{
+  "range": { "days": 30 },
+  "items": [...],
+  "loads": [...]
+}
+
+5) Add console logs ONLY if necessary, but remove them after confirmation.
+
+IMPLEMENTATION NOTES:
+- If analytics endpoints already exist, do NOT rewrite them fully.
+- Instead, create wrapper handlers:
+   const overviewHandler = async (req,res)=>{...existing logic...; res.json({...})}
+   Then map multiple routes to the same handler.
+- Ensure the handler reads broker from getBrokerFromRequest(req) and filters by broker.id.
+
+DELIVERABLE:
+After changes, Analytics UI must stop being stuck on “Loading analytics…”.
+Also, opening these in browser while logged in must return JSON (not 404):
+/api/analytics?days=30
+/api/analytics/overview?range=30
+/api/analytics/loads?period=30
+/api/analytics/loads-detail?days=30
+
+DO IT NOW in server/routes.ts and restart the backend.

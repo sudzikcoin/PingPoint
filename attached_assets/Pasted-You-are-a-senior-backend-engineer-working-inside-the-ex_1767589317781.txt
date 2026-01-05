@@ -1,0 +1,143 @@
+You are a senior backend engineer working inside the existing PingPoint repo on Replit.
+Goal: make CO2 emissions REAL in exported analytics CSV by computing distance + CO2 per load on the backend.
+
+STRICT RULES:
+- Minimal localized changes only (do not refactor the whole app)
+- Do not break existing endpoints
+- Implement calculations in backend so frontend CSV export stops producing empty/NaN CO2
+- Prefer using existing Drizzle + storage methods
+- Keep code in server/routes.ts (and add small helper functions there)
+- Use existing auth: getBrokerFromRequest(req)
+- Use stops.lat/lng to compute distance; DO NOT call external map APIs
+
+CONTEXT:
+- DB has stops table with lat/lng (decimal strings) and sequence order.
+- Current exported analytics CSV contains columns like “Distance (mi)” and “CO2 (kg)” but values are empty/NaN because backend does not provide them.
+- We must compute:
+  - distanceMi = sum of haversine distances between sequential stops that have coordinates
+  - co2Kg = distanceMi * emissionFactorKgPerMile
+
+EMISSION FACTOR:
+- Add an env var PINGPOINT_CO2_KG_PER_MILE (string/number) default = 1.68
+- This is a configurable approximation for a typical loaded combination truck.
+- If env var present, use it; otherwise use 1.68.
+
+TASK A — Add helpers in server/routes.ts (near top, after existing helper functions)
+Add:
+
+function toNum(v: any): number | null {
+  if (v === null || v === undefined) return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+function haversineMiles(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const R = 3958.7613; // Earth radius in miles
+  const toRad = (x: number) => (x * Math.PI) / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+}
+
+async function computeLoadDistanceAndCO2Kg(loadId: string): Promise<{ distanceMi: number | null; co2Kg: number | null }> {
+  const stops = await storage.getStopsByLoad(loadId);
+  if (!stops || stops.length < 2) return { distanceMi: null, co2Kg: null };
+
+  // Only keep stops with valid coordinates, in sequence order
+  const pts = stops
+    .map(s => {
+      const lat = toNum(s.lat);
+      const lng = toNum(s.lng);
+      if (lat === null || lng === null) return null;
+      return { lat, lng, seq: s.sequence };
+    })
+    .filter(Boolean) as Array<{ lat: number; lng: number; seq: number }>;
+
+  if (pts.length < 2) return { distanceMi: null, co2Kg: null };
+
+  pts.sort((a, b) => a.seq - b.seq);
+
+  let distance = 0;
+  for (let i = 0; i < pts.length - 1; i++) {
+    distance += haversineMiles(pts[i].lat, pts[i].lng, pts[i + 1].lat, pts[i + 1].lng);
+  }
+
+  const factor = Number(process.env.PINGPOINT_CO2_KG_PER_MILE ?? "1.68");
+  const safeFactor = Number.isFinite(factor) ? factor : 1.68;
+
+  const distanceMi = Math.round(distance * 10) / 10; // 0.1 mi
+  const co2Kg = Math.round(distanceMi * safeFactor * 100) / 100; // 0.01 kg
+
+  return { distanceMi, co2Kg };
+}
+
+TASK B — Make Analytics Loads Detail endpoint return distance + CO2
+Find your endpoint (or create if missing):
+GET /api/analytics/loads-detail?days=7|30|90&limit=200
+
+After you query loads (rows), for each load compute distanceMi & co2Kg using computeLoadDistanceAndCO2Kg(load.id).
+Return items including:
+- distanceMi
+- co2Kg
+
+Important: compute in parallel safely:
+const enriched = await Promise.all(rows.map(async (r) => {
+  const { distanceMi, co2Kg } = await computeLoadDistanceAndCO2Kg(r.id);
+  return { ...r, distanceMi, co2Kg };
+}));
+res.json({ items: enriched, ... });
+
+TASK C — Update CSV Export to include Distance + CO2 (so current export becomes meaningful)
+Existing endpoint:
+GET /api/loads/export/csv
+
+Modify it to:
+- include additional columns at the end:
+  “Distance (mi)”, “CO2 (kg)”
+- for each load:
+  call computeLoadDistanceAndCO2Kg(load.id)
+- output numeric values (or blank if null)
+
+Example headers:
+["Load Number","Shipper","Carrier","Equipment","Rate","Status","Created","Distance (mi)","CO2 (kg)"]
+
+Build rows using Promise.all because it’s async.
+
+Pseudo:
+const rows = await Promise.all(allLoads.map(async (load) => {
+  const { distanceMi, co2Kg } = await computeLoadDistanceAndCO2Kg(load.id);
+  return [
+    load.loadNumber,
+    load.shipperName,
+    load.carrierName,
+    load.equipmentType,
+    load.rateAmount,
+    load.status,
+    load.createdAt.toISOString().split("T")[0],
+    distanceMi ?? "",
+    co2Kg ?? "",
+  ];
+}));
+
+Then generate csvContent as before.
+
+TASK D — Quick verification
+1) Restart backend
+2) Call CSV:
+GET /api/loads/export/csv
+Confirm “Distance (mi)” and “CO2 (kg)” are filled for loads that have stops with coordinates.
+3) Call loads detail:
+GET /api/analytics/loads-detail?days=30
+Confirm items include distanceMi + co2Kg.
+
+EDGE CASES:
+- If a load has no stop coords => distanceMi=null, co2Kg=null (CSV blank)
+- Keep performance acceptable: only compute for loads requested (limit applies); for CSV export this is all loads, acceptable for now.
+- Do not introduce any external APIs.
+
+DELIVERABLE:
+After this change, exported analytics/load CSV will have REAL distance and REAL CO2 numbers (not NaN).

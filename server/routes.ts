@@ -2304,21 +2304,34 @@ export async function registerRoutes(
       }
 
       const allLoads = await storage.getLoadsByBroker(broker.id);
+      const co2Factor = broker.co2FactorGramPerMile ? parseFloat(broker.co2FactorGramPerMile) : 1610;
       
-      const headers = ["Load Number", "Shipper", "Carrier", "Equipment", "Rate", "Status", "Created"];
-      const rows = allLoads.map(load => [
-        load.loadNumber,
-        load.shipperName,
-        load.carrierName,
-        load.equipmentType,
-        load.rateAmount,
-        load.status,
-        load.createdAt.toISOString().split("T")[0],
-      ]);
+      const headers = ["Load Number", "Shipper", "Carrier", "Equipment", "Rate", "Status", "Created", "Distance (mi)", "CO2 (kg)"];
+      
+      const rows = await Promise.all(allLoads.map(async (load) => {
+        const stops = await storage.getStopsByLoad(load.id);
+        let distanceMiles: number | null = load.distanceMiles ? parseFloat(load.distanceMiles) : null;
+        if (distanceMiles === null && stops.length >= 2) {
+          distanceMiles = analyticsService.computeDistanceFromStops(stops);
+        }
+        const co2Kg = distanceMiles ? Math.round((distanceMiles * co2Factor) / 1000 * 100) / 100 : null;
+        
+        return [
+          load.loadNumber,
+          load.shipperName,
+          load.carrierName,
+          load.equipmentType,
+          load.rateAmount,
+          load.status,
+          load.createdAt.toISOString().split("T")[0],
+          distanceMiles !== null ? distanceMiles.toString() : "",
+          co2Kg !== null ? co2Kg.toString() : "",
+        ];
+      }));
       
       const csvContent = [
         headers.join(","),
-        ...rows.map(row => row.map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(",")),
+        ...rows.map(row => row.map(cell => `"${String(cell ?? "").replace(/"/g, '""')}"`).join(",")),
       ].join("\n");
 
       res.setHeader("Content-Type", "text/csv");

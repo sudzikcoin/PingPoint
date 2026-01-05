@@ -66,6 +66,55 @@ function getDefaultDateRange(): { from: Date; to: Date } {
   return { from, to };
 }
 
+function toNum(v: unknown): number | null {
+  if (v === null || v === undefined) return null;
+  const str = typeof v === 'string' ? v : String(v);
+  const n = parseFloat(str);
+  return Number.isFinite(n) ? n : null;
+}
+
+function haversineMiles(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const R = 3958.7613;
+  const toRad = (x: number) => (x * Math.PI) / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+}
+
+export interface StopWithCoords {
+  lat: string | null;
+  lng: string | null;
+  sequence: number;
+}
+
+export function computeDistanceFromStops(stopsData: StopWithCoords[]): number | null {
+  if (!stopsData || stopsData.length < 2) return null;
+
+  const pts = stopsData
+    .map((s) => {
+      const lat = toNum(s.lat);
+      const lng = toNum(s.lng);
+      if (lat === null || lng === null) return null;
+      return { lat, lng, seq: s.sequence };
+    })
+    .filter((p): p is { lat: number; lng: number; seq: number } => p !== null);
+
+  if (pts.length < 2) return null;
+
+  pts.sort((a, b) => a.seq - b.seq);
+
+  let distance = 0;
+  for (let i = 0; i < pts.length - 1; i++) {
+    distance += haversineMiles(pts[i].lat, pts[i].lng, pts[i + 1].lat, pts[i + 1].lng);
+  }
+
+  return Math.round(distance * 10) / 10;
+}
+
 export async function getAnalyticsOverview(
   brokerId: string,
   from?: Date,
@@ -105,8 +154,13 @@ export async function getAnalyticsOverview(
   let hasDistance = false;
 
   for (const load of loadsData) {
+    let miles: number | null = null;
     if (load.distanceMiles) {
-      const miles = parseFloat(load.distanceMiles);
+      miles = parseFloat(load.distanceMiles);
+    } else if (load.stops.length >= 2) {
+      miles = computeDistanceFromStops(load.stops);
+    }
+    if (miles !== null) {
       co2TotalKg += (miles * co2Factor) / 1000;
       hasDistance = true;
     }
@@ -316,7 +370,10 @@ export async function getAnalyticsLoadsTable(
       }
     }
 
-    const distanceMiles = load.distanceMiles ? parseFloat(load.distanceMiles) : null;
+    let distanceMiles = load.distanceMiles ? parseFloat(load.distanceMiles) : null;
+    if (distanceMiles === null && load.stops.length >= 2) {
+      distanceMiles = computeDistanceFromStops(load.stops);
+    }
     const co2Kg = distanceMiles ? Math.round((distanceMiles * co2Factor) / 1000 * 10) / 10 : null;
 
     return {
