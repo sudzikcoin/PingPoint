@@ -1,0 +1,55 @@
+You are a senior full-stack engineer. Goal: fix Git PUSH_REJECTED in this Replit workspace for repo sudzikcoin/PingPoint by syncing remote commits into local main safely, resolving conflicts if any, and pushing successfully.
+
+Hard rules:
+- Do NOT delete history or force-push unless explicitly instructed.
+- Prefer a safe rebase workflow. If rebase becomes too complex, fall back to a normal merge.
+- Keep changes minimal and preserve existing code.
+- After completion, verify that local main is up to date with origin/main and push succeeds.
+
+Steps:
+1) Open Replit Shell and run:
+   - git status
+   - git remote -v
+   - git fetch origin
+   - git branch -vv
+   - git log --oneline --decorate --graph --all -n 30
+   Capture and interpret results.
+
+2) If there are uncommitted changes:
+   - git add -A
+   - git commit -m "chore: save local WIP before sync" OR if changes should not be committed, do:
+     git stash push -u -m "replit: stash before sync"
+   Decide the safest option based on status output.
+
+3) Attempt sync with rebase:
+   - git pull --rebase origin main
+   If conflicts happen:
+   - List conflicted files: git status
+   - Resolve conflicts carefully (most likely README.md / workflow files). Prefer preserving both sides where possible.
+   - After each resolution: git add <file>
+   - Continue: git rebase --continue
+   - If rebase stops due to repeated conflicts, resolve all and continue until success.
+
+4) If rebase fails or becomes messy:
+   - Abort: git rebase --abort
+   - Do a merge instead: git pull origin main --no-rebase
+   - Resolve conflicts the same way, then commit merge if required.
+
+5) If we stashed changes earlier:
+   - Re-apply: git stash pop
+   - Resolve any conflicts and commit with message "chore: apply stashed changes after sync" if needed.
+
+6) Push:
+   - git push origin main
+   If push is rejected due to branch protection, report that clearly and propose creating a PR instead.
+
+7) Final verification:
+   - git status (should be clean)
+   - git log --oneline --decorate -n 10 (show final history)
+   - git rev-parse HEAD and compare with origin/main: git rev-parse origin/main
+   - Confirm they match and push is successful.
+
+Output:
+- Summarize what caused PUSH_REJECTED in this case (non-fast-forward vs protection).
+- List commands executed and any files that had conflicts and how they were resolved.
+- Confirm the repo is now synced and pushed.
