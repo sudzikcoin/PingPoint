@@ -182,6 +182,33 @@ export async function registerRoutes(
   httpServer: Server,
   app: Express
 ): Promise<Server> {
+  
+  // ============================================
+  // DEBUG ENDPOINTS
+  // ============================================
+  
+  // GET /api/debug/session - Verify session is working
+  app.get("/api/debug/session", async (req: Request, res: Response) => {
+    try {
+      const broker = await getBrokerFromRequest(req);
+      if (!broker) {
+        return res.status(401).json({ ok: false, error: "Unauthorized" });
+      }
+      
+      const plan = await getBillingSummary(broker.id);
+      
+      return res.json({
+        ok: true,
+        brokerId: broker.id,
+        email: broker.email,
+        plan: plan.plan,
+      });
+    } catch (error) {
+      console.error("Error in GET /api/debug/session:", error);
+      return res.status(500).json({ ok: false, error: "Internal server error" });
+    }
+  });
+
   // Broker endpoints
 
   // POST /api/brokers/ensure - Find or create broker

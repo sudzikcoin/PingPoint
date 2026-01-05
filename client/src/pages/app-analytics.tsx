@@ -3,7 +3,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { useTheme } from "@/context/theme-context";
 import { cn } from "@/lib/utils";
-import { BarChart3, Clock, Package, Leaf, Download, ChevronLeft, ChevronRight, TrendingUp, AlertCircle } from "lucide-react";
+import { apiGet } from "@/lib/api";
+import { BarChart3, Clock, Package, Leaf, Download, ChevronLeft, ChevronRight, TrendingUp, AlertCircle, LogIn } from "lucide-react";
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useLocation } from "wouter";
@@ -95,26 +96,41 @@ export default function AppAnalytics() {
 
   const { from, to } = getDateRange();
 
-  const { data: overview, isLoading: overviewLoading } = useQuery<AnalyticsOverview>({
+  // Session check query to verify authentication
+  const { data: sessionData, error: sessionError, isLoading: sessionLoading } = useQuery({
+    queryKey: ["/api/debug/session"],
+    queryFn: () => apiGet<{ ok: boolean; brokerId?: string; email?: string; plan?: string }>("/api/debug/session"),
+    retry: false,
+    staleTime: 30000,
+  });
+
+  const isAuthenticated = sessionData?.ok === true;
+
+  const { data: overview, isLoading: overviewLoading, error: overviewError } = useQuery<AnalyticsOverview>({
     queryKey: ["/api/analytics/overview", from, to],
     queryFn: async () => {
       const params = new URLSearchParams({ from, to });
-      const res = await fetch(`/api/analytics/overview?${params.toString()}`, { credentials: 'include' });
-      if (!res.ok) throw new Error('Failed to load analytics');
-      return res.json();
+      return apiGet<AnalyticsOverview>(`/api/analytics/overview?${params.toString()}`);
     },
+    enabled: isAuthenticated,
+    retry: false,
   });
 
-  const { data: loadsData, isLoading: loadsLoading } = useQuery<LoadsResponse>({
+  const { data: loadsData, isLoading: loadsLoading, error: loadsError } = useQuery<LoadsResponse>({
     queryKey: ["/api/analytics/loads", from, to, loadsPage],
     queryFn: async () => {
       const params = new URLSearchParams({ from, to, page: loadsPage.toString(), limit: '25' });
-      const res = await fetch(`/api/analytics/loads?${params.toString()}`, { credentials: 'include' });
-      if (!res.ok) throw new Error('Failed to load analytics loads');
-      return res.json();
+      return apiGet<LoadsResponse>(`/api/analytics/loads?${params.toString()}`);
     },
-    enabled: activeTab === 'loads',
+    enabled: isAuthenticated && activeTab === 'loads',
+    retry: false,
   });
+
+  // Session error is global (blocks everything), but tab-specific errors only show on their own tab
+  const sessionErrorMessage = sessionError?.message;
+  // Only show tab-specific errors when that tab is active (prevent stale errors from persisting across tabs)
+  const overviewErrorMessage = activeTab === 'overview' ? overviewError?.message : undefined;
+  const loadsErrorMessage = activeTab === 'loads' ? loadsError?.message : undefined;
 
   const handleExportCsv = () => {
     const params = new URLSearchParams({ from, to });
@@ -248,9 +264,48 @@ export default function AppAnalytics() {
           </Button>
         </div>
 
-        {activeTab === 'overview' && (
+        {/* Session error - blocks everything */}
+        {sessionErrorMessage && (
+          <div className={cn(
+            "flex flex-col items-center gap-4 p-8 rounded-lg border",
+            theme === "arcade90s"
+              ? "bg-red-900/20 border-red-500/30 text-red-400"
+              : "bg-red-900/20 border-red-500/30 text-red-400"
+          )}>
+            <AlertCircle className="w-8 h-8" />
+            <div className="text-lg font-medium">Session Error</div>
+            <div className="text-sm opacity-80">{sessionErrorMessage}</div>
+            {sessionErrorMessage.includes("Unauthorized") && (
+              <Button
+                onClick={() => setLocation('/app/login')}
+                className="gap-2 mt-2"
+                data-testid="button-login-redirect"
+              >
+                <LogIn className="w-4 h-4" />
+                Go to Login
+              </Button>
+            )}
+          </div>
+        )}
+
+        {/* Loading state while checking session */}
+        {sessionLoading && !sessionErrorMessage && (
+          <div className={cn("text-center py-12", theme === "arcade90s" ? "text-arc-muted" : "text-brand-muted")}>
+            Checking session...
+          </div>
+        )}
+
+        {activeTab === 'overview' && !sessionErrorMessage && (
           <>
-            {overviewLoading ? (
+            {overviewErrorMessage ? (
+              <div className={cn(
+                "flex flex-col items-center gap-4 p-8 rounded-lg border",
+                "bg-red-900/20 border-red-500/30 text-red-400"
+              )}>
+                <AlertCircle className="w-6 h-6" />
+                <div className="text-sm">Failed to load overview: {overviewErrorMessage}</div>
+              </div>
+            ) : (overviewLoading || sessionLoading) ? (
               <div className={cn("text-center py-12", theme === "arcade90s" ? "text-arc-muted" : "text-brand-muted")}>
                 Loading analytics...
               </div>
@@ -406,9 +461,17 @@ export default function AppAnalytics() {
           </>
         )}
 
-        {activeTab === 'loads' && (
+        {activeTab === 'loads' && !sessionErrorMessage && (
           <>
-            {loadsLoading ? (
+            {loadsErrorMessage ? (
+              <div className={cn(
+                "flex flex-col items-center gap-4 p-8 rounded-lg border",
+                "bg-red-900/20 border-red-500/30 text-red-400"
+              )}>
+                <AlertCircle className="w-6 h-6" />
+                <div className="text-sm">Failed to load data: {loadsErrorMessage}</div>
+              </div>
+            ) : (loadsLoading || sessionLoading) ? (
               <div className={cn("text-center py-12", theme === "arcade90s" ? "text-arc-muted" : "text-brand-muted")}>
                 Loading loads...
               </div>

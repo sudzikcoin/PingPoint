@@ -1,0 +1,98 @@
+You are a senior full-stack engineer working inside the existing PingPoint repo on Replit.
+
+USER PROBLEM:
+Analytics page is stuck forever on “Loading analytics…” even after backend analytics endpoints were added.
+Backend logs claim analytics returns 200 with data when authenticated, but UI never updates.
+
+GOAL (FIX ONCE AND FOR ALL):
+Make analytics page reliably load data by:
+1) Adding a debug endpoint to verify the browser session/cookies are actually reaching the backend.
+2) Centralizing frontend API fetch to ALWAYS send cookies and to handle errors deterministically.
+3) Updating the Analytics page to show real errors (401/500/shape mismatch) instead of infinite loading.
+4) Making the Analytics page use the correct endpoints and accept both old/new response shapes.
+
+STRICT RULES:
+- Minimal localized changes only.
+- Do not refactor the whole app.
+- Do not break existing endpoints.
+- Keep auth intact: analytics MUST still require a session.
+- Implement server-side debug endpoint in server/routes.ts.
+- Fix frontend in the analytics page file(s) and/or shared fetch utility, without redesigning UI.
+
+PART A — BACKEND: add a session debug endpoint
+In server/routes.ts add:
+
+GET /api/debug/session
+- Uses getBrokerFromRequest(req)
+- If no broker => 401 { ok:false, error:"Unauthorized" }
+- If broker => 200 { ok:true, brokerId, email?, plan? } (only safe fields)
+
+This endpoint is ONLY for confirming session cookies flow.
+
+PART B — FRONTEND: create one shared fetch helper that always sends cookies and always throws on non-200
+Find or create a small helper, e.g. client/src/lib/api.ts (or existing equivalent).
+Implement:
+
+export async function apiGet<T>(path: string): Promise<T> {
+  const res = await fetch(path, {
+    method: "GET",
+    credentials: "include",
+    headers: { "Accept": "application/json" },
+    cache: "no-store",
+  });
+  const text = await res.text();
+  let json: any = null;
+  try { json = text ? JSON.parse(text) : null; } catch { json = { raw: text }; }
+
+  if (!res.ok) {
+    const msg = json?.error || json?.message || `HTTP ${res.status}`;
+    throw new Error(msg);
+  }
+  return json as T;
+}
+
+IMPORTANT:
+- Use relative paths only ("/api/..."), NOT absolute backend URLs, to avoid cookie domain issues.
+- credentials:"include" is mandatory.
+
+PART C — FRONTEND: fix Analytics page to stop infinite loading and to show real errors
+Locate analytics page file mentioned in logs (agent opened something like client/src/pages/app-analytics...).
+In that page:
+1) Replace any direct fetch(...) calls with apiGet(...)
+2) Add a “debug phase”:
+   - call apiGet("/api/debug/session")
+   - if it throws “Unauthorized” => show a visible message “Not logged in / session missing” and a button/link to Login
+3) Then call the analytics endpoints:
+   - overview: try "/api/analytics/overview?days=30" first, fallback to "/api/analytics?days=30"
+   - loads detail: try "/api/analytics/loads-detail?days=30" fallback to "/api/analytics/loads?days=30"
+4) Normalize response shapes:
+   - series = response.series || response.chartData || response.data?.series || []
+   - summary = response.summary || response.metrics || response.data?.summary || {}
+   - items = response.items || response.loads || response.data?.items || []
+
+5) Ensure loading state ALWAYS ends:
+   - setLoading(true) before
+   - in finally => setLoading(false)
+   - on catch => setError(err.message) and setLoading(false)
+
+6) Render:
+   - if loading => show “Loading analytics…”
+   - if error => show error text on screen (big, readable)
+   - if data empty => show “No data for selected range”
+
+PART D — VERIFY INSTRUCTIONS (must be performed by the agent)
+After code changes:
+1) Restart dev server.
+2) Open in browser while logged in:
+   - /api/debug/session  -> must return 200 JSON (NOT 401)
+   - /api/analytics/overview?days=30 -> must return 200 JSON
+3) Open Analytics page:
+   - It must NOT hang on “Loading analytics…”
+   - If unauthorized, it must show the real error message
+   - If shape mismatch, it must still render empty-state or charts
+
+DELIVERABLE:
+Analytics page loads or shows a clear actionable error instead of infinite loading.
+This must work on mobile Safari (iPhone) where devtools are limited.
+
+NOW implement Parts A–D.

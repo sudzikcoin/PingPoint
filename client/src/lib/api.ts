@@ -1,6 +1,29 @@
 // Real backend API client for PingPoint
 // All calls now go to the actual Express backend
 
+// Generic GET helper that always sends cookies and throws on non-200
+export async function apiGet<T>(path: string): Promise<T> {
+  const res = await fetch(path, {
+    method: "GET",
+    credentials: "include",
+    headers: { "Accept": "application/json" },
+    cache: "no-store",
+  });
+  const text = await res.text();
+  let json: any = null;
+  try {
+    json = text ? JSON.parse(text) : null;
+  } catch {
+    json = { raw: text };
+  }
+
+  if (!res.ok) {
+    const msg = json?.error || json?.message || `HTTP ${res.status}`;
+    throw new Error(msg);
+  }
+  return json as T;
+}
+
 export interface BrokerWorkspace {
   id: string;
   email: string;
