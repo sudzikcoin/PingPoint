@@ -37,6 +37,7 @@ export interface ParseResult {
 
 export async function parsePdfRateConfirmation(pdfFilePath: string): Promise<ParseResult> {
   if (!CLAUDE_API_KEY) {
+    fs.unlink(pdfFilePath, () => {});
     return {
       success: false,
       error: "Claude API key not configured. Set ANTHROPIC_API_KEY or CLAUDE_API_KEY environment variable.",

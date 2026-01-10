@@ -33,6 +33,7 @@ Preferred communication style: Simple, everyday language.
 ### Feature Specifications
 
 - **Load Management**: Create, manage, and assign loads; update load statuses. Rate confirmation upload with file attachment to loads.
+    - **PDF Parsing**: Upload rate confirmation PDFs to auto-fill load creation forms using Claude API (requires ANTHROPIC_API_KEY). Extracts pickup/delivery addresses, rate, carrier, shipper, and equipment type.
 - **Driver Management**: Full driver CRM at /app/drivers with:
     - **Driver CRUD**: Create, update drivers with name, phone, email, truck number, equipment type.
     - **Tags & Flags**: Tags (e.g., reefer, team), favorite and blocked status.

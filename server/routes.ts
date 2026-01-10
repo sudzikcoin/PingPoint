@@ -2382,6 +2382,34 @@ export async function registerRoutes(
 
   app.use("/uploads", express.static(path.join(process.cwd(), "uploads")));
 
+  // POST /api/pdf/parse-rate-confirmation - Parse PDF with Claude API and return extracted data
+  app.post("/api/pdf/parse-rate-confirmation", upload.single("pdf"), async (req: Request, res: Response) => {
+    try {
+      const broker = await getBrokerFromRequest(req);
+      if (!broker) {
+        return res.status(401).json({ error: "Unauthorized" });
+      }
+
+      const file = req.file;
+      if (!file) {
+        return res.status(400).json({ success: false, error: "No PDF file uploaded" });
+      }
+
+      if (file.mimetype !== "application/pdf") {
+        fs.unlinkSync(path.join(uploadsDir, file.filename));
+        return res.status(400).json({ success: false, error: "Only PDF files are accepted for parsing" });
+      }
+
+      const { parsePdfRateConfirmation } = await import("./services/pdfParser");
+      const result = await parsePdfRateConfirmation(path.join(uploadsDir, file.filename));
+
+      return res.json(result);
+    } catch (error: any) {
+      console.error("Error in POST /api/pdf/parse-rate-confirmation:", error);
+      return res.status(500).json({ success: false, error: error.message || "Failed to parse PDF" });
+    }
+  });
+
   // POST /api/rate-confirmations - Upload rate confirmation file (optionally attach to load)
   const ALLOWED_RC_MIMETYPES = [
     "application/pdf",

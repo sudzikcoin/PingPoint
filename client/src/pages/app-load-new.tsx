@@ -8,7 +8,7 @@ import { useLocation } from "wouter";
 import { useState, useEffect } from "react";
 import { useTheme } from "@/context/theme-context";
 import { cn } from "@/lib/utils";
-import { ArrowLeft, Plus, X } from "lucide-react";
+import { ArrowLeft, Plus, X, Upload, FileText, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 
 interface StopForm {
@@ -47,6 +47,86 @@ export default function AppLoadNew() {
   // Multi-stop arrays
   const [pickups, setPickups] = useState<StopForm[]>([{ ...emptyStop }]);
   const [deliveries, setDeliveries] = useState<StopForm[]>([{ ...emptyStop }]);
+
+  // PDF parsing state
+  const [isParsing, setIsParsing] = useState(false);
+  const [pdfFileName, setPdfFileName] = useState<string | null>(null);
+
+  const handlePdfUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    if (file.type !== "application/pdf") {
+      toast.error("Please upload a PDF file");
+      return;
+    }
+
+    setIsParsing(true);
+    setPdfFileName(file.name);
+
+    const formData = new FormData();
+    formData.append("pdf", file);
+
+    try {
+      const response = await fetch("/api/pdf/parse-rate-confirmation", {
+        method: "POST",
+        body: formData,
+        credentials: "include",
+      });
+
+      const result = await response.json();
+
+      if (result.success && result.data) {
+        const d = result.data;
+
+        if (d.shipperName) setShipperName(d.shipperName);
+        if (d.carrierName) setCarrierName(d.carrierName);
+        if (d.driverPhone) setDriverPhone(d.driverPhone);
+        if (d.customerRef) setCustomerRef(d.customerRef);
+        if (d.rate) setRateAmount(d.rate);
+        if (d.equipmentType) {
+          const eqMap: Record<string, string> = {
+            "DRY VAN": "VAN", "VAN": "VAN",
+            "REEFER": "REEFER", "REFRIGERATED": "REEFER",
+            "FLATBED": "FLATBED", "FLAT": "FLATBED"
+          };
+          setEquipmentType(eqMap[d.equipmentType.toUpperCase()] || "VAN");
+        }
+
+        if (d.pickupAddress || d.pickupCity || d.pickupState) {
+          setPickups([{
+            name: d.shipperName || "",
+            address: d.pickupAddress || "",
+            city: d.pickupCity || "",
+            state: d.pickupState || "",
+            zip: d.pickupZip || "",
+          }]);
+        }
+
+        if (d.deliveryAddress || d.deliveryCity || d.deliveryState) {
+          setDeliveries([{
+            name: d.receiverName || "",
+            address: d.deliveryAddress || "",
+            city: d.deliveryCity || "",
+            state: d.deliveryState || "",
+            zip: d.deliveryZip || "",
+          }]);
+        }
+
+        toast.success("PDF parsed successfully! Please review the form.");
+      } else {
+        toast.error(result.error || "Failed to parse PDF");
+        setPdfFileName(null);
+      }
+    } catch (error: any) {
+      console.error("PDF upload error:", error);
+      toast.error("Error uploading PDF");
+      setPdfFileName(null);
+    } finally {
+      setIsParsing(false);
+      event.target.value = "";
+    }
+  };
 
   // Fetch broker profile on mount to prefill form
   useEffect(() => {
@@ -342,6 +422,85 @@ export default function AppLoadNew() {
             </p>
           </div>
         </div>
+
+        {/* PDF Upload Section */}
+        <Card className={cn(
+          "border-dashed",
+          theme === "arcade90s" 
+            ? "arcade-panel border-arc-secondary/50 rounded-none bg-arc-bg/30" 
+            : "bg-brand-card/50 border-brand-border"
+        )}>
+          <CardContent className="py-4">
+            <div className="flex flex-col sm:flex-row items-center gap-4">
+              <div className={cn(
+                "w-12 h-12 rounded-lg flex items-center justify-center flex-shrink-0",
+                theme === "arcade90s" ? "bg-arc-secondary/20" : "bg-brand-gold/10"
+              )}>
+                <FileText className={cn(
+                  "w-6 h-6",
+                  theme === "arcade90s" ? "text-arc-secondary" : "text-brand-gold"
+                )} />
+              </div>
+              <div className="flex-1 text-center sm:text-left">
+                <h3 className={cn(
+                  "font-semibold text-sm",
+                  theme === "arcade90s" ? "text-arc-text arcade-pixel-font" : "text-white"
+                )}>
+                  Quick Fill from Rate Confirmation
+                </h3>
+                <p className={cn(
+                  "text-xs mt-1",
+                  theme === "arcade90s" ? "text-arc-muted" : "text-brand-muted"
+                )}>
+                  Upload a PDF and we'll extract pickup, delivery, and rate details automatically
+                </p>
+              </div>
+              <div className="flex-shrink-0">
+                <label
+                  htmlFor="pdf-upload"
+                  className={cn(
+                    "inline-flex items-center gap-2 px-4 py-2 text-xs font-medium border rounded cursor-pointer transition-colors",
+                    isParsing && "opacity-50 cursor-not-allowed",
+                    theme === "arcade90s"
+                      ? "border-arc-secondary text-arc-secondary hover:bg-arc-secondary/10 rounded-none arcade-pixel-font"
+                      : "border-brand-gold text-brand-gold hover:bg-brand-gold/10"
+                  )}
+                  data-testid="button-upload-pdf"
+                >
+                  {isParsing ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      Parsing...
+                    </>
+                  ) : (
+                    <>
+                      <Upload className="w-4 h-4" />
+                      Upload PDF
+                    </>
+                  )}
+                </label>
+                <input
+                  id="pdf-upload"
+                  type="file"
+                  accept=".pdf,application/pdf"
+                  onChange={handlePdfUpload}
+                  disabled={isParsing}
+                  className="hidden"
+                  data-testid="input-pdf-file"
+                />
+              </div>
+            </div>
+            {pdfFileName && !isParsing && (
+              <div className={cn(
+                "mt-3 text-xs flex items-center gap-2",
+                theme === "arcade90s" ? "text-arc-primary" : "text-emerald-400"
+              )}>
+                <FileText className="w-4 h-4" />
+                Parsed: {pdfFileName}
+              </div>
+            )}
+          </CardContent>
+        </Card>
 
         {/* Limit Reached Banner */}
         {limitReached && (
