@@ -2,45 +2,89 @@ import { db } from "./db";
 import { stops } from "@shared/schema";
 import { eq } from "drizzle-orm";
 
-const GEOCODING_API_KEY = process.env.GEOCODING_API_KEY || process.env.MAPBOX_TOKEN || process.env.GOOGLE_MAPS_KEY;
+const OPENCAGE_API_KEY = process.env.OPENCAGE_API_KEY;
 
 interface GeocodeResult {
   lat: number;
   lng: number;
 }
 
-export async function geocodeAddress(address: string): Promise<GeocodeResult | null> {
-  if (!GEOCODING_API_KEY) {
-    console.log(`[Geocode] GEOCODE_SKIPPED_NO_KEY address="${address.substring(0, 50)}..."`);
-    return null;
-  }
-
+async function geocodeWithNominatim(address: string): Promise<GeocodeResult | null> {
   try {
     const encoded = encodeURIComponent(address);
-    const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encoded}.json?access_token=${GEOCODING_API_KEY}&limit=1`;
-    
-    console.log(`[Geocode] Requesting geocode for: "${address.substring(0, 50)}..."`);
-    
-    const response = await fetch(url);
+    const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encoded}&limit=1`;
+
+    const response = await fetch(url, {
+      headers: {
+        "User-Agent": "PingPoint/1.0 (logistics tracking platform)",
+      },
+    });
+
     if (!response.ok) {
-      console.log(`[Geocode] API error status=${response.status} for address="${address.substring(0, 50)}..."`);
+      console.log(`[Geocode] Nominatim error status=${response.status}`);
       return null;
     }
 
     const data = await response.json();
-    
-    if (data.features && data.features.length > 0) {
-      const [lng, lat] = data.features[0].center;
-      console.log(`[Geocode] SUCCESS address="${address.substring(0, 50)}..." lat=${lat} lng=${lng}`);
+
+    if (data && data.length > 0) {
+      const lat = parseFloat(data[0].lat);
+      const lng = parseFloat(data[0].lon);
+      console.log(`[Geocode] Nominatim SUCCESS address="${address.substring(0, 50)}..." lat=${lat} lng=${lng}`);
       return { lat, lng };
     }
 
-    console.log(`[Geocode] No results for address="${address.substring(0, 50)}..."`);
     return null;
   } catch (error) {
-    console.error(`[Geocode] Error geocoding address="${address.substring(0, 50)}...":`, error);
+    console.error(`[Geocode] Nominatim error:`, error);
     return null;
   }
+}
+
+async function geocodeWithOpenCage(address: string): Promise<GeocodeResult | null> {
+  if (!OPENCAGE_API_KEY) return null;
+
+  try {
+    const encoded = encodeURIComponent(address);
+    const url = `https://api.opencagedata.com/geocode/v1/json?q=${encoded}&key=${OPENCAGE_API_KEY}&limit=1`;
+
+    const response = await fetch(url);
+
+    if (!response.ok) {
+      console.log(`[Geocode] OpenCage error status=${response.status}`);
+      return null;
+    }
+
+    const data = await response.json();
+
+    if (data.results && data.results.length > 0) {
+      const { lat, lng } = data.results[0].geometry;
+      console.log(`[Geocode] OpenCage SUCCESS address="${address.substring(0, 50)}..." lat=${lat} lng=${lng}`);
+      return { lat, lng };
+    }
+
+    return null;
+  } catch (error) {
+    console.error(`[Geocode] OpenCage error:`, error);
+    return null;
+  }
+}
+
+export async function geocodeAddress(address: string): Promise<GeocodeResult | null> {
+  console.log(`[Geocode] Requesting geocode for: "${address.substring(0, 50)}..."`);
+
+  let result = await geocodeWithNominatim(address);
+
+  if (!result && OPENCAGE_API_KEY) {
+    console.log(`[Geocode] Nominatim failed, trying OpenCage...`);
+    result = await geocodeWithOpenCage(address);
+  }
+
+  if (!result) {
+    console.log(`[Geocode] No results for address="${address.substring(0, 50)}..."`);
+  }
+
+  return result;
 }
 
 export async function ensureStopCoords(stop: {
@@ -69,7 +113,7 @@ export async function ensureStopCoords(stop: {
       return null;
     }
   }
-  
+
   const result = await geocodeAddress(address);
 
   if (!result) {
