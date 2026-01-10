@@ -18,6 +18,7 @@
     "e2e:install": "playwright install --with-deps"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.71.2",
     "@coinbase/wallet-sdk": "^4.3.7",
     "@hookform/resolvers": "^3.10.0",
     "@jridgewell/trace-mapping": "^0.3.25",
