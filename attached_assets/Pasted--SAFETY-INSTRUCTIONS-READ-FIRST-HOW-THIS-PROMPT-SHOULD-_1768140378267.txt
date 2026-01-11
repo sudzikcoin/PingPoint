@@ -1,0 +1,154 @@
+⚠️ SAFETY INSTRUCTIONS - READ FIRST:
+
+HOW THIS PROMPT SHOULD WORK:
+1. CREATE NEW rate limiter middleware files
+2. ADD rate limiters to routes WITHOUT modifying route logic
+3. APPLY limiters one route at a time, test each
+4. START with lenient limits, can tighten later
+5. Make rate limits configurable via environment variables
+6. Ensure rate limiting doesn't break existing functionality
+
+WHAT TO PRESERVE:
+- All existing routes must work exactly as before
+- Rate limiters should only add headers and block excessive requests
+- Don't change any response formats for successful requests
+- Legitimate users should not be affected by initial limits
+
+ROLLBACK PLAN:
+- Rate limiting can be disabled via env var: ENABLE_RATE_LIMITING=false
+- Can remove rate limiter middleware imports to revert
+- Limits should be configurable, can be set very high if issues occur
+
+---
+
+Add Rate Limiting to Prevent Abuse and Control Costs
+
+PROBLEM:
+API endpoints have no rate limiting. PDF parsing endpoint could be spammed, causing high Claude API costs. Auth endpoints vulnerable to brute force.
+
+REQUIRED FIX:
+
+1. Install express-rate-limit:
+npm install express-rate-limit
+
+2. Create rate limiter configurations:
+
+File: server/middleware/rateLimiter.ts (NEW FILE)
+
+IMPORTANT: Start with LENIENT limits, can tighten later:
+
+Create multiple rate limiters:
+
+generalLimiter:
+- 200 requests per 15 minutes per IP (generous for development)
+- Applies to all API routes
+- Can be disabled via ENABLE_RATE_LIMITING=false
+
+pdfParsingLimiter:
+- 20 requests per hour per user (doubled from strict limit)
+- Expensive Claude API calls
+- Message: "PDF parsing limit reached. Maximum 20 per hour."
+
+loadCreationLimiter:
+- 100 requests per hour per user (doubled from strict)
+- Prevent spam load creation
+
+authLimiter:
+- 10 failed login attempts per 15 minutes per IP (doubled)
+- Prevent brute force attacks
+- Message: "Too many login attempts. Try again in 15 minutes."
+
+Add configuration via environment:
+const limitsEnabled = process.env.ENABLE_RATE_LIMITING !== 'false';
+
+if (!limitsEnabled) {
+  // Return no-op middleware if disabled
+  return (req, res, next) => next();
+}
+
+3. Apply rate limiters to routes (one at a time):
+
+In server/server.ts:
+
+Step 1: Add general limiter (test that everything still works):
+if (process.env.ENABLE_RATE_LIMITING !== 'false') {
+  app.use('/api/', generalLimiter);
+  console.log('✅ Rate limiting enabled');
+} else {
+  console.log('⚠️  Rate limiting disabled');
+}
+
+Step 2: Add specific limiters to routes (after testing general):
+
+In server/routes/pdf.ts:
+// Add before the route handler
+router.post('/parse-rate-confirmation', pdfParsingLimiter, parseRateConfirmation);
+
+In server/routes/loads.ts:
+router.post('/loads', loadCreationLimiter, createLoad);
+
+In server/routes/auth.ts:
+router.post('/login', authLimiter, login);
+
+CRITICAL: Test each limiter addition separately. Don't add all at once.
+
+4. Add rate limit headers to responses:
+
+Rate limiter automatically includes these headers:
+- X-RateLimit-Limit: maximum requests allowed
+- X-RateLimit-Remaining: requests remaining in window
+- X-RateLimit-Reset: timestamp when limit resets
+
+No code changes needed for this.
+
+5. Return clear error when limit exceeded:
+
+Customize error response:
+
+statusCode: 429
+headers: { 'Retry-After': seconds }
+body: {
+  error: "Rate limit exceeded",
+  message: "PDF parsing limit reached. Maximum 20 per hour.",
+  retryAfter: 3420,
+  limit: 20,
+  remaining: 0
+}
+
+Add custom handler in rateLimiter.ts:
+
+handler: (req, res) => {
+  res.status(429).json({
+    error: 'Rate limit exceeded',
+    message: 'Too many requests. Please try again later.',
+    retryAfter: req.rateLimit.resetTime
+  });
+}
+
+CRITICAL: Rate limiting should never break existing functionality, only add protection.
+
+EXPECTED RESULT:
+- API protected from abuse and spam
+- Claude API costs controlled (can't spam expensive parsing)
+- Auth endpoints protected from brute force
+- Users get clear feedback about limits
+- Legitimate usage not impacted (limits are generous)
+- Can disable rate limiting if it causes issues
+
+FILES TO CREATE:
+- server/middleware/rateLimiter.ts (NEW FILE with all limiters)
+
+FILES TO MODIFY:
+- server/server.ts (apply general limiter, make it optional)
+- server/routes/pdf.ts (add PDF parsing limiter to specific route)
+- server/routes/loads.ts (add load creation limiter to specific route)
+- server/routes/auth.ts (add auth limiter to login route)
+
+TESTING CHECKLIST:
+1. Start server with ENABLE_RATE_LIMITING=false - should work as before
+2. Enable rate limiting - should work normally for regular usage
+3. Make 200 API calls rapidly - should get rate limited
+4. Check X-RateLimit-* headers are present in responses
+5. Try to parse PDF 21 times in hour - 21st should fail with 429
+6. Verify legitimate users can still use app normally
+7. Test that rate limit resets after time window

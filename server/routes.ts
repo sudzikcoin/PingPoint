@@ -11,7 +11,7 @@ import path from "path";
 import fs from "fs";
 import express from "express";
 import { sendBrokerVerificationEmail, sendDriverAppLink } from "./email";
-import { strictRateLimit } from "./middleware/rateLimit";
+import { strictRateLimit, authLimiter, signupLimiter, pdfParsingLimiter, loadCreationLimiter } from "./middleware/rateLimit";
 import { shouldAcceptPing, MIN_PING_INTERVAL_MS } from "./utils/rateLimit";
 import { checkAndConsumeLoadAllowance, rollbackLoadAllowance, getBillingSummary, FREE_INCLUDED_LOADS } from "./billing/entitlements";
 import { createCheckoutSession, createSubscriptionCheckoutSession, createBillingPortalSession, getStripeCustomerByEmail, verifyWebhookSignature, processStripeEvent, grantReferralRewardsIfEligible } from "./billing/stripe";
@@ -243,7 +243,7 @@ export async function registerRoutes(
   // Broker endpoints
 
   // POST /api/brokers/signup - Create a new broker account (rate limited: 5 per minute)
-  app.post("/api/brokers/signup", strictRateLimit(5, 60000), async (req: Request, res: Response) => {
+  app.post("/api/brokers/signup", signupLimiter, async (req: Request, res: Response) => {
     try {
       const { email, name, referralCode } = req.body;
       
@@ -527,7 +527,7 @@ export async function registerRoutes(
   });
 
   // POST /api/brokers/login - Trusted device login flow
-  app.post("/api/brokers/login", strictRateLimit(10, 60000), async (req: Request, res: Response) => {
+  app.post("/api/brokers/login", authLimiter, async (req: Request, res: Response) => {
     try {
       const { email } = req.body;
       
@@ -769,7 +769,7 @@ export async function registerRoutes(
   // POST /api/loads - Create new load
   // First-time brokers can create their first load; verification email is sent.
   // Subsequent loads require email verification.
-  app.post("/api/loads", async (req: Request, res: Response) => {
+  app.post("/api/loads", loadCreationLimiter, async (req: Request, res: Response) => {
     let broker: any = null;
     let allowanceResult: { allowed: boolean; usedCredit?: boolean } | null = null;
     
@@ -2440,7 +2440,7 @@ export async function registerRoutes(
   app.use("/uploads", express.static(path.join(process.cwd(), "uploads")));
 
   // POST /api/pdf/parse-rate-confirmation - Parse PDF with Claude API and return extracted data
-  app.post("/api/pdf/parse-rate-confirmation", upload.single("pdf"), async (req: Request, res: Response) => {
+  app.post("/api/pdf/parse-rate-confirmation", pdfParsingLimiter, upload.single("pdf"), async (req: Request, res: Response) => {
     try {
       const broker = await getBrokerFromRequest(req);
       if (!broker) {
