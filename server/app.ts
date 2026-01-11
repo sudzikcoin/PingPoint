@@ -1,5 +1,7 @@
 import express, { type Express, type Request, Response, NextFunction } from "express";
 import cookieParser from "cookie-parser";
+import helmet from "helmet";
+import compression from "compression";
 import { createServer as createHttpServer, Server } from "http";
 import { registerRoutes, registerHealthRoutes } from "./routes";
 import { errorHandler, securityHeaders, corsHandler, generalLimiter, logRateLimitStatus, logCorsStatus } from "./middleware";
@@ -30,6 +32,15 @@ export async function createApp(): Promise<AppInstance> {
   const app = express();
   const httpServer = createHttpServer(app);
 
+  // Security headers via helmet (before other middleware)
+  app.use(helmet({
+    contentSecurityPolicy: false, // Disable CSP for API flexibility
+    crossOriginEmbedderPolicy: false, // Allow embedding from other origins
+  }));
+  
+  // Gzip compression for responses
+  app.use(compression());
+  
   app.use(securityHeaders);
   app.use(corsHandler);
   app.use(cookieParser());

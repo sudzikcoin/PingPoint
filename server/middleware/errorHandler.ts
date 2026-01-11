@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction, ErrorRequestHandler } from "express";
 import { ZodError } from "zod";
+import multer from "multer";
 import { isProduction, isTest } from "../config";
 import { logger } from "../utils/logger";
 
@@ -75,6 +76,32 @@ export const errorHandler: ErrorRequestHandler = (
       error: "Validation error",
       code: "VALIDATION_ERROR",
       details: isProduction() ? undefined : formatZodError(err),
+    });
+    return;
+  }
+  
+  // Handle multer errors (file upload issues)
+  if (err instanceof multer.MulterError) {
+    let message = "File upload error";
+    if (err.code === "LIMIT_FILE_SIZE") {
+      message = "File too large. Maximum size is 10MB.";
+    } else if (err.code === "LIMIT_UNEXPECTED_FILE") {
+      message = "Only PDF files are allowed.";
+    } else if (err.code === "LIMIT_FILE_COUNT") {
+      message = "Too many files uploaded.";
+    }
+    res.status(400).json({
+      error: message,
+      code: "FILE_UPLOAD_ERROR",
+    });
+    return;
+  }
+  
+  // Handle generic file type errors
+  if (err.message?.includes("PDF") || err.message?.includes("file")) {
+    res.status(400).json({
+      error: err.message,
+      code: "FILE_UPLOAD_ERROR",
     });
     return;
   }

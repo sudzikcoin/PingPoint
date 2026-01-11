@@ -53,9 +53,28 @@ const multerStorage = multer.diskStorage({
   },
 });
 
+// General file upload (PDFs and images for rate confirmations)
 const upload = multer({
   storage: multerStorage,
   limits: { fileSize: 10 * 1024 * 1024 }, // 10 MB
+});
+
+// PDF-only upload for parsing endpoints
+const pdfUpload = multer({
+  storage: multerStorage,
+  limits: { fileSize: 10 * 1024 * 1024 }, // 10 MB
+  fileFilter: (_req, file, cb) => {
+    const allowedMimes = ["application/pdf"];
+    const allowedExts = [".pdf"];
+    const ext = path.extname(file.originalname).toLowerCase();
+    
+    if (allowedMimes.includes(file.mimetype) || allowedExts.includes(ext)) {
+      cb(null, true);
+    } else {
+      console.warn(`[Upload] Rejected non-PDF file: ${file.originalname} (${file.mimetype})`);
+      cb(new multer.MulterError("LIMIT_UNEXPECTED_FILE", "file") as any);
+    }
+  },
 });
 
 function generateLoadNumber(): string {
@@ -176,7 +195,19 @@ async function sendDriverSMS(phone: string, url: string): Promise<void> {
 
 export function registerHealthRoutes(app: Express) {
   app.get("/api/health", (_req: Request, res: Response) => {
-    res.json({ status: "ok", timestamp: new Date().toISOString() });
+    const memoryUsage = process.memoryUsage();
+    res.json({
+      status: "ok",
+      timestamp: new Date().toISOString(),
+      uptime: Math.round(process.uptime()),
+      memory: {
+        heapUsedMB: Math.round(memoryUsage.heapUsed / 1024 / 1024),
+        heapTotalMB: Math.round(memoryUsage.heapTotal / 1024 / 1024),
+        rssMB: Math.round(memoryUsage.rss / 1024 / 1024),
+      },
+      nodeVersion: process.version,
+      environment: process.env.NODE_ENV || "development",
+    });
   });
 
   // Cron job status endpoint
@@ -2440,7 +2471,7 @@ export async function registerRoutes(
   app.use("/uploads", express.static(path.join(process.cwd(), "uploads")));
 
   // POST /api/pdf/parse-rate-confirmation - Parse PDF with Claude API and return extracted data
-  app.post("/api/pdf/parse-rate-confirmation", pdfParsingLimiter, upload.single("pdf"), async (req: Request, res: Response) => {
+  app.post("/api/pdf/parse-rate-confirmation", pdfParsingLimiter, pdfUpload.single("pdf"), async (req: Request, res: Response) => {
     try {
       const broker = await getBrokerFromRequest(req);
       if (!broker) {

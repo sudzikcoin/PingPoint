@@ -1,0 +1,1101 @@
+
+```markdown
+# Complete PingPoint Enhancement - Fix All Remaining Issues
+
+## OVERVIEW
+This prompt addresses all remaining minor issues and improvements in PingPoint after initial fixes. Implement ALL sections below in order. Each section is independent and safe.
+
+## SAFETY INSTRUCTIONS
+- DO NOT modify existing working functionality
+- ADD new code, don't replace existing logic
+- WRAP all changes in try/catch for safety
+- TEST each section works before moving to next
+- Keep rollback capability (original code in comments)
+- If any change breaks something, skip it and log warning
+
+---
+
+## SECTION 1: GEOCODING IMPROVEMENTS
+
+### File: server/services/geocoding.ts
+
+Add rate limiting, retry logic, caching, and coordinate validation to existing geocoding function.
+
+CURRENT STATE:
+```typescript
+export async function geocodeAddress(address: string) {
+  try {
+    const response = await axios.get('https://nominatim.openstreetmap.org/search', {
+      params: { q: address, format: 'json', limit: 1 },
+      headers: { 'User-Agent': 'PingPoint-App/1.0' }
+    });
+    
+    if (response.data && response.data.length > 0) {
+      return {
+        lat: parseFloat(response.data[0].lat),
+        lng: parseFloat(response.data[0].lon)
+      };
+    }
+    
+    return { lat: null, lng: null };
+  } catch (error) {
+    console.error('Geocoding error:', error);
+    return { lat: null, lng: null };
+  }
+}
+```
+
+REQUIRED IMPROVEMENTS:
+
+1. Add in-memory cache for geocoding results:
+
+```typescript
+const geocodeCache = new Map<string, { lat: number | null, lng: number | null, timestamp: number }>();
+const CACHE_TTL = 7 * 24 * 60 * 60 * 1000; // 7 days
+
+// Check cache before making request
+// Store successful results in cache with timestamp
+// Clear expired cache entries periodically
+```
+
+1. Add rate limiting (Nominatim requires max 1 request per second):
+
+```typescript
+let lastRequestTime = 0;
+const MIN_REQUEST_INTERVAL = 1000; // 1 second
+
+async function waitForRateLimit() {
+  const now = Date.now();
+  const timeSinceLastRequest = now - lastRequestTime;
+  if (timeSinceLastRequest < MIN_REQUEST_INTERVAL) {
+    await new Promise(resolve => setTimeout(resolve, MIN_REQUEST_INTERVAL - timeSinceLastRequest));
+  }
+  lastRequestTime = Date.now();
+}
+
+// Call before each geocoding request
+```
+
+1. Add retry logic with exponential backoff:
+
+```typescript
+async function geocodeWithRetry(address: string, maxRetries = 3): Promise<{lat: number | null, lng: number | null}> {
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    try {
+      // Attempt geocoding
+      const result = await geocodeAddress(address);
+      if (result.lat !== null && result.lng !== null) {
+        return result;
+      }
+      // If got null result, retry with backoff
+      if (attempt < maxRetries - 1) {
+        const delay = 1000 * Math.pow(2, attempt); // 1s, 2s, 4s
+        await new Promise(resolve => setTimeout(resolve, delay));
+      }
+    } catch (error) {
+      if (attempt === maxRetries - 1) {
+        logger.error('Geocoding failed after retries', { address, error });
+        return { lat: null, lng: null };
+      }
+      const delay = 1000 * Math.pow(2, attempt);
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
+  }
+  return { lat: null, lng: null };
+}
+```
+
+1. Add coordinate validation for USA:
+
+```typescript
+function validateUSCoordinates(lat: number, lng: number): boolean {
+  // USA bounds: latitude 25-50, longitude -125 to -65
+  // Alaska: lat 51-72, lng -180 to -130
+  // Hawaii: lat 18-23, lng -160 to -154
+  
+  const isContiguousUS = (lat >= 25 && lat <= 50 && lng >= -125 && lng <= -65);
+  const isAlaska = (lat >= 51 && lat <= 72 && lng >= -180 && lng <= -130);
+  const isHawaii = (lat >= 18 && lat <= 23 && lng >= -160 && lng <= -154);
+  
+  return isContiguousUS || isAlaska || isHawaii;
+}
+
+// After geocoding, validate coordinates
+if (result.lat !== null && result.lng !== null) {
+  if (!validateUSCoordinates(result.lat, result.lng)) {
+    logger.warn('Geocoded coordinates outside USA bounds', { address, lat: result.lat, lng: result.lng });
+    // Still return the coordinates, just log warning
+  }
+}
+```
+
+1. Update main geocoding function to use all improvements:
+
+- Check cache first
+- Apply rate limiting
+- Use retry logic
+- Validate coordinates
+- Store in cache on success
+
+EXPECTED RESULT:
+
+- Geocoding respects Nominatim rate limits (1 req/sec)
+- Failed requests retry up to 3 times with backoff
+- Results cached for 7 days (reduces API calls)
+- Coordinates validated to be in USA (logs warning if not)
+- More reliable geocoding overall
+
+-----
+
+## SECTION 2: CRON JOB IMPROVEMENTS
+
+### File: server/jobs/geofenceMonitor.ts
+
+Add job tracking, graceful shutdown capability, and statistics.
+
+IMPROVEMENTS NEEDED:
+
+1. Add job state tracking:
+
+```typescript
+interface JobState {
+  isRunning: boolean;
+  lastRunTime: Date | null;
+  lastRunDuration: number | null;
+  totalRuns: number;
+  totalLoadsChecked: number;
+  totalAutoMarks: number;
+  errors: number;
+}
+
+const jobState: JobState = {
+  isRunning: false,
+  lastRunTime: null,
+  lastRunDuration: null,
+  totalRuns: 0,
+  totalLoadsChecked: 0,
+  totalAutoMarks: 0,
+  errors: 0
+};
+
+// Update state during each run
+```
+
+1. Wrap existing cron job logic to track state:
+
+```typescript
+export function startGeofenceMonitoring() {
+  const cronJob = cron.schedule('* * * * *', async () => {
+    if (jobState.isRunning) {
+      logger.warn('Geofence job still running, skipping this iteration');
+      return;
+    }
+    
+    jobState.isRunning = true;
+    const startTime = Date.now();
+    let loadsChecked = 0;
+    let autoMarks = 0;
+    
+    try {
+      // EXISTING LOGIC HERE (don't modify)
+      // Just count loads and auto-marks as you process them
+      
+      jobState.totalRuns++;
+      jobState.lastRunTime = new Date();
+      jobState.totalLoadsChecked += loadsChecked;
+      jobState.totalAutoMarks += autoMarks;
+    } catch (error) {
+      jobState.errors++;
+      logger.error('Geofence monitoring error', { error });
+    } finally {
+      jobState.isRunning = false;
+      jobState.lastRunDuration = Date.now() - startTime;
+      
+      if (loadsChecked > 0) {
+        logger.info('Geofence check completed', {
+          loadsChecked,
+          autoMarks,
+          duration: jobState.lastRunDuration
+        });
+      }
+    }
+  });
+  
+  logger.info('✅ Geofence monitoring started - running every minute');
+  
+  return {
+    stop: () => cronJob.stop(),
+    getState: () => ({ ...jobState })
+  };
+}
+```
+
+1. Export job state for health checks:
+
+```typescript
+export function getJobState() {
+  return { ...jobState };
+}
+```
+
+### File: server/server.ts (or index.ts)
+
+Add graceful shutdown and health endpoint.
+
+1. Store cron job reference:
+
+```typescript
+let geofenceJob: any = null;
+
+// When starting jobs:
+try {
+  geofenceJob = startGeofenceMonitoring();
+  logger.info('✅ Background jobs started');
+} catch (error) {
+  logger.error('Failed to start background jobs', { error });
+}
+```
+
+1. Add graceful shutdown handlers:
+
+```typescript
+// Add at end of server file, after server.listen()
+
+let isShuttingDown = false;
+
+async function gracefulShutdown(signal: string) {
+  if (isShuttingDown) {
+    logger.warn('Shutdown already in progress');
+    return;
+  }
+  
+  isShuttingDown = true;
+  logger.info(`${signal} received, starting graceful shutdown`);
+  
+  // Stop accepting new connections
+  server.close(() => {
+    logger.info('HTTP server closed');
+  });
+  
+  // Stop cron jobs
+  if (geofenceJob) {
+    try {
+      geofenceJob.stop();
+      logger.info('Cron jobs stopped');
+    } catch (error) {
+      logger.error('Error stopping cron jobs', { error });
+    }
+  }
+  
+  // Close database connections
+  try {
+    await prisma.$disconnect();
+    logger.info('Database disconnected');
+  } catch (error) {
+    logger.error('Error disconnecting database', { error });
+  }
+  
+  logger.info('Graceful shutdown complete');
+  process.exit(0);
+}
+
+// Register shutdown handlers
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+
+// Force exit after 10 seconds if graceful shutdown hangs
+setTimeout(() => {
+  logger.error('Graceful shutdown timeout, forcing exit');
+  process.exit(1);
+}, 10000).unref();
+```
+
+### File: server/routes/health.ts (NEW FILE)
+
+Create health check endpoint for monitoring.
+
+```typescript
+import { Router } from 'express';
+import { getJobState } from '../jobs/geofenceMonitor';
+
+const router = Router();
+
+router.get('/status', (req, res) => {
+  res.json({
+    status: 'ok',
+    timestamp: new Date().toISOString(),
+    uptime: process.uptime()
+  });
+});
+
+router.get('/cron-status', (req, res) => {
+  try {
+    const jobState = getJobState();
+    res.json({
+      server: 'running',
+      geofenceMonitor: {
+        enabled: true,
+        running: jobState.isRunning,
+        lastRun: jobState.lastRunTime,
+        lastDuration: jobState.lastRunDuration,
+        stats: {
+          totalRuns: jobState.totalRuns,
+          totalLoadsChecked: jobState.totalLoadsChecked,
+          totalAutoMarks: jobState.totalAutoMarks,
+          errors: jobState.errors
+        }
+      }
+    });
+  } catch (error) {
+    res.status(500).json({
+      error: 'Failed to get cron status',
+      message: error.message
+    });
+  }
+});
+
+export default router;
+```
+
+Register health routes in server.ts:
+
+```typescript
+import healthRoutes from './routes/health';
+app.use('/api/health', healthRoutes);
+```
+
+EXPECTED RESULT:
+
+- Cron jobs track statistics (runs, loads checked, auto-marks)
+- Server shuts down gracefully (stops jobs, closes connections)
+- Health endpoint shows cron job status: GET /api/health/cron-status
+- Prevents overlapping job executions
+- Better logging of job performance
+
+-----
+
+## SECTION 3: DATABASE OPTIMIZATIONS
+
+### File: server/prisma/schema.prisma
+
+Add indexes for frequently queried fields.
+
+Add these indexes to existing models (DON’T remove any existing fields):
+
+```prisma
+model Load {
+  // ... all existing fields stay ...
+  
+  // ADD indexes at end of model:
+  @@index([status])
+  @@index([brokerId])
+  @@index([driverId])
+  @@index([createdAt])
+  @@index([status, brokerId]) // Composite index for common query pattern
+}
+
+model User {
+  // ... all existing fields stay ...
+  
+  // ADD indexes at end of model:
+  @@index([email])
+  @@index([role])
+}
+
+model Driver {
+  // ... all existing fields stay ...
+  
+  // ADD indexes at end of model:
+  @@index([userId])
+  @@index([status])
+}
+```
+
+After adding indexes, generate migration:
+
+```bash
+npx prisma migrate dev --name add_indexes
+```
+
+EXPECTED RESULT:
+
+- Faster queries when filtering by status, broker, driver
+- Better performance as data grows
+- No changes to existing data or functionality
+
+-----
+
+## SECTION 4: AUTH IMPROVEMENTS
+
+### File: server/middleware/auth.ts
+
+Add user existence verification and better error handling.
+
+CURRENT CODE likely looks like:
+
+```typescript
+export const authenticate = async (req, res, next) => {
+  const token = req.headers.authorization?.split(' ')[1];
+  
+  if (!token) {
+    return res.status(401).json({ error: 'No token provided' });
+  }
+  
+  try {
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    req.user = decoded;
+    next();
+  } catch (error) {
+    return res.status(401).json({ error: 'Invalid token' });
+  }
+};
+```
+
+IMPROVEMENTS:
+
+1. Verify user still exists in database:
+
+```typescript
+export const authenticate = async (req, res, next) => {
+  const token = req.headers.authorization?.split(' ')[1];
+  
+  if (!token) {
+    return res.status(401).json({ error: 'No token provided' });
+  }
+  
+  try {
+    const decoded = jwt.verify(token, process.env.JWT_SECRET) as any;
+    
+    // NEW: Verify user exists and is active
+    const user = await prisma.user.findUnique({
+      where: { id: decoded.userId },
+      select: { 
+        id: true, 
+        email: true, 
+        role: true,
+        // Add 'isActive' field if it exists in schema
+      }
+    });
+    
+    if (!user) {
+      logger.warn('Token valid but user not found', { userId: decoded.userId });
+      return res.status(401).json({ error: 'User not found' });
+    }
+    
+    // If you have isActive field:
+    // if (!user.isActive) {
+    //   return res.status(401).json({ error: 'Account deactivated' });
+    // }
+    
+    req.user = user;
+    next();
+  } catch (error) {
+    if (error.name === 'TokenExpiredError') {
+      return res.status(401).json({ error: 'Token expired' });
+    }
+    if (error.name === 'JsonWebTokenError') {
+      return res.status(401).json({ error: 'Invalid token' });
+    }
+    logger.error('Auth middleware error', { error });
+    return res.status(500).json({ error: 'Authentication error' });
+  }
+};
+```
+
+1. Add optional lastActive tracking:
+
+```typescript
+// After verifying user exists:
+// Update lastActive timestamp (fire-and-forget, don't await)
+prisma.user.update({
+  where: { id: user.id },
+  data: { lastActive: new Date() }
+}).catch(err => logger.error('Failed to update lastActive', { error: err }));
+```
+
+Note: Only do this if User model has lastActive field in schema. If not, skip this part.
+
+EXPECTED RESULT:
+
+- Tokens for deleted users no longer work
+- Better error messages (expired vs invalid)
+- Track user activity (if lastActive field exists)
+- More secure auth overall
+
+-----
+
+## SECTION 5: FILE UPLOAD VALIDATION
+
+### File: server/routes/pdf.ts
+
+Add file validation and cleanup.
+
+CURRENT CODE likely has:
+
+```typescript
+const upload = multer({ dest: 'uploads/' });
+router.post('/parse-pdf', upload.single('pdf'), async (req, res) => {
+  // ... parsing logic
+});
+```
+
+IMPROVEMENTS:
+
+1. Configure multer with validation:
+
+```typescript
+import path from 'path';
+import fs from 'fs/promises';
+
+const upload = multer({
+  dest: 'uploads/',
+  limits: {
+    fileSize: 10 * 1024 * 1024, // 10MB max
+    files: 1
+  },
+  fileFilter: (req, file, cb) => {
+    // Accept only PDF files
+    if (file.mimetype === 'application/pdf') {
+      cb(null, true);
+    } else {
+      logger.warn('Rejected non-PDF upload', { mimetype: file.mimetype });
+      cb(new Error('Only PDF files are allowed'));
+    }
+  }
+});
+```
+
+1. Add file cleanup after processing:
+
+```typescript
+// In your PDF parsing route, after processing:
+async function cleanupFile(filePath: string) {
+  try {
+    await fs.unlink(filePath);
+    logger.debug('Cleaned up uploaded file', { filePath });
+  } catch (error) {
+    logger.error('Failed to cleanup file', { filePath, error });
+  }
+}
+
+// In route handler:
+router.post('/parse-pdf', upload.single('pdf'), async (req, res) => {
+  try {
+    const result = await parsePdf(req.file.path);
+    res.json(result);
+  } catch (error) {
+    logger.error('PDF parsing failed', { error });
+    res.status(500).json({ error: 'Failed to parse PDF' });
+  } finally {
+    // Always cleanup, even if parsing failed
+    if (req.file) {
+      await cleanupFile(req.file.path);
+    }
+  }
+});
+```
+
+1. Add periodic cleanup cron job for old files:
+
+### File: server/jobs/fileCleanup.ts (NEW FILE)
+
+```typescript
+import cron from 'node-cron';
+import fs from 'fs/promises';
+import path from 'path';
+import { logger } from '../utils/logger';
+
+export function startFileCleanup() {
+  // Run daily at 2 AM
+  const job = cron.schedule('0 2 * * *', async () => {
+    try {
+      logger.info('Starting file cleanup job');
+      const uploadsDir = path.join(__dirname, '../../uploads');
+      
+      const files = await fs.readdir(uploadsDir);
+      let deletedCount = 0;
+      const maxAge = 24 * 60 * 60 * 1000; // 24 hours
+      
+      for (const file of files) {
+        const filePath = path.join(uploadsDir, file);
+        
+        try {
+          const stats = await fs.stat(filePath);
+          const age = Date.now() - stats.mtimeMs;
+          
+          if (age > maxAge) {
+            await fs.unlink(filePath);
+            deletedCount++;
+          }
+        } catch (error) {
+          logger.error('Error processing file in cleanup', { file, error });
+        }
+      }
+      
+      logger.info('File cleanup completed', { deletedCount });
+    } catch (error) {
+      logger.error('File cleanup job failed', { error });
+    }
+  });
+  
+  logger.info('✅ File cleanup job started - running daily at 2 AM');
+  
+  return {
+    stop: () => job.stop()
+  };
+}
+```
+
+Start cleanup job in server.ts:
+
+```typescript
+import { startFileCleanup } from './jobs/fileCleanup';
+
+// After starting geofence monitoring:
+const fileCleanupJob = startFileCleanup();
+```
+
+EXPECTED RESULT:
+
+- Only PDF files accepted (others rejected immediately)
+- Files limited to 10MB
+- Uploaded files cleaned up after processing
+- Old files (>24 hours) automatically deleted daily
+- No accumulation of files in uploads/ directory
+
+-----
+
+## SECTION 6: INPUT VALIDATION
+
+### Installation:
+
+```bash
+npm install zod
+```
+
+### File: server/utils/validation.ts (NEW FILE)
+
+Create validation schemas for common operations.
+
+```typescript
+import { z } from 'zod';
+
+// Load creation validation
+export const createLoadSchema = z.object({
+  pickupAddress: z.string().min(5, 'Pickup address too short').max(200),
+  pickupCity: z.string().min(2).max(100),
+  pickupState: z.string().length(2, 'State must be 2 letters'),
+  pickupZip: z.string().regex(/^\d{5}(-\d{4})?$/, 'Invalid ZIP code'),
+  
+  deliveryAddress: z.string().min(5, 'Delivery address too short').max(200),
+  deliveryCity: z.string().min(2).max(100),
+  deliveryState: z.string().length(2, 'State must be 2 letters'),
+  deliveryZip: z.string().regex(/^\d{5}(-\d{4})?$/, 'Invalid ZIP code'),
+  
+  pickupDate: z.string().datetime('Invalid pickup date format'),
+  deliveryDate: z.string().datetime('Invalid delivery date format'),
+  
+  rate: z.number().positive('Rate must be positive').optional(),
+  weight: z.number().positive('Weight must be positive').optional(),
+  commodity: z.string().max(200).optional(),
+  notes: z.string().max(1000).optional()
+}).refine(data => {
+  // Delivery date must be after pickup date
+  return new Date(data.deliveryDate) > new Date(data.pickupDate);
+}, {
+  message: 'Delivery date must be after pickup date',
+  path: ['deliveryDate']
+});
+
+// Auth validation
+export const loginSchema = z.object({
+  email: z.string().email('Invalid email address'),
+  password: z.string().min(8, 'Password must be at least 8 characters')
+});
+
+export const registerSchema = z.object({
+  email: z.string().email('Invalid email address'),
+  password: z.string()
+    .min(8, 'Password must be at least 8 characters')
+    .regex(/[A-Z]/, 'Password must contain uppercase letter')
+    .regex(/[a-z]/, 'Password must contain lowercase letter')
+    .regex(/[0-9]/, 'Password must contain number'),
+  name: z.string().min(2).max(100),
+  company: z.string().min(2).max(200).optional(),
+  phone: z.string().regex(/^\+?1?\d{10,}$/, 'Invalid phone number').optional()
+});
+
+// Location update validation
+export const locationUpdateSchema = z.object({
+  loadId: z.string().uuid('Invalid load ID'),
+  latitude: z.number().min(-90).max(90),
+  longitude: z.number().min(-180).max(180),
+  accuracy: z.number().positive().optional()
+});
+```
+
+### File: server/middleware/validate.ts (NEW FILE)
+
+Create validation middleware.
+
+```typescript
+import { Request, Response, NextFunction } from 'express';
+import { z, ZodError } from 'zod';
+import { logger } from '../utils/logger';
+
+export const validate = (schema: z.ZodSchema) => {
+  return async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      // Validate request body
+      req.body = await schema.parseAsync(req.body);
+      next();
+    } catch (error) {
+      if (error instanceof ZodError) {
+        const errors = error.errors.map(err => ({
+          field: err.path.join('.'),
+          message: err.message
+        }));
+        
+        logger.warn('Validation failed', { errors, body: req.body });
+        
+        return res.status(400).json({
+          error: 'Validation failed',
+          details: errors
+        });
+      }
+      
+      logger.error('Validation middleware error', { error });
+      return res.status(500).json({ error: 'Validation error' });
+    }
+  };
+};
+```
+
+### Apply validation to routes:
+
+Update routes/loads.ts:
+
+```typescript
+import { validate } from '../middleware/validate';
+import { createLoadSchema } from '../utils/validation';
+
+// Add validation middleware:
+router.post('/loads', 
+  authenticate, 
+  validate(createLoadSchema), // ADD THIS
+  async (req, res) => {
+    // req.body is now validated and typed correctly
+    // ... existing logic
+  }
+);
+```
+
+Update routes/auth.ts:
+
+```typescript
+import { validate } from '../middleware/validate';
+import { loginSchema, registerSchema } from '../utils/validation';
+
+router.post('/login', 
+  validate(loginSchema), // ADD THIS
+  async (req, res) => {
+    // ... existing logic
+  }
+);
+
+router.post('/register', 
+  validate(registerSchema), // ADD THIS
+  async (req, res) => {
+    // ... existing logic
+  }
+);
+```
+
+Update routes/location.ts (or wherever location updates are):
+
+```typescript
+import { validate } from '../middleware/validate';
+import { locationUpdateSchema } from '../utils/validation';
+
+router.post('/update-location',
+  authenticate,
+  validate(locationUpdateSchema), // ADD THIS
+  async (req, res) => {
+    // ... existing logic
+  }
+);
+```
+
+EXPECTED RESULT:
+
+- All input validated before processing
+- Clear error messages for invalid input
+- Type safety improved (TypeScript knows validated shape)
+- Prevents invalid data from entering database
+- SQL injection protection enhanced
+
+-----
+
+## SECTION 7: BASIC TESTING SETUP
+
+### Installation:
+
+```bash
+npm install --save-dev jest @types/jest ts-jest supertest @types/supertest
+```
+
+### File: jest.config.js (NEW FILE)
+
+```javascript
+module.exports = {
+  preset: 'ts-jest',
+  testEnvironment: 'node',
+  roots: ['<rootDir>/tests'],
+  testMatch: ['**/*.test.ts'],
+  collectCoverageFrom: [
+    'server/**/*.ts',
+    '!server/**/*.d.ts',
+    '!server/prisma/**'
+  ]
+};
+```
+
+### File: tests/services/geocoding.test.ts (NEW FILE)
+
+Create basic tests for critical functions.
+
+```typescript
+import { geocodeAddress } from '../../server/services/geocoding';
+
+describe('Geocoding Service', () => {
+  // Simple smoke test
+  test('should geocode valid US address', async () => {
+    const result = await geocodeAddress('1600 Pennsylvania Avenue NW, Washington, DC 20500');
+    
+    expect(result).toBeDefined();
+    expect(result.lat).not.toBeNull();
+    expect(result.lng).not.toBeNull();
+    
+    // Should be roughly in Washington DC area
+    if (result.lat && result.lng) {
+      expect(result.lat).toBeGreaterThan(38);
+      expect(result.lat).toBeLessThan(39);
+      expect(result.lng).toBeGreaterThan(-78);
+      expect(result.lng).toBeLessThan(-76);
+    }
+  }, 10000); // 10 second timeout for API call
+  
+  test('should return null for invalid address', async () => {
+    const result = await geocodeAddress('INVALID_ADDRESS_XYZ_123');
+    
+    expect(result).toBeDefined();
+    // May return null or some coordinates - both acceptable
+  });
+  
+  test('should handle empty string', async () => {
+    const result = await geocodeAddress('');
+    
+    expect(result).toBeDefined();
+    expect(result.lat).toBeNull();
+    expect(result.lng).toBeNull();
+  });
+});
+```
+
+### File: tests/routes/health.test.ts (NEW FILE)
+
+```typescript
+import request from 'supertest';
+// Import your Express app (you may need to export it from server.ts)
+// import app from '../../server/server';
+
+describe('Health Endpoints', () => {
+  test('GET /api/health/status should return 200', async () => {
+    // const response = await request(app).get('/api/health/status');
+    // expect(response.status).toBe(200);
+    // expect(response.body.status).toBe('ok');
+    
+    // PLACEHOLDER - uncomment and adjust based on your server setup
+    expect(true).toBe(true);
+  });
+});
+```
+
+### Update package.json:
+
+Add test script:
+
+```json
+{
+  "scripts": {
+    "test": "jest",
+    "test:watch": "jest --watch",
+    "test:coverage": "jest --coverage"
+  }
+}
+```
+
+EXPECTED RESULT:
+
+- Basic testing framework setup
+- Can run: npm test
+- Geocoding function tested
+- Foundation for adding more tests
+- Tests don’t block deployment (optional to run)
+
+Note: Adjust test imports based on your actual project structure. Tests are optional for MVP but good to have.
+
+-----
+
+## SECTION 8: FINAL POLISH
+
+### File: server/server.ts
+
+Add helmet for security headers and compression for performance.
+
+Installation:
+
+```bash
+npm install helmet compression
+```
+
+Add to server.ts:
+
+```typescript
+import helmet from 'helmet';
+import compression from 'compression';
+
+// Add BEFORE other middleware
+app.use(helmet()); // Security headers
+app.use(compression()); // Gzip compression
+
+// Then your existing middleware:
+app.use(cors({ ... }));
+app.use(express.json());
+// etc.
+```
+
+### File: .gitignore
+
+Ensure all sensitive files are ignored:
+
+```
+node_modules/
+.env
+.env.local
+.env.production
+dist/
+build/
+uploads/
+logs/
+*.log
+.DS_Store
+coverage/
+.vscode/
+.idea/
+```
+
+### File: package.json
+
+Add useful scripts if not present:
+
+```json
+{
+  "scripts": {
+    "dev": "ts-node-dev --respawn --transpile-only server/server.ts",
+    "build": "tsc",
+    "start": "node dist/server.js",
+    "lint": "eslint . --ext .ts",
+    "migrate": "prisma migrate dev",
+    "migrate:prod": "prisma migrate deploy",
+    "seed": "ts-node server/prisma/seed.ts",
+    "test": "jest",
+    "test:watch": "jest --watch"
+  }
+}
+```
+
+-----
+
+## VERIFICATION CHECKLIST
+
+After implementing all sections, verify:
+
+1. Geocoding improvements:
+
+- [ ] Create test load with address
+- [ ] Check coordinates returned
+- [ ] Verify cache working (second call instant)
+- [ ] Check logs show rate limiting
+
+1. Cron jobs:
+
+- [ ] Visit /api/health/cron-status
+- [ ] See job statistics
+- [ ] Stop server with Ctrl+C - shuts down gracefully
+
+1. Database:
+
+- [ ] Run: npx prisma migrate dev –name add_indexes
+- [ ] Verify migration successful
+- [ ] Check query performance improved
+
+1. Auth:
+
+- [ ] Login works
+- [ ] Try token of deleted user - rejected
+- [ ] Better error messages
+
+1. File upload:
+
+- [ ] Upload PDF - works
+- [ ] Try upload .exe - rejected
+- [ ] Check uploads/ cleaned after processing
+
+1. Validation:
+
+- [ ] Create load with invalid data - gets clear error
+- [ ] Login with invalid email - gets validation error
+- [ ] All errors include field name and reason
+
+1. Tests:
+
+- [ ] Run: npm test
+- [ ] Tests pass (at least geocoding test)
+
+1. Security:
+
+- [ ] Response headers include security headers
+- [ ] Responses are compressed
+
+-----
+
+## IMPORTANT NOTES
+
+1. Implement sections in order
+1. Test each section before moving to next
+1. If ANY section breaks something, skip it and move on
+1. All changes are additive (no deletions)
+1. Can rollback any section independently
+1. Keep existing functionality working at all times
+
+## EXPECTED OVERALL RESULT
+
+After ALL sections complete:
+
+- ✅ Geocoding more reliable (cache, retry, rate limit)
+- ✅ Cron jobs tracked and monitored
+- ✅ Database queries faster (indexes)
+- ✅ Auth more secure (user verification)
+- ✅ File uploads validated and cleaned up
+- ✅ Input validation prevents bad data
+- ✅ Basic tests in place
+- ✅ Security headers added
+- ✅ Production ready for beta testing
+
+Good luck! Implement carefully and test each section.
+
+```
+---
+.​​​​​​​​​​​​​​​​
+```
