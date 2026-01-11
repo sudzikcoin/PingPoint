@@ -1,0 +1,130 @@
+⚠️ SAFETY INSTRUCTIONS - READ FIRST:
+
+HOW THIS PROMPT SHOULD WORK:
+1. DO NOT modify existing geofenceMonitor.ts logic
+2. ONLY ADD code to start the cron job, don't change the job itself
+3. ADD startup code at the END of server initialization, after server.listen()
+4. CREATE NEW health.ts route file, don't modify existing routes
+5. ADD graceful shutdown handlers without changing existing code
+6. TEST that server still starts and runs normally before and after changes
+7. Make sure cron job can be disabled via environment variable if needed
+
+WHAT TO PRESERVE:
+- All existing routes must continue working
+- Server startup process should not change (except adding job start)
+- If cron job fails to start, server should still run (log error, don't crash)
+- All existing API endpoints work exactly as before
+
+ROLLBACK PLAN:
+- Cron job initialization should be wrapped in try/catch
+- If job fails to start, log error but continue server startup
+- Can disable cron jobs by setting ENABLE_CRON_JOBS=false in env
+
+---
+
+Initialize Cron Jobs for Geofencing
+
+PROBLEM:
+The geofence monitoring cron job exists but is never started, so automatic arrival/departure detection doesn't work at all.
+
+CURRENT STATE:
+- File: server/jobs/geofenceMonitor.ts exists with monitoring logic
+- Function: startGeofenceMonitoring() is defined but never called
+- Result: No automatic tracking happens
+
+REQUIRED FIX:
+
+1. Update server startup file (server/server.ts or server/index.ts) to start all cron jobs:
+
+Add this code AFTER the server starts listening (after app.listen or server.listen):
+
+import { startGeofenceMonitoring } from './jobs/geofenceMonitor';
+
+// Start cron jobs (wrapped in try/catch for safety)
+try {
+  if (process.env.ENABLE_CRON_JOBS !== 'false') {
+    console.log('🚀 Starting background jobs...');
+    startGeofenceMonitoring();
+    console.log('✅ Geofence monitoring started - running every minute');
+  } else {
+    console.log('⏸️  Cron jobs disabled via ENABLE_CRON_JOBS env var');
+  }
+} catch (error) {
+  console.error('❌ Failed to start cron jobs:', error);
+  console.log('⚠️  Server will continue without background jobs');
+}
+
+2. Add graceful shutdown handling:
+
+Add these shutdown handlers at the end of server file (don't modify existing code):
+
+process.on('SIGTERM', shutdown);
+process.on('SIGINT', shutdown);
+
+let isShuttingDown = false;
+
+function shutdown() {
+  if (isShuttingDown) return;
+  isShuttingDown = true;
+  
+  console.log('⏹️  Shutting down gracefully...');
+  server.close(() => {
+    console.log('✅ Server closed');
+    process.exit(0);
+  });
+  
+  // Force exit after 10 seconds if graceful shutdown fails
+  setTimeout(() => {
+    console.error('⚠️  Forced shutdown after timeout');
+    process.exit(1);
+  }, 10000);
+}
+
+3. Add a health check endpoint for monitoring cron job status:
+
+Create NEW file: server/routes/health.ts (don't modify existing routes)
+
+Export endpoint GET /api/health/cron-status that returns:
+{
+  server: "running",
+  geofenceMonitor: {
+    enabled: true,
+    running: true,
+    lastRun: "2025-01-10T20:00:00Z"
+  }
+}
+
+Register this route in server.ts:
+app.use('/api/health', require('./routes/health'));
+
+4. Improve logging in geofenceMonitor.ts (ONLY add logs, don't change logic):
+
+Add these console.log statements (don't modify any existing logic):
+- When cron job starts: "Geofence check starting..."
+- How many active loads found: "Checking 5 active loads"
+- When auto-marking arrival/departure: "Load #123: Auto-marked pickup arrival"
+- Any errors: "Error in geofence monitoring: [error]" (but don't crash)
+- When check completes: "Geofence check completed in 250ms"
+
+CRITICAL: If cron job fails to start, server must continue running. Wrap all cron initialization in try/catch.
+
+EXPECTED RESULT:
+- Cron job runs automatically every minute
+- Console shows clear logging of what's happening
+- Health endpoint shows job is running
+- Automatic arrival/departure detection works
+- Server shuts down gracefully when stopped
+- If cron fails, server still runs (just logs error)
+
+FILES TO CREATE/MODIFY:
+- server/server.ts or server/index.ts (add job initialization at END)
+- server/jobs/geofenceMonitor.ts (ONLY add logging, don't change logic)
+- server/routes/health.ts (NEW file for health checks)
+
+TESTING:
+After implementing:
+1. Start server - should start normally with or without cron jobs
+2. Verify console shows "Geofence monitoring started"
+3. Visit /api/health/cron-status - should return job status
+4. Check that all existing API routes still work
+5. Stop server with Ctrl+C - should shut down gracefully

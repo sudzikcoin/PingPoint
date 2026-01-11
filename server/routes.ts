@@ -179,6 +179,24 @@ export function registerHealthRoutes(app: Express) {
     res.json({ status: "ok", timestamp: new Date().toISOString() });
   });
 
+  // Cron job status endpoint
+  app.get("/api/health/cron-status", async (_req: Request, res: Response) => {
+    try {
+      const { getGeofenceMonitorStatus } = await import("./jobs/geofenceMonitor");
+      const geofenceStatus = getGeofenceMonitorStatus();
+      
+      res.json({
+        server: "running",
+        geofenceMonitor: geofenceStatus,
+      });
+    } catch (error) {
+      res.json({
+        server: "running",
+        geofenceMonitor: { enabled: false, running: false, error: "Module not loaded" },
+      });
+    }
+  });
+
   // Email diagnostics endpoint (does not expose secrets)
   app.get("/api/email/diagnostics", (_req: Request, res: Response) => {
     const mailFrom = process.env.MAIL_FROM;
