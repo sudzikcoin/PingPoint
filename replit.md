@@ -91,6 +91,18 @@ Preferred communication style: Simple, everyday language.
 - **Admin Panel**: Protected admin dashboard at /app/admin with tabs for Users, Subscriptions, Audit Logs, and Promotions. Requires separate admin auth (not broker auth). Admin login disabled if ADMIN_EMAIL, ADMIN_PASSWORD, or JWT_SECRET is missing.
 - **Error Handling**: Centralized error handling and structured request logging.
 - **Testing**: Vitest with Supertest for API testing, covering key workflows like authentication, load management, and driver tracking.
+    - **Test Database Safety**: Tests run `resetDatabase()` which TRUNCATEs all tables. Tests use the same DATABASE_URL as development. Running `npm test` will wipe all development data.
+    - **Production Safety**: Tests refuse to run if `NODE_ENV=production`.
+
+### Database Safety
+
+- **Migrations vs Push**: Use `npm run db:push` only for initial schema creation or development. For production, use migrations folder with `drizzle-kit generate` and `drizzle-kit migrate`.
+- **Startup Behavior**: On startup, the server logs database connection info (host, database, user - not password). If no migrations folder exists and tables=0, it runs `drizzle-kit push`. Otherwise, it applies pending migrations.
+- **Preventing Data Loss**:
+    - Never run `npm test` against a database you want to keep - it TRUNCATEs all tables.
+    - For production deployments, ensure migrations are applied before starting the app.
+    - The server logs `[DB] Connection:` at startup - verify you're connected to the right database.
+- **Verifying Database**: Check startup logs for `[DB] Host:` and `[DB] Database:` to confirm connection target.
 
 ## External Dependencies
 

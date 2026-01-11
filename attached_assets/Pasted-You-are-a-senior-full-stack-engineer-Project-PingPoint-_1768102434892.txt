@@ -1,0 +1,56 @@
+You are a senior full-stack engineer. Project: PingPoint (Next.js + Express + PostgreSQL + Drizzle). Problem: after pushing to GitHub / restarting Replit, database appears “reset” (tables exist, rows = 0). We must restore NORMAL behavior: NO automatic account creation on login, and MOST IMPORTANT: prevent ANY database wipe/reset on restart or deploy. We must not break existing flows, schemas, or Telegram/webhooks logic. Make minimal, localized changes.
+
+TASKS (do in order):
+
+A) DIAGNOSE WHY DATA “DISAPPEARS”
+1) Search the repo for ANY destructive DB operations and list them with file paths and line numbers:
+   - drizzle-kit push
+   - drizzle push
+   - db reset / resetDb / drop / truncate
+   - migrate:reset / migrate:drop
+   - “seed” running on startup
+   - tests that run against the same DB as dev
+   - docker compose commands in scripts
+2) Inspect package.json scripts (root + server + client if present) and replit config files (replit.nix, .replit, workflows).
+3) Inspect server startup code: where DB is initialized. Identify whether it auto-runs migrations/push/seed at startup.
+4) Add a startup log that prints:
+   - NODE_ENV
+   - a redacted DATABASE_URL fingerprint (host, dbname, user; DO NOT print password)
+   - whether it is Replit DB / external / localhost
+   This will confirm if we’re connecting to a different database after push.
+
+B) FIX: MAKE DB CHANGES SAFE + PERSISTENT
+Goal: Never wipe data on restart. Never run drizzle push in runtime. Use migrations safely.
+1) Remove any runtime usage of `drizzle-kit push` from start scripts or server bootstrap.
+2) Implement a safe migration runner:
+   - Create `server/src/db/migrateOnBoot.ts` (or similar) that runs `drizzle-kit migrate` programmatically or via a child_process call ONLY when `AUTO_MIGRATE=true`.
+   - Default AUTO_MIGRATE=false in production. In Replit dev we can set AUTO_MIGRATE=true.
+   - Add a guard so that if NODE_ENV === 'production', it refuses to run any reset/seed/drop scripts.
+3) If a seed is needed for dev, make it explicit:
+   - `npm run db:seed` only, never automatically.
+4) Ensure tests never run against the dev DB:
+   - Make tests use a separate DATABASE_URL_TEST or an in-memory / ephemeral database.
+   - If CI runs tests, it must not hit the same DB.
+
+C) FIX LOGIN ENDPOINTS (ONLY IF YOU FIND AUTO-CREATE ON LOGIN)
+User reports: entering any email triggers magic link without verifying existence in DB (auto-creates account on login). Restore normal login:
+1) Ensure /api/brokers/login checks broker exists by email before sending magic link.
+2) If broker does not exist: return 404 with { code: "BROKER_NOT_FOUND" }.
+3) If broker exists but email not verified: return 403 with { code: "EMAIL_NOT_VERIFIED" }.
+4) Only create broker in /api/brokers/register (create account) endpoint.
+5) Make sure broker_devices entries always have non-null broker_id (fix any insertion logic that can create device rows before broker is known).
+6) Update/adjust tests accordingly so CI passes.
+
+D) DELIVERABLES
+1) Provide a short summary of what was causing the “reset” symptom (wrong DB URL vs destructive push/reset).
+2) Provide exact changed files list.
+3) Ensure `npm test` (or the existing CI command) passes.
+4) Add a README section: “Database safety: migrations vs push; how to deploy without data loss; how to verify which DB you are connected to.”
+
+CONSTRAINTS
+- Minimal, localized changes; do not refactor unrelated modules.
+- Do not change existing DB schema unless required to fix broker_devices broker_id null bug.
+- Do not remove features; just make them safe.
+- Never print secrets in logs.
+
+Proceed now: implement changes, run tests, and report results.

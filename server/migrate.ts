@@ -89,8 +89,32 @@ async function markMigrationsApplied(pool: pg.Pool, migrations: string[], migrat
   }
 }
 
+function logDatabaseInfo(): void {
+  const dbUrl = process.env.DATABASE_URL || "";
+  try {
+    const url = new URL(dbUrl);
+    const redacted = `${url.protocol}//${url.username}:***@${url.hostname}:${url.port || 5432}${url.pathname}`;
+    console.log("[DB] Connection:", redacted);
+    console.log("[DB] NODE_ENV:", process.env.NODE_ENV || "undefined");
+    console.log("[DB] Host:", url.hostname);
+    console.log("[DB] Database:", url.pathname.slice(1));
+    console.log("[DB] User:", url.username);
+    
+    if (url.hostname.includes("replit") || url.hostname.includes("neon")) {
+      console.log("[DB] Provider: Replit/Neon managed database");
+    } else if (url.hostname === "localhost" || url.hostname === "127.0.0.1") {
+      console.log("[DB] Provider: Local PostgreSQL");
+    } else {
+      console.log("[DB] Provider: External");
+    }
+  } catch {
+    console.log("[DB] Connection: <invalid or unparseable DATABASE_URL>");
+  }
+}
+
 export async function ensureDatabase(): Promise<void> {
   console.log("[DB] Starting database migration check...");
+  logDatabaseInfo();
   
   const pool = await waitForDatabase();
   const migrationsPath = path.join(process.cwd(), 'migrations');
