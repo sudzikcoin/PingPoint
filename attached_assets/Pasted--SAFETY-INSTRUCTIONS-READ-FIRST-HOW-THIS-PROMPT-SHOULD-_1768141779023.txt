@@ -1,0 +1,147 @@
+⚠️ SAFETY INSTRUCTIONS - READ FIRST:
+
+HOW THIS PROMPT SHOULD WORK:
+1. CREATE NEW cors configuration file
+2. ADD whitelist origins WITHOUT removing existing cors setup first
+3. TEST cors changes thoroughly in development
+4. KEEP permissive cors in development, strict in production
+5. Make FRONTEND_URL optional with fallback
+6. Don't break existing API client connections
+
+WHAT TO PRESERVE:
+- Development should continue to work with localhost
+- Existing frontend connections must not break
+- If CORS config fails, fall back to permissive mode (log warning)
+- All existing API routes must be accessible
+
+ROLLBACK PLAN:
+- Can disable strict CORS via env: CORS_STRICT=false
+- Keep old permissive CORS as fallback if new config breaks
+- Always allow requests with no origin (mobile apps, curl, Postman)
+
+---
+
+Fix CORS Configuration for Production Security
+
+PROBLEM:
+CORS is configured with origin: '*' which allows ANY website to make requests to the API. This is a security risk in production.
+
+REQUIRED FIX:
+
+1. Create new CORS configuration (don't modify existing yet):
+
+File: server/config/cors.ts (NEW FILE) or update cors section in server.ts
+
+IMPORTANT: Make CORS strict in production only, permissive in development:
+
+const isDevelopment = process.env.NODE_ENV === 'development';
+const strictCors = process.env.CORS_STRICT !== 'false';
+
+const allowedOrigins = [
+  process.env.FRONTEND_URL,           // Production frontend
+  'http://localhost:3000',            // React dev server
+  'http://localhost:5173',            // Vite dev server  
+  'http://127.0.0.1:3000',
+  'http://127.0.0.1:5173'
+].filter(Boolean); // Remove undefined values
+
+const corsOptions = {
+  origin: (origin, callback) => {
+    // In development or if strict CORS disabled, allow all
+    if (isDevelopment || !strictCors) {
+      return callback(null, true);
+    }
+    
+    // Always allow requests with no origin (mobile apps, curl, Postman)
+    if (!origin) {
+      return callback(null, true);
+    }
+    
+    // In production with strict CORS, check whitelist
+    if (allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      console.warn('CORS blocked request from:', origin);
+      callback(new Error(`Origin ${origin} not allowed by CORS`));
+    }
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  exposedHeaders: ['X-RateLimit-Limit', 'X-RateLimit-Remaining']
+};
+
+CRITICAL: Development should ALWAYS work, even if FRONTEND_URL not set.
+
+2. Apply CORS configuration safely:
+
+In server/server.ts:
+
+// Import cors configuration
+const corsConfig = require('./config/cors');
+app.use(cors(corsConfig));
+
+// Or if inline:
+app.use(cors(corsOptions));
+
+3. Add CORS error handling (optional, don't break requests):
+
+When CORS blocks a request:
+- Return 403 Forbidden
+- Log the blocked origin in development only
+- Clear error message: "Origin not allowed by CORS"
+
+Add error handler after CORS middleware:
+
+app.use((err, req, res, next) => {
+  if (err.message.includes('CORS')) {
+    return res.status(403).json({
+      error: 'CORS Error',
+      message: 'Origin not allowed'
+    });
+  }
+  next(err);
+});
+
+4. Make FRONTEND_URL optional with fallback:
+
+In server/config/env.ts (if you created it):
+
+FRONTEND_URL: str({ default: 'http://localhost:5173' })
+
+If env validation doesn't exist, just use:
+const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+
+5. Add environment variable documentation:
+
+In .env.example:
+
+Frontend URL for CORS (required in production)
+In development, defaults to http://localhost:5173
+FRONTEND_URL=http://localhost:5173
+Set to ‘false’ to disable strict CORS checking
+CORS_STRICT=false
+CRITICAL: CORS changes should never break development environment.
+
+EXPECTED RESULT:
+- Development: CORS permissive, easy to work with
+- Production: CORS strict, only whitelisted origins allowed
+- Mobile apps and API tools (Postman) continue to work
+- Clear error messages when CORS blocks request
+- Can disable strict CORS if it causes issues
+- Existing functionality unchanged
+
+FILES TO CREATE/MODIFY:
+- server/config/cors.ts (NEW FILE, optional)
+- OR server/server.ts (update CORS configuration inline)
+- server/config/env.ts (if exists, make FRONTEND_URL optional)
+- .env.example (document CORS-related env vars)
+
+TESTING CHECKLIST:
+1. Start server in development - should work as before
+2. Make request from frontend - should work
+3. Make request from Postman - should work
+4. Set NODE_ENV=production - should still work if FRONTEND_URL set
+5. Try request from random domain in production - should block
+6. Set CORS_STRICT=false - should allow all origins again
+7. Verify all existing routes still work correctly
