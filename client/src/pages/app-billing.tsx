@@ -95,6 +95,42 @@ export default function AppBilling() {
     const params = new URLSearchParams(searchString);
     if (params.get("success") === "true") {
       toast.success("Payment successful! Your credits have been added.");
+      localStorage.removeItem("pp_loadLimitReached");
+      
+      let pollCount = 0;
+      const maxPolls = 10;
+      const pollEntitlements = async () => {
+        try {
+          const res = await fetch("/api/billing/entitlements", {
+            credentials: "include",
+            cache: "no-store",
+            headers: { "Cache-Control": "no-cache" },
+          });
+          if (res.ok) {
+            const data = await res.json();
+            if (data.plan === "PRO" || data.canCreateLoad) {
+              fetchSummary();
+              return true;
+            }
+          }
+        } catch (error) {
+          console.error("Error polling entitlements:", error);
+        }
+        return false;
+      };
+      
+      const interval = setInterval(async () => {
+        pollCount++;
+        const success = await pollEntitlements();
+        if (success || pollCount >= maxPolls) {
+          clearInterval(interval);
+          if (pollCount >= maxPolls) {
+            fetchSummary();
+          }
+        }
+      }, 1000);
+      
+      return () => clearInterval(interval);
     }
   }, [searchString]);
 

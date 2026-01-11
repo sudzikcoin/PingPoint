@@ -43,6 +43,16 @@ const emptyFilters: LoadFilters = {
   address: "",
 };
 
+interface Entitlements {
+  plan: string;
+  loadsUsedThisCycle: number;
+  loadsLimitThisCycle: number;
+  loadsRemainingThisCycle: number;
+  canCreateLoad: boolean;
+  creditsBalance: number;
+  cycleEndsAt: string | null;
+}
+
 export default function AppLoads() {
   const [, setLocation] = useLocation();
   const { theme } = useTheme();
@@ -51,7 +61,7 @@ export default function AppLoads() {
   const [loading, setLoading] = useState(true);
   const [showVerificationBanner, setShowVerificationBanner] = useState(false);
   const [resendingEmail, setResendingEmail] = useState(false);
-  const [loadLimitReached, setLoadLimitReached] = useState(false);
+  const [entitlements, setEntitlements] = useState<Entitlements | null>(null);
 
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [uploadFile, setUploadFile] = useState<File | null>(null);
@@ -64,10 +74,25 @@ export default function AppLoads() {
   const [activeFilters, setActiveFilters] = useState<LoadFilters>(emptyFilters);
   const hasActiveFilters = Object.values(activeFilters).some(v => v !== "");
 
-  useEffect(() => {
-    const flag = localStorage.getItem("pp_loadLimitReached");
-    setLoadLimitReached(flag === "true");
+  const fetchEntitlements = useCallback(async () => {
+    try {
+      const res = await fetch("/api/billing/entitlements", {
+        credentials: "include",
+        cache: "no-store",
+        headers: { "Cache-Control": "no-cache" },
+      });
+      if (res.ok) {
+        const data: Entitlements = await res.json();
+        setEntitlements(data);
+        localStorage.removeItem("pp_loadLimitReached");
+      }
+    } catch (error) {
+      console.error("Error fetching entitlements:", error);
+    }
   }, []);
+
+  const loadLimitReached = entitlements === null ? true : !entitlements.canCreateLoad;
+  const entitlementsLoading = entitlements === null;
 
   const fetchLoads = useCallback(async (appliedFilters?: LoadFilters) => {
     try {
@@ -113,7 +138,7 @@ export default function AppLoads() {
         const brokerData = await api.brokers.me();
         setBroker(brokerData);
         setShowVerificationBanner(!brokerData.emailVerified);
-        await fetchLoads();
+        await Promise.all([fetchLoads(), fetchEntitlements()]);
       } catch (error) {
         console.log("No active session - showing demo view");
         setBroker(null);
@@ -124,7 +149,7 @@ export default function AppLoads() {
     };
 
     fetchData();
-  }, []);
+  }, [fetchEntitlements]);
 
   const handleApplyFilters = async () => {
     setActiveFilters({ ...filters });

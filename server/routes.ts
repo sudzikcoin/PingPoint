@@ -1767,6 +1767,45 @@ export async function registerRoutes(
     }
   });
 
+  // GET /api/billing/entitlements - Get entitlements with no-store headers (prevents Chrome caching issue)
+  app.get("/api/billing/entitlements", async (req: Request, res: Response) => {
+    // Set aggressive no-cache headers to prevent browser caching issues
+    res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+    res.setHeader("Pragma", "no-cache");
+    res.setHeader("Expires", "0");
+
+    try {
+      const broker = await getBrokerFromRequest(req);
+      if (!broker) {
+        return res.status(401).json({ error: "Unauthorized" });
+      }
+
+      const summary = await getBillingSummary(broker.id);
+      
+      // Compute derived values
+      const loadsRemainingFromPlan = Math.max(0, summary.includedLoads - summary.loadsUsed);
+      const loadsRemainingThisCycle = loadsRemainingFromPlan + summary.creditsBalance;
+      const canCreateLoad = loadsRemainingThisCycle > 0;
+
+      const cycleEndsAt = summary.cycleEndAt
+        ? (summary.cycleEndAt instanceof Date ? summary.cycleEndAt.toISOString() : summary.cycleEndAt)
+        : null;
+
+      return res.json({
+        plan: summary.plan,
+        loadsUsedThisCycle: summary.loadsUsed,
+        loadsLimitThisCycle: summary.includedLoads,
+        loadsRemainingThisCycle,
+        canCreateLoad,
+        creditsBalance: summary.creditsBalance,
+        cycleEndsAt,
+      });
+    } catch (error) {
+      console.error("Error in GET /api/billing/entitlements:", error);
+      return res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
   // =============================================
   // WEBHOOK INTEGRATION ENDPOINTS
   // =============================================

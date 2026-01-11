@@ -241,9 +241,6 @@ export default function AppLoadNew() {
       // UI Feedback & Redirect
       toast.success(`Load ${newLoad.loadNumber} created!`);
       
-      // Clear limit flag on success
-      localStorage.removeItem("pp_loadLimitReached");
-      
       setLocation(`/app/loads`);
     
     } catch (error: any) {
@@ -262,9 +259,7 @@ export default function AppLoadNew() {
             onClick: () => setLocation("/app/billing"),
           },
         });
-        // Set banner + localStorage flag
         setLimitReached({ message: error.message || "You've reached your monthly limit (3 loads). Upgrade or buy extra load credits." });
-        localStorage.setItem("pp_loadLimitReached", "true");
       } else {
         toast.error(error.message || "Failed to create load. Please try again.");
       }
