@@ -1,10 +1,15 @@
 import { createApp, log } from "./app";
 import { serveStatic } from "./static";
 import { logEnvStatus, logAdminStatus } from "./config/env";
+import { getBootConfig, validateBootConfig, logBootConfig, handlePortError } from "./config/boot";
 import { ensureDatabase } from "./migrate";
 import { startExceptionScanning } from "./services/exceptionService";
 
 (async () => {
+  const bootConfig = getBootConfig();
+  validateBootConfig(bootConfig);
+  logBootConfig(bootConfig);
+  
   logEnvStatus();
   logAdminStatus();
   
@@ -12,7 +17,7 @@ import { startExceptionScanning } from "./services/exceptionService";
     await ensureDatabase();
   } catch (err) {
     console.error("[FATAL] Database initialization failed:", err);
-    if (process.env.NODE_ENV === "production") {
+    if (bootConfig.isProduction) {
       process.exit(1);
     } else {
       console.warn("[DB] Continuing despite migration error in development...");
@@ -23,22 +28,25 @@ import { startExceptionScanning } from "./services/exceptionService";
   
   startExceptionScanning(5);
 
-  if (process.env.NODE_ENV === "production") {
+  if (bootConfig.isProduction) {
     serveStatic(app);
   } else {
     const { setupVite } = await import("./vite");
     await setupVite(httpServer, app);
   }
 
-  const port = parseInt(process.env.PORT || "5000", 10);
+  httpServer.on("error", (err: NodeJS.ErrnoException) => {
+    handlePortError(err, bootConfig.port);
+  });
+
   httpServer.listen(
     {
-      port,
+      port: bootConfig.port,
       host: "0.0.0.0",
       reusePort: true,
     },
     () => {
-      log(`serving on port ${port}`);
+      log(`serving on port ${bootConfig.port}`);
     },
   );
 })();

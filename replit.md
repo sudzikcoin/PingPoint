@@ -94,15 +94,33 @@ Preferred communication style: Simple, everyday language.
     - **Test Database Safety**: Tests run `resetDatabase()` which TRUNCATEs all tables. Tests use the same DATABASE_URL as development. Running `npm test` will wipe all development data.
     - **Production Safety**: Tests refuse to run if `NODE_ENV=production`.
 
+### Environment Isolation
+
+- **Boot Config**: `server/config/boot.ts` centralizes environment detection and database URL resolution.
+- **Database URL Selection**:
+    - `NODE_ENV=test`: Uses `DATABASE_URL_TEST` (warns if falling back to `DATABASE_URL`)
+    - `NODE_ENV=development`: Uses `DATABASE_URL_DEV` or `DATABASE_URL`
+    - `NODE_ENV=production`: Uses `DATABASE_URL` only
+- **Port Resolution**:
+    - Uses `PORT` env var if set
+    - Development: defaults to 5000
+    - Production: defaults to 8080
+- **Boot Logging**: Startup prints clear `[BOOT] ENV=... DB=... PORT=...` banner.
+- **Safety Guards**:
+    - Production refuses to start if `DATABASE_URL` points to localhost
+    - Production requires `JWT_SECRET` (min 32 chars)
+    - `EADDRINUSE` exits cleanly with actionable guidance
+
 ### Database Safety
 
-- **Migrations vs Push**: Use `npm run db:push` only for initial schema creation or development. For production, use migrations folder with `drizzle-kit generate` and `drizzle-kit migrate`.
-- **Startup Behavior**: On startup, the server logs database connection info (host, database, user - not password). If no migrations folder exists and tables=0, it runs `drizzle-kit push`. Otherwise, it applies pending migrations.
+- **Migrations vs Push**: Use `npm run db:push` only for initial schema creation in development. Production requires migrations folder.
+- **Startup Behavior**: On startup, logs database connection info. In dev with no tables, runs `drizzle-kit push`. In production, only runs migrations (push blocked).
 - **Preventing Data Loss**:
     - Never run `npm test` against a database you want to keep - it TRUNCATEs all tables.
+    - Set `DATABASE_URL_TEST` for isolated test databases.
     - For production deployments, ensure migrations are applied before starting the app.
     - The server logs `[DB] Connection:` at startup - verify you're connected to the right database.
-- **Verifying Database**: Check startup logs for `[DB] Host:` and `[DB] Database:` to confirm connection target.
+- **Verifying Database**: Check startup logs for `[BOOT] DB=host / database` to confirm connection target.
 
 ## External Dependencies
 

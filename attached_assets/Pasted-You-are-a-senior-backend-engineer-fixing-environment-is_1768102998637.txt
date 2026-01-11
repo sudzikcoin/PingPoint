@@ -1,0 +1,113 @@
+You are a senior backend engineer fixing environment isolation and database safety issues.
+
+Project context:
+- Node.js + Express
+- Drizzle ORM
+- PostgreSQL
+- Docker + docker-compose
+- Replit Dev environment
+- GitHub Actions CI
+
+CRITICAL GOALS:
+1. Prevent database resets after git push
+2. Strictly separate DEV / DOCKER / CI databases
+3. Fix EADDRINUSE port conflicts
+4. Make startup idempotent and safe
+
+---
+
+TASKS:
+
+### 1. Environment separation
+Implement strict environment-based config:
+
+- NODE_ENV=development
+  - Uses DATABASE_URL_DEV
+  - NEVER runs destructive migrations
+- NODE_ENV=production
+  - Uses DATABASE_URL
+  - ONLY runs drizzle migrate (never push)
+- NODE_ENV=test
+  - Uses DATABASE_URL_TEST
+  - Test-only schema allowed
+
+Update DB bootstrap code to:
+- Log active DB + host on startup
+- Refuse to start if NODE_ENV is missing
+- Never auto-drop or auto-push schema
+
+---
+
+### 2. Fix database initialization logic
+Replace any usage of:
+- drizzle push
+- drop schema
+- reset db
+on startup
+
+Startup must do:
+- drizzle migrate
+- exit on failure
+
+---
+
+### 3. Fix PORT collision
+Implement port resolution logic:
+
+- Respect process.env.PORT
+- Default:
+  - dev: 5000
+  - docker/prod: 8080
+- On EADDRINUSE:
+  - log clear error
+  - exit process (do NOT retry)
+
+Ensure docker-compose exposes ONLY 8080
+Ensure dev server NEVER runs when docker is up
+
+---
+
+### 4. CI isolation
+Update GitHub Actions:
+- Use DATABASE_URL_TEST
+- Run migrations before tests
+- Never touch prod or dev DBs
+
+---
+
+### 5. Safety checks
+Add startup guard:
+- If NODE_ENV=production and DATABASE_URL contains "localhost" → exit
+- If NODE_ENV=development and DATABASE_URL points to docker → warn
+
+---
+
+### 6. Logging
+On startup print clearly:
+- NODE_ENV
+- Database host
+- Database name
+- Port
+
+Example:
+[BOOT] ENV=development
+[BOOT] DB=helium / heliumdb
+[BOOT] PORT=5000
+
+---
+
+OUTPUT EXPECTATION:
+- No DB wipes after git push
+- No port conflicts
+- Predictable startup
+- Docker + Replit can never fight each other
+
+DO NOT:
+- Change schemas
+- Touch business logic
+- Add new dependencies
+
+ONLY:
+- Config
+- Startup
+- Safety guards

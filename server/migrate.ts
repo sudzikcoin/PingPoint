@@ -4,11 +4,12 @@ import { migrate } from "drizzle-orm/node-postgres/migrator";
 import * as schema from "@shared/schema";
 import { existsSync, readdirSync, readFileSync } from "fs";
 import path from "path";
+import { getEffectiveDatabaseUrl } from "./config/boot";
 
 const { Pool } = pg;
 
 async function waitForDatabase(maxRetries = 30, delayMs = 1000): Promise<pg.Pool> {
-  const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+  const pool = new Pool({ connectionString: getEffectiveDatabaseUrl() });
   
   for (let i = 0; i < maxRetries; i++) {
     try {
@@ -90,8 +91,8 @@ async function markMigrationsApplied(pool: pg.Pool, migrations: string[], migrat
 }
 
 function logDatabaseInfo(): void {
-  const dbUrl = process.env.DATABASE_URL || "";
   try {
+    const dbUrl = getEffectiveDatabaseUrl();
     const url = new URL(dbUrl);
     const redacted = `${url.protocol}//${url.username}:***@${url.hostname}:${url.port || 5432}${url.pathname}`;
     console.log("[DB] Connection:", redacted);
@@ -128,7 +129,13 @@ export async function ensureDatabase(): Promise<void> {
     
     if (!hasMigrations) {
       if (tableCount === 0) {
-        console.log("[DB] No migrations folder and no tables - running db:push...");
+        if (process.env.NODE_ENV === "production") {
+          console.error("[DB] FATAL: No migrations folder and no tables in production");
+          console.error("[DB] Production requires migrations. Run: npm run db:generate");
+          throw new Error("Cannot initialize production database without migrations");
+        }
+        
+        console.log("[DB] No migrations folder and no tables - running db:push (dev only)...");
         
         const { exec } = await import('child_process');
         const { promisify } = await import('util');
