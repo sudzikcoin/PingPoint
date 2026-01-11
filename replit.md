@@ -110,6 +110,10 @@ Preferred communication style: Simple, everyday language.
     - Production refuses to start if `DATABASE_URL` points to localhost
     - Production requires `JWT_SECRET` (min 32 chars)
     - `EADDRINUSE` exits cleanly with actionable guidance
+- **DB Safety Guard**: `server/db/safety.ts` validates database URLs at startup:
+    - Production rejects localhost, test/dev/ci database names
+    - Test environment warns if not using dedicated test database
+    - Fingerprint logging confirms actual database connection
 
 ### Database Safety
 
@@ -121,6 +125,7 @@ Preferred communication style: Simple, everyday language.
     - For production deployments, ensure migrations are applied before starting the app.
     - The server logs `[DB] Connection:` at startup - verify you're connected to the right database.
 - **Verifying Database**: Check startup logs for `[BOOT] DB=host / database` to confirm connection target.
+- **Fingerprint**: Startup logs `[DB] Fingerprint: db=... user=... tables=...` to confirm which database is actually connected.
 
 ## External Dependencies
 

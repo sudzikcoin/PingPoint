@@ -1,5 +1,13 @@
 version: '3.8'
 
+# =============================================================================
+# WARNING: DATABASE PERSISTENCE
+# =============================================================================
+# The db_data volume stores all PostgreSQL data.
+# DO NOT run "docker compose down -v" in production - this will DELETE ALL DATA!
+# Use "docker compose down" (without -v) to stop services while keeping data.
+# =============================================================================
+
 services:
   # =============================================================================
   # PostgreSQL Database
@@ -11,8 +19,11 @@ services:
     environment:
       POSTGRES_DB: pingpoint
       POSTGRES_USER: pingpoint
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-pingpoint_password}
+      # IMPORTANT: In production, POSTGRES_PASSWORD must be set in .env file
+      # Never use the default password in production!
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
     volumes:
+      # Named volume for data persistence - survives container restarts
       - db_data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U pingpoint -d pingpoint"]
@@ -54,5 +65,10 @@ services:
       retries: 3
 
 volumes:
+  # CRITICAL: db_data contains all database content
+  # This volume must be backed up regularly in production
+  # Never delete this volume unless you intend to lose all data
   db_data:
+    name: pingpoint_db_data
   uploads_data:
+    name: pingpoint_uploads

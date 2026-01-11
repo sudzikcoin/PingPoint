@@ -1,4 +1,5 @@
 import { URL } from "url";
+import { assertDatabaseSafety, type DatabaseInfo } from "../db/safety";
 
 export interface BootConfig {
   nodeEnv: string;
@@ -7,10 +8,13 @@ export interface BootConfig {
   dbHost: string;
   dbName: string;
   dbUser: string;
+  dbProvider: string;
   isProduction: boolean;
   isDevelopment: boolean;
   isTest: boolean;
   isDocker: boolean;
+  disableAutoMigrations: boolean;
+  disableDbSeed: boolean;
 }
 
 function getEffectivePort(): number {
@@ -55,39 +59,47 @@ export function getEffectiveDatabaseUrl(): string {
   throw new Error("DATABASE_URL must be set. Did you forget to provision a database?");
 }
 
-function parseDatabaseUrl(dbUrl: string): { host: string; name: string; user: string } {
-  try {
-    const url = new URL(dbUrl);
-    return {
-      host: url.hostname,
-      name: url.pathname.slice(1),
-      user: url.username,
-    };
-  } catch {
-    return { host: "unknown", name: "unknown", user: "unknown" };
-  }
-}
-
 function detectDocker(dbUrl: string): boolean {
   return dbUrl.includes("@db:") || dbUrl.includes("pingpoint-db");
+}
+
+function getDisableAutoMigrations(): boolean {
+  if (process.env.DISABLE_AUTO_MIGRATIONS !== undefined) {
+    return process.env.DISABLE_AUTO_MIGRATIONS === "true";
+  }
+  return process.env.NODE_ENV === "production";
+}
+
+function getDisableDbSeed(): boolean {
+  if (process.env.DISABLE_DB_SEED !== undefined) {
+    return process.env.DISABLE_DB_SEED === "true";
+  }
+  return process.env.NODE_ENV === "production";
 }
 
 export function getBootConfig(): BootConfig {
   const nodeEnv = process.env.NODE_ENV || "";
   const databaseUrl = getEffectiveDatabaseUrl();
-  const { host, name, user } = parseDatabaseUrl(databaseUrl);
+  
+  const dbInfo = assertDatabaseSafety({
+    nodeEnv,
+    databaseUrl,
+  });
   
   return {
     nodeEnv,
     port: getEffectivePort(),
     databaseUrl,
-    dbHost: host,
-    dbName: name,
-    dbUser: user,
+    dbHost: dbInfo.host,
+    dbName: dbInfo.database,
+    dbUser: dbInfo.user,
+    dbProvider: dbInfo.provider,
     isProduction: nodeEnv === "production",
     isDevelopment: nodeEnv === "development",
     isTest: nodeEnv === "test",
     isDocker: detectDocker(databaseUrl),
+    disableAutoMigrations: getDisableAutoMigrations(),
+    disableDbSeed: getDisableDbSeed(),
   };
 }
 
@@ -103,14 +115,13 @@ export function validateBootConfig(config: BootConfig): void {
   }
   
   if (config.isProduction) {
-    if (config.dbHost === "localhost" || config.dbHost === "127.0.0.1") {
-      console.error("[BOOT] FATAL: Production cannot use localhost database");
-      console.error("[BOOT] DATABASE_URL points to:", config.dbHost);
+    if (!process.env.JWT_SECRET || process.env.JWT_SECRET.length < 32) {
+      console.error("[BOOT] FATAL: Production requires JWT_SECRET (min 32 chars)");
       process.exit(1);
     }
     
-    if (!process.env.JWT_SECRET || process.env.JWT_SECRET.length < 32) {
-      console.error("[BOOT] FATAL: Production requires JWT_SECRET (min 32 chars)");
+    if (!process.env.POSTGRES_PASSWORD && config.isDocker) {
+      console.error("[BOOT] FATAL: Production Docker requires POSTGRES_PASSWORD");
       process.exit(1);
     }
   }
@@ -124,8 +135,12 @@ export function validateBootConfig(config: BootConfig): void {
 export function logBootConfig(config: BootConfig): void {
   console.log("=".repeat(60));
   console.log("[BOOT] ENV=" + config.nodeEnv);
-  console.log("[BOOT] DB=" + config.dbHost + " / " + config.dbName);
+  console.log("[BOOT] DB=" + config.dbHost + " / " + config.dbName + " (provider: " + config.dbProvider + ")");
   console.log("[BOOT] PORT=" + config.port);
+  if (config.isProduction) {
+    console.log("[BOOT] AUTO_MIGRATIONS=" + (!config.disableAutoMigrations));
+    console.log("[BOOT] DB_SEED=" + (!config.disableDbSeed));
+  }
   console.log("=".repeat(60));
 }
 

@@ -1,0 +1,137 @@
+You are working in the existing PingPoint repo on Replit. Goal: (1) STOP the “DB reset / empty data after push” problem, and (2) FIX “Create Load button disabled in Chrome but enabled in Safari” by eliminating stale cached billing/entitlements state and forcing fresh server truth after checkout.
+
+CRITICAL CONSTRAINTS
+- Make minimal, localized changes.
+- Do NOT change core product flows (loads, tracking, telegram, etc.).
+- Do NOT change DB schema unless absolutely necessary.
+- Prefer adding a small endpoint + using it from UI.
+- Ensure no destructive DB actions run on app start.
+
+PART 0 — Diagnose the two root causes (likely)
+A) “DB is empty after push” on Replit:
+   - Replit DB itself persists, but your app can accidentally connect to a DIFFERENT database after a redeploy (env changed / fallback URL / different DB name), OR you run “dev reset/seed” logic on boot, OR you’re applying a destructive migration (drop+recreate).
+   - We will add hard safety checks to prevent accidental “reset” behavior and to clearly log which DB we connect to (host/db/user).
+B) “Create Load disabled in Chrome only”:
+   - This screams “cached entitlement response” (browser cache, service worker, Next fetch cache, localStorage, React Query cache).
+   - We will ensure:
+     1) Entitlements are computed server-side on every request.
+     2) API responses are `Cache-Control: no-store`.
+     3) Client fetch uses `cache: 'no-store'`.
+     4) After checkout success / return, we force refresh & a short re-check loop.
+
+PART 1 — Add a single source of truth: /api/billing/entitlements (NO STORE)
+1) Create a new endpoint that returns:
+   - plan: "FREE" | "PRO"
+   - loadsUsedThisCycle
+   - loadsLimitThisCycle
+   - loadsRemainingThisCycle
+   - canCreateLoad (boolean)
+   - cycleEndsAt (ISO or null)
+2) IMPORTANT: set response headers:
+   - Cache-Control: no-store, no-cache, must-revalidate, proxy-revalidate
+   - Pragma: no-cache
+   - Expires: 0
+
+Implementation details:
+- Reuse existing billing/subscription/credits logic (do not re-invent).
+- If you already have a function like getBrokerEntitlements/getBillingState, call it.
+- If not, compute from the existing tables:
+  - subscription/plan table (or broker_entitlements)
+  - load usage counts for cycle
+  - any extra credits logic
+- Keep it minimal. The endpoint can call one existing “billing service” function.
+
+PART 2 — Make “Create Load” button depend ONLY on live entitlements (no cached UI state)
+1) Find the Broker Console page/component that renders:
+   - “FREE PLAN LIMIT REACHED… Upgrade…”
+   - the “+ CREATE LOAD” button
+2) Remove any logic that relies on:
+   - localStorage cached plan
+   - previously fetched plan stored forever
+   - hard-coded “limit reached” flags
+3) On page load (and whenever returning from billing), fetch:
+   GET /api/billing/entitlements with cache: 'no-store'
+4) Render:
+   - Button disabled ONLY if entitlements.canCreateLoad === false
+   - Banner “limit reached” ONLY if loadsRemainingThisCycle === 0
+5) If you already use a data fetching library (SWR/React Query):
+   - set revalidateOnFocus: true
+   - set dedupingInterval small (e.g. 2s) or disable caching for this call
+   - always request with “no-store” semantics
+
+PART 3 — Fix “after upgrading to PRO, Chrome still shows limit reached”
+1) Identify the “Billing / Upgrade” flow return page (e.g. /billing?success=1 or /billing/success).
+2) After successful payment (Stripe webhook already updates DB), the client must:
+   - call router.refresh()
+   - refetch /api/billing/entitlements
+   - optionally poll up to 10 seconds (webhook delays happen)
+3) Implement a small polling loop ONLY on the success page:
+   - every 1s, fetch entitlements no-store
+   - stop early once plan is PRO or loadsRemainingThisCycle > 0
+   - after done, router.refresh() and navigate back to broker console or enable UI
+
+PART 4 — Stop accidental “DB wipe” behavior
+We will add two safety measures:
+
+A) Ensure no “reset” / “seed” / “drop” runs on normal start
+1) Search the codebase for any of these and ensure they DO NOT run automatically:
+   - reset
+   - seed
+   - truncate
+   - drop table
+   - drizzle push --force
+   - migrate:reset
+2) Only allow destructive operations when an explicit env flag is set:
+   - ALLOW_DB_RESET=true
+   Otherwise log a warning and skip.
+
+B) Make DB connection explicit and stable on Replit
+1) Ensure runtime uses process.env.DATABASE_URL only.
+2) If DATABASE_URL is missing in production, FAIL FAST with a clear error:
+   - throw new Error("DATABASE_URL is required in production")
+3) On startup, log (safe) DB identity once:
+   - host, database, user (NO password)
+   This helps you confirm you didn’t silently switch DB after a push.
+
+PART 5 — CI tests failing on GitHub (TrustedDeviceLogin tests) — isolate from prod/dev DB
+Your screenshots show tests expecting /api/brokers/login but getting 404 and also failing on broker_devices broker_id null.
+This is separate from the Chrome/Safari issue, but it’s why your GitHub workflow is red.
+
+Minimal fix approach:
+1) Ensure the route /api/brokers/login exists in test environment OR update the test to the correct route path.
+2) Ensure broker_devices insert always has broker_id:
+   - In the “trusted device create” function, do not create a broker_device row until brokerId is known.
+   - Or make broker_id nullable ONLY if that matches product logic (prefer not changing schema; fix code).
+3) Ensure tests run on TEST_DATABASE_URL (separate ephemeral DB), not your dev/prod database.
+   - In CI workflow, spin up postgres service and set TEST_DATABASE_URL.
+   - In app code, when NODE_ENV === 'test', use TEST_DATABASE_URL.
+
+PART 6 — What to change (files)
+Do the changes in-place. Typical likely locations (adjust to your repo):
+- server/routes/billing.ts OR server/routes/api/billing/...
+- server/services/billingService.ts
+- apps/... broker console page component (Next.js app router)
+- billing success page component
+- server/db/index.ts or server/db/client.ts (where DATABASE_URL is read)
+- server/tests/trustedDeviceLogin.test.ts (route mismatch) + trusted device service code
+
+DELIVERABLES
+1) New endpoint: GET /api/billing/entitlements with no-store headers.
+2) Broker Console UI uses ONLY entitlements endpoint to decide button enabled/disabled + banners.
+3) Billing success page: refresh + short polling loop to pick up webhook updates reliably (fix Chrome stale state).
+4) DB safety: prevent any reset/seed on boot unless ALLOW_DB_RESET=true; enforce DATABASE_URL required in prod; log DB identity (host/db/user).
+5) CI: isolate tests to TEST_DATABASE_URL and fix 404 route mismatch / broker_id null in trusted device code.
+
+IMPLEMENTATION NOTES (important)
+- Do NOT add service worker or PWA caching.
+- If there is any caching middleware, ensure these routes set:
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate')
+  res.setHeader('Pragma', 'no-cache')
+  res.setHeader('Expires', '0')
+- In Next.js fetch for entitlements:
+  fetch('/api/billing/entitlements', { cache: 'no-store' })
+
+Now implement all of the above, run tests, and ensure:
+- Chrome and Safari both enable Create Load immediately after PRO activates.
+- Replit DB does not “empty out” after push unless explicitly reset.
+- GitHub Actions workflow passes (or at least no longer fails for route 404 / broker_id null).

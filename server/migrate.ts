@@ -5,6 +5,7 @@ import * as schema from "@shared/schema";
 import { existsSync, readdirSync, readFileSync } from "fs";
 import path from "path";
 import { getEffectiveDatabaseUrl } from "./config/boot";
+import { getDatabaseFingerprint } from "./db/safety";
 
 const { Pool } = pg;
 
@@ -117,6 +118,9 @@ export async function ensureDatabase(): Promise<void> {
   console.log("[DB] Starting database migration check...");
   logDatabaseInfo();
   
+  const disableAutoMigrations = process.env.DISABLE_AUTO_MIGRATIONS === "true" || 
+    (process.env.NODE_ENV === "production" && process.env.DISABLE_AUTO_MIGRATIONS !== "false");
+  
   const pool = await waitForDatabase();
   const migrationsPath = path.join(process.cwd(), 'migrations');
   const hasMigrations = existsSync(migrationsPath);
@@ -126,6 +130,15 @@ export async function ensureDatabase(): Promise<void> {
     const appliedMigrations = await getAppliedMigrations(pool);
     
     console.log("[DB] State: tables=%d, appliedMigrations=%d", tableCount, appliedMigrations.length);
+    
+    const fingerprint = await getDatabaseFingerprint(pool);
+    console.log("[DB] Fingerprint:", fingerprint);
+    
+    if (disableAutoMigrations) {
+      console.log("[DB] Auto-migrations disabled (DISABLE_AUTO_MIGRATIONS=true or production)");
+      console.log("[DB] Run migrations manually: npm run db:migrate");
+      return;
+    }
     
     if (!hasMigrations) {
       if (tableCount === 0) {

@@ -1,0 +1,124 @@
+You are a senior full-stack engineer working on the PingPoint repo (Next.js 14 + TS + Express backend + PostgreSQL + Drizzle). Goal: “DB Protection” — make it IMPOSSIBLE for a git push / restart / Replit run / CI to accidentally wipe or reset the real database, and make environment separation explicit (dev/test/prod). Do minimal, localized changes; do not change core business logic or Telegram/webhooks flows.
+
+CONTEXT (what’s happening):
+- User reports that “after push to Git, DB became empty again”.
+- This usually happens because:
+  1) the app is connecting to a DIFFERENT database after restart (DATABASE_URL switched / overwritten / different provider),
+  2) CI/tests are running against the same DB and truncating/creating data,
+  3) an auto-migration/seed/reset script runs on boot (or drizzle push in prod),
+  4) docker compose DB volume not persistent / wrong compose used.
+
+DELIVERABLES (must implement all):
+A) Hard DB Safety Guard in code (fail-fast)
+B) Strict environment separation: DEV / TEST / PROD never share a DB
+C) Disable any destructive behavior in PROD (no reset, no drizzle push, no seed)
+D) Make DB persistence explicit (docker volume + no “down -v” usage in docs + safer scripts)
+E) Add clear logging at startup showing WHICH DB is being used (host/db/user/provider), without printing passwords.
+
+========================================
+A) Implement DB Safety Guard (fail-fast)
+========================================
+1) Add new file: server/db/safety.ts
+   - Export function assertDatabaseSafety(params)
+   - Inputs: { nodeEnv, databaseUrl, allowLocalInProd?: boolean, allowTestDbInProd?: boolean }
+   - Behavior:
+     - If nodeEnv === "production":
+       - Reject databaseUrl that points to:
+         - localhost / 127.0.0.1 / 0.0.0.0
+         - database name containing: "test", "ci", "tmp", "local", "dev"
+         - user containing: "test"
+       - Reject databaseUrl missing a database name.
+     - If nodeEnv === "test":
+       - REQUIRE database name contains "test" or "ci" (to prevent tests from using real DB).
+     - Return parsed info (host, port, db, user, ssl) for logging (mask secrets).
+   - Throw a clear error with instructions if unsafe.
+
+2) In the backend DB initialization (where DATABASE_URL is read and drizzle client is created):
+   - Import assertDatabaseSafety and call it BEFORE connecting.
+   - Print one safe startup line:
+     “[DB] Using PostgreSQL host=<host> port=<port> db=<db> user=<user> env=<NODE_ENV>”
+     (Never print password or full URL.)
+
+========================================
+B) Strict separation DEV / TEST / PROD
+========================================
+3) Add env variables support:
+   - DATABASE_URL (required)
+   - DATABASE_URL_TEST (required for tests)
+   - DISABLE_AUTO_MIGRATIONS (default true in production)
+   - DISABLE_DB_SEED (default true in production)
+
+4) Ensure test runner never uses DATABASE_URL:
+   - Update test bootstrap/setup (vitest/jest) to read DATABASE_URL_TEST explicitly.
+   - If DATABASE_URL_TEST is missing, tests must FAIL with clear message.
+   - If NODE_ENV=test and code sees DATABASE_URL (non-test), fail.
+
+5) GitHub Actions / CI:
+   - Update workflow to provision a disposable Postgres service and set DATABASE_URL_TEST to it.
+   - Run migrations against the TEST database only.
+   - Ensure CI does not require access to production secrets.
+
+========================================
+C) Disable destructive behavior in PROD
+========================================
+6) Search the repo for any of these and make safe:
+   - “drizzle push”
+   - “drop table”
+   - “reset database”
+   - “seed”
+   - “truncate”
+   - any script that runs on startup and modifies data (except safe migrations)
+   Actions:
+   - Remove/disable “drizzle push” from any production path (startup, Dockerfile runtime, scripts).
+   - If there is an automatic seed on boot, gate it behind DISABLE_DB_SEED !== "true" AND NODE_ENV !== "production".
+   - If there is any “reset DB” helper, require an explicit env CONFIRM_RESET_DB="YES" and forbid in production.
+
+7) Auto migrations:
+   - If app currently runs migrations automatically on boot, keep it ONLY for dev, and for prod:
+     - default DISABLE_AUTO_MIGRATIONS=true
+     - if disabled, app starts normally without mutating schema
+   - If migrations are needed in prod, they must be run manually via a script command (db:migrate:prod) that is NOT executed automatically.
+
+========================================
+D) Make DB persistence explicit (docker + docs)
+========================================
+8) Docker Compose:
+   - Verify docker-compose.yml uses named volume for Postgres data (db_data).
+   - Ensure volume name is stable and not overridden.
+   - Add a comment warning NOT to run “docker compose down -v” on prod.
+   - Add .env.example entries for POSTGRES_PASSWORD and remove dangerous default fallbacks in prod:
+     - For production, require POSTGRES_PASSWORD to be set (no default).
+     - Keep dev default only when NODE_ENV !== production.
+
+9) Add scripts in package.json:
+   - db:info -> prints DB host/db/user (via safety parser) so user can confirm what DB they’re on.
+   - db:migrate -> runs drizzle migrations (safe) against DATABASE_URL.
+   - db:migrate:test -> runs migrations against DATABASE_URL_TEST.
+   - (Optional) db:backup -> instructions only (don’t hardcode secrets).
+
+========================================
+E) Make “DB empty after push” detectable
+========================================
+10) Add “DB fingerprint” check (non-invasive):
+   - On startup, run a simple query:
+     - select current_database(), current_user, inet_server_addr(), inet_server_port();
+   - Log it once as “[DB] fingerprint: db=… user=… addr=… port=…”
+   - This helps confirm whether user suddenly connected to a different DB.
+
+========================================
+QUALITY BAR / CONSTRAINTS
+========================================
+- Do not change tables/business logic. Only add safety and wiring.
+- Keep changes small and localized.
+- Add/adjust tests for safety guard behavior (unit tests) without requiring real DB.
+- Make sure “npm run dev” still works locally/Replit dev.
+- After changes, provide:
+  1) Files changed list
+  2) Exact env vars to set in Replit for dev/test
+  3) How to run CI locally (optional)
+  4) One short explanation why DB looked “wiped” (most likely switched DB URLs) and how the new guard prevents it.
+
+START NOW:
+- Scan repo for DB init + migration/seed logic + tests bootstrapping.
+- Implement the guard + separation + CI adjustments.
+- Ensure app still starts and tests run in CI with DATABASE_URL_TEST.
