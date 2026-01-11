@@ -17,22 +17,75 @@ export interface EnvValidation {
   emailConfigured: boolean;
 }
 
+export interface ValidatedEnv {
+  NODE_ENV: string;
+  PORT: number;
+  DATABASE_URL: string;
+  JWT_SECRET: string;
+  ANTHROPIC_API_KEY?: string;
+  RESEND_API_KEY?: string;
+  MAIL_FROM?: string;
+  PINGPOINT_PUBLIC_URL?: string;
+  ENABLE_CRON_JOBS: boolean;
+  ENABLE_FILE_LOGGING: boolean;
+  LOG_LEVEL: string;
+}
+
+export function getValidatedEnv(): ValidatedEnv {
+  return {
+    NODE_ENV: process.env.NODE_ENV || "development",
+    PORT: parseInt(process.env.PORT || "5000", 10),
+    DATABASE_URL: process.env.DATABASE_URL || "",
+    JWT_SECRET: process.env.JWT_SECRET || "",
+    ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY || process.env.CLAUDE_API_KEY,
+    RESEND_API_KEY: process.env.RESEND_API_KEY,
+    MAIL_FROM: process.env.MAIL_FROM,
+    PINGPOINT_PUBLIC_URL: process.env.PINGPOINT_PUBLIC_URL || process.env.APP_URL,
+    ENABLE_CRON_JOBS: process.env.ENABLE_CRON_JOBS !== "false",
+    ENABLE_FILE_LOGGING: process.env.ENABLE_FILE_LOGGING !== "false",
+    LOG_LEVEL: process.env.LOG_LEVEL || "info",
+  };
+}
+
 export function validateEnv(): EnvValidation {
+  if (process.env.SKIP_ENV_VALIDATION === "true") {
+    console.log("[ENV] Environment validation skipped via SKIP_ENV_VALIDATION");
+    return { valid: true, errors: [], warnings: [], emailConfigured: false };
+  }
+
   const errors: string[] = [];
   const warnings: string[] = [];
+  const isProduction = process.env.NODE_ENV === "production";
   
   const databaseUrl = process.env.DATABASE_URL;
   if (!databaseUrl) {
     errors.push("DATABASE_URL is required but not set");
   } else if (isPlaceholder(databaseUrl)) {
     errors.push("DATABASE_URL appears to be a placeholder value");
+  } else if (!databaseUrl.startsWith("postgresql://") && !databaseUrl.startsWith("postgres://")) {
+    errors.push("DATABASE_URL must start with postgresql:// or postgres://");
   }
   
   const jwtSecret = process.env.JWT_SECRET;
   if (!jwtSecret) {
-    warnings.push("JWT_SECRET not set, using default (insecure for production)");
-  } else if (isPlaceholder(jwtSecret) || jwtSecret.length < 32) {
-    warnings.push("JWT_SECRET appears weak or is a placeholder (should be 32+ chars)");
+    if (isProduction) {
+      errors.push("JWT_SECRET is required in production");
+    } else {
+      warnings.push("JWT_SECRET not set (required for production)");
+    }
+  } else if (isPlaceholder(jwtSecret)) {
+    errors.push("JWT_SECRET appears to be a placeholder value");
+  } else if (jwtSecret.length < 32) {
+    if (isProduction) {
+      errors.push("JWT_SECRET must be at least 32 characters in production");
+    } else {
+      warnings.push("JWT_SECRET should be at least 32 characters");
+    }
+  }
+  
+  const anthropicKey = process.env.ANTHROPIC_API_KEY || process.env.CLAUDE_API_KEY;
+  if (!anthropicKey) {
+    warnings.push("ANTHROPIC_API_KEY not set - PDF parsing will be disabled");
   }
   
   const resendApiKey = process.env.RESEND_API_KEY;
@@ -55,7 +108,12 @@ export function validateEnv(): EnvValidation {
   
   const publicUrl = process.env.PINGPOINT_PUBLIC_URL || process.env.APP_URL || process.env.BASE_URL;
   if (!publicUrl) {
-    warnings.push("No PUBLIC_URL/APP_URL set - email links may not work correctly");
+    warnings.push("No PINGPOINT_PUBLIC_URL set - email links may not work correctly");
+  }
+
+  const stripeKey = process.env.STRIPE_SECRET_KEY;
+  if (!stripeKey) {
+    warnings.push("STRIPE_SECRET_KEY not set - billing features disabled");
   }
   
   return {

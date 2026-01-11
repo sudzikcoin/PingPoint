@@ -1,0 +1,151 @@
+⚠️ SAFETY INSTRUCTIONS - READ FIRST:
+
+HOW THIS PROMPT SHOULD WORK:
+1. CREATE NEW validation file, don't modify existing server code yet
+2. ADD validation as OPTIONAL first (log warnings, don't crash)
+3. TEST thoroughly before making validation REQUIRED
+4. PROVIDE fallback values for non-critical env vars
+5. Only fail on truly critical missing vars (database, secrets)
+6. Create .env.example without removing existing .env
+
+WHAT TO PRESERVE:
+- Existing .env file must not be modified or deleted
+- Server must start in development even with warnings
+- Only critical vars (DATABASE_URL, JWT_SECRET) should be required
+- Optional vars should have sensible defaults
+
+ROLLBACK PLAN:
+- Validation should be easy to disable via env var: SKIP_ENV_VALIDATION=true
+- Can remove import of validation to revert to old behavior
+- .env file is never modified (only .env.example created)
+
+---
+
+Add Environment Variable Validation
+
+PROBLEM:
+App can start with missing or invalid environment variables, then fail at runtime with confusing errors. Need to validate config on startup.
+
+REQUIRED FIX:
+
+1. Install envalid for validation:
+npm install envalid
+
+2. Create environment validation:
+
+File: server/config/env.ts (NEW FILE)
+
+IMPORTANT: Make validation OPTIONAL at first (log warnings, don't crash):
+
+Validate these environment variables on startup:
+
+CRITICAL (required - server won't start without these):
+- DATABASE_URL: string, must start with postgresql://
+- JWT_SECRET: string, minimum 32 characters
+
+IMPORTANT (log warnings if missing):
+- NODE_ENV: default to 'development' if not set
+- PORT: default to 3000 if not set
+- CLAUDE_API_KEY: warn if missing (PDF parsing won't work)
+- FRONTEND_URL: warn if missing (CORS may not work correctly)
+
+OPTIONAL (use defaults, no warnings):
+- TWILIO_ACCOUNT_SID: undefined by default
+- TWILIO_AUTH_TOKEN: undefined by default  
+- TWILIO_PHONE_NUMBER: undefined by default
+- LOG_LEVEL: default 'info'
+- ENABLE_CRON_JOBS: default 'true'
+
+Validation behavior:
+- If CRITICAL vars missing: print error and exit(1)
+- If IMPORTANT vars missing: print warning and continue with defaults
+- If OPTIONAL vars missing: use defaults silently
+
+Add option to skip validation:
+if (process.env.SKIP_ENV_VALIDATION === 'true') {
+  console.log('⚠️  Environment validation skipped');
+  return process.env;
+}
+
+3. Add validation to server startup (make it optional):
+
+Import and run validation near start of server/server.ts:
+
+import { validateEnv } from './config/env';
+
+try {
+  const env = validateEnv();
+  console.log('✅ Environment variables validated');
+} catch (error) {
+  console.error('❌ Environment validation failed:', error.message);
+  if (process.env.NODE_ENV === 'production') {
+    process.exit(1); // Exit only in production
+  } else {
+    console.log('⚠️  Continuing in development mode...');
+  }
+}
+
+4. Create .env.example template (don't modify .env):
+
+File: .env.example (NEW FILE, don't touch existing .env)
+
+Include all variables with:
+- Comments explaining each variable
+- Example values (fake/placeholder)
+- Links to get API keys where applicable
+- Mark which are required vs optional
+- Never include real secrets
+
+Example:
+
+Required - Server Configuration
+NODE_ENV=development
+PORT=3000
+Required - Database
+DATABASE_URL=postgresql://user:password@localhost:5432/pingpoint
+Required - Authentication (generate with: openssl rand -base64 32)
+JWT_SECRET=your-super-secret-key-minimum-32-characters-long
+Required - Claude AI for PDF parsing
+Get key from: https://console.anthropic.com/
+CLAUDE_API_KEY=sk-ant-api03-xxxxx
+Optional - Twilio SMS Notifications
+Get from: https://www.twilio.com/console
+TWILIO_ACCOUNT_SID=ACxxxxx
+TWILIO_AUTH_TOKEN=xxxxx
+TWILIO_PHONE_NUMBER=+1234567890
+Frontend URL for CORS
+FRONTEND_URL=http://localhost:5173
+5. Update README.md (if exists):
+
+Add section "Environment Variables" that:
+- Lists all variables
+- Explains what each does
+- Shows how to get API keys
+- References .env.example
+- Explains which are required vs optional
+
+CRITICAL: Never commit .env to git, only .env.example
+
+EXPECTED RESULT:
+- Server validates config on startup
+- Critical issues cause exit in production, warnings in development
+- Clear messages about missing/invalid vars
+- Easy for new developers to set up correctly
+- .env.example makes setup straightforward
+- Can skip validation if needed for debugging
+
+FILES TO CREATE:
+- server/config/env.ts (NEW FILE with validation)
+- .env.example (NEW FILE, template only)
+
+FILES TO MODIFY:
+- server/server.ts (add optional validation call near start)
+- README.md (document environment variables)
+- .gitignore (ensure .env is ignored, .env.example is not)
+
+TESTING:
+1. Start server with full .env - should work, show "validated" message
+2. Remove JWT_SECRET from .env - should fail with clear error
+3. Remove optional TWILIO vars - should work with warnings
+4. Set SKIP_ENV_VALIDATION=true - should skip validation
+5. Restore .env to working state
