@@ -1,0 +1,83 @@
+⚠️ SAFETY INSTRUCTIONS - READ FIRST:
+
+HOW THIS PROMPT SHOULD WORK:
+1. DO NOT modify or delete any existing functions in geocoding.ts
+2. CREATE NEW functions alongside existing code
+3. UPDATE function calls to use new geocoding method
+4. KEEP ALL existing function signatures intact
+5. ADD new functionality, don't replace existing logic
+6. TEST that existing load creation still works before committing changes
+7. If geocoding fails, return null coordinates but DON'T break the load creation flow
+
+WHAT TO PRESERVE:
+- All existing routes in routes/loads.ts must continue working
+- Load creation should succeed even if geocoding fails
+- Don't change database schema in this fix
+- Keep all existing API response formats unchanged
+
+ROLLBACK PLAN:
+- Keep original geocoding.ts as geocoding.backup.ts before making changes
+- If anything breaks, can revert to backup version immediately
+
+---
+
+Fix Geocoding Service - Critical Bug
+
+PROBLEM:
+The geocoding service is failing with "GEOCODE_SKIPPED_NO_KEY" error, causing all pickup/delivery locations to have null coordinates. This breaks the entire geofencing system.
+
+CURRENT STATE:
+- File: server/services/geocoding.ts
+- Error: Mapbox API key is missing or not being used
+- Impact: Geofencing cannot work without coordinates
+
+REQUIRED FIX:
+
+1. Update geocoding service to use Nominatim (free, no API key needed):
+   - Replace Mapbox geocoding with Nominatim OpenStreetMap API
+   - URL: https://nominatim.openstreetmap.org/search
+   - Add proper User-Agent header: "PingPoint-App/1.0"
+   - Add rate limiting: maximum 1 request per second
+   - Response format: JSON with lat/lon fields
+
+2. Implement fallback chain:
+   Try Nominatim → if fails → Try cached results → if fails → return null (DON'T throw error)
+
+3. Add geocoding result validation:
+   - Check if result has valid lat/lng numbers
+   - Check if coordinates are in reasonable range for USA: latitude 25-50, longitude -125 to -65
+   - Log all geocoding attempts with results for debugging
+   - Return null coordinates with error message if validation fails (DON'T crash)
+
+4. Add retry logic:
+   - Retry failed geocoding up to 3 times with exponential backoff (1s, 2s, 4s)
+   - Add 1 second delay between requests to respect rate limits
+   - Cache successful geocoding results in memory to avoid repeated calls for same address
+
+5. Update load creation flow:
+   - When load is created from RC, automatically geocode both pickup and delivery addresses
+   - If geocoding fails for either address, still create the load but set a flag "needsGeocoding: true"
+   - Store the original address string even if geocoding fails
+   - Return clear error message to user if geocoding fails but STILL create the load
+
+CRITICAL: Load creation must NEVER fail because of geocoding issues. Always allow load creation to complete.
+
+EXPECTED RESULT:
+- All new loads have valid coordinates automatically
+- Geofencing system works without any API keys
+- Graceful handling if geocoding temporarily fails
+- Clear error messages and logging for debugging
+- Load creation works even if geocoding fails
+
+FILES TO MODIFY:
+- server/services/geocoding.ts (main changes here - keep backup)
+- server/routes/loads.ts (ensure geocoding called on creation but doesn't block it)
+- server/routes/pdf.ts (geocode addresses after RC parsing but allow parsing to complete)
+
+TESTING INSTRUCTIONS:
+After implementing, test with these addresses:
+1. "901 E 1250 S, Haubstadt, IN 47639"
+2. "17000 N Bay Road, Sunny Isles Beach, FL 33160"
+3. "Invalid address XYZ123" - should create load with null coordinates
+
+Both valid addresses should return coordinates. Invalid address should still create load.
