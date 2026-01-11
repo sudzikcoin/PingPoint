@@ -2,6 +2,7 @@ import { db } from "../db";
 import { loads, trackingPings } from "@shared/schema";
 import { eq, and, inArray, desc, isNotNull } from "drizzle-orm";
 import { evaluateGeofencesForActiveLoad } from "../geofence";
+import { logger } from "../utils/logger";
 
 const CHECK_INTERVAL_MS = 60 * 1000;
 const ACTIVE_STATUSES = ["PLANNED", "IN_TRANSIT", "AT_PICKUP", "AT_DELIVERY"];
@@ -32,13 +33,13 @@ export function getGeofenceMonitorStatus(): GeofenceMonitorStatus {
 
 async function runGeofenceCheck(): Promise<void> {
   if (isRunning) {
-    console.log("[GeofenceMonitor] Previous check still running, skipping");
+    logger.debug("Geofence monitor: previous check still running, skipping");
     return;
   }
 
   const startTime = Date.now();
   isRunning = true;
-  console.log("[GeofenceMonitor] Geofence check starting...");
+  logger.debug("Geofence check starting...");
 
   try {
     const activeLoads = await db
@@ -55,7 +56,7 @@ async function runGeofenceCheck(): Promise<void> {
         )
       );
 
-    console.log(`[GeofenceMonitor] Checking ${activeLoads.length} active loads`);
+    logger.info(`Geofence monitor: checking ${activeLoads.length} active loads`, { loadsCount: activeLoads.length });
     loadsChecked = activeLoads.length;
 
     for (const load of activeLoads) {
@@ -83,7 +84,7 @@ async function runGeofenceCheck(): Promise<void> {
         const accuracy = latestPing.accuracy ? parseFloat(latestPing.accuracy) : null;
 
         if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
-          console.log(`[GeofenceMonitor] Load ${load.loadNumber}: Invalid coordinates, skipping`);
+          logger.warn(`Geofence monitor: Load ${load.loadNumber} has invalid coordinates`, { loadNumber: load.loadNumber });
           continue;
         }
 
@@ -95,15 +96,20 @@ async function runGeofenceCheck(): Promise<void> {
           accuracy
         );
       } catch (loadError) {
-        console.error(`[GeofenceMonitor] Error processing load ${load.loadNumber}:`, loadError);
+        logger.error(`Geofence monitor: Error processing load ${load.loadNumber}`, {
+          loadNumber: load.loadNumber,
+          error: loadError instanceof Error ? loadError.message : String(loadError),
+        });
       }
     }
 
     lastRunTime = new Date();
     lastRunDurationMs = Date.now() - startTime;
-    console.log(`[GeofenceMonitor] Geofence check completed in ${lastRunDurationMs}ms`);
+    logger.debug(`Geofence check completed in ${lastRunDurationMs}ms`, { durationMs: lastRunDurationMs });
   } catch (error) {
-    console.error("[GeofenceMonitor] Error in geofence monitoring:", error);
+    logger.error("Geofence monitor: Error in geofence monitoring", {
+      error: error instanceof Error ? error.message : String(error),
+    });
   } finally {
     isRunning = false;
   }
@@ -111,19 +117,23 @@ async function runGeofenceCheck(): Promise<void> {
 
 export function startGeofenceMonitoring(): void {
   if (intervalId) {
-    console.log("[GeofenceMonitor] Already running");
+    logger.warn("Geofence monitor: Already running");
     return;
   }
 
-  console.log("[GeofenceMonitor] Starting geofence monitoring (every 60s)");
+  logger.info("Geofence monitor: Starting (every 60s)");
   
   runGeofenceCheck().catch((err) => {
-    console.error("[GeofenceMonitor] Error in initial check:", err);
+    logger.error("Geofence monitor: Error in initial check", {
+      error: err instanceof Error ? err.message : String(err),
+    });
   });
 
   intervalId = setInterval(() => {
     runGeofenceCheck().catch((err) => {
-      console.error("[GeofenceMonitor] Error in scheduled check:", err);
+      logger.error("Geofence monitor: Error in scheduled check", {
+        error: err instanceof Error ? err.message : String(err),
+      });
     });
   }, CHECK_INTERVAL_MS);
 }
@@ -132,6 +142,6 @@ export function stopGeofenceMonitoring(): void {
   if (intervalId) {
     clearInterval(intervalId);
     intervalId = null;
-    console.log("[GeofenceMonitor] Stopped");
+    logger.info("Geofence monitor: Stopped");
   }
 }

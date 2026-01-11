@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction, ErrorRequestHandler } from "express";
 import { ZodError } from "zod";
 import { isProduction, isTest } from "../config";
+import { logger } from "../utils/logger";
 
 export class AppError extends Error {
   constructor(
@@ -50,7 +51,14 @@ export const errorHandler: ErrorRequestHandler = (
   _next: NextFunction
 ): void => {
   if (!isTest()) {
-    console.error(`[ERROR] ${req.method} ${req.path}:`, err);
+    logger.error(`${req.method} ${req.path} failed`, {
+      method: req.method,
+      path: req.path,
+      error: err.message,
+      stack: err.stack,
+      code: err instanceof AppError ? err.code : undefined,
+      statusCode: err instanceof AppError ? err.statusCode : 500,
+    });
   }
   
   if (err instanceof AppError) {

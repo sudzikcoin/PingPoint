@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from "express";
 import { isProduction, isTest } from "../config";
+import { logger } from "../utils/logger";
 
 interface LogEntry {
   timestamp: string;
@@ -10,6 +11,7 @@ interface LogEntry {
   ip?: string;
   userAgent?: string;
   error?: string;
+  [key: string]: unknown;
 }
 
 function formatLog(entry: LogEntry): string {
@@ -52,11 +54,11 @@ export function requestLogger(req: Request, res: Response, next: NextFunction): 
     const message = formatLog(entry);
     
     if (level === "error") {
-      console.error(message);
+      logger.error(message, entry);
     } else if (level === "warn") {
-      console.warn(message);
+      logger.warn(message, entry);
     } else {
-      console.log(message);
+      logger.info(message, entry);
     }
   });
   

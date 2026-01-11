@@ -1,0 +1,131 @@
+⚠️ SAFETY INSTRUCTIONS - READ FIRST:
+
+HOW THIS PROMPT SHOULD WORK:
+1. CREATE NEW logging utility, don't modify existing error handling
+2. ADD error middleware to express app, don't replace existing middleware
+3. REPLACE console.log/console.error gradually, not all at once
+4. KEEP existing error handling in place, just enhance it
+5. ADD request logging without breaking existing request flow
+6. TEST that all routes work after adding logging
+
+WHAT TO PRESERVE:
+- All existing error handling must continue to work
+- If logging fails, application must continue (fail silently for logs)
+- Don't change any API response formats
+- Don't change any HTTP status codes
+- Existing try/catch blocks stay as-is, just enhance them
+
+ROLLBACK PLAN:
+- Logging should never crash the app (wrap all logging in try/catch)
+- If Winston fails, fall back to console.log
+- Can disable file logging via environment variable
+- Error middleware should be at END of middleware chain (after all routes)
+
+---
+
+Implement Comprehensive Error Handling and Logging
+
+PROBLEM:
+Current error handling is minimal - errors are caught but not properly logged, making production debugging nearly impossible.
+
+REQUIRED FIX:
+
+1. Install winston logging library:
+npm install winston
+
+2. Create centralized logging service:
+
+File: server/utils/logger.ts (NEW FILE, doesn't affect existing code)
+
+Create Winston logger with:
+- Console transport for development
+- File transport for production (logs/error.log, logs/combined.log)
+- Log rotation (daily, keep 14 days)
+- Format: timestamp, level, message, metadata as JSON
+- Log levels: error, warn, info, debug
+- Fallback to console.log if Winston fails
+
+CRITICAL: Wrap all logging in try/catch. If logging fails, use console.log as fallback:
+
+try {
+  logger.error('message', metadata);
+} catch (err) {
+  console.error('Logging failed:', err);
+  console.error('Original message:', 'message', metadata);
+}
+
+3. Create error handling middleware:
+
+File: server/middleware/errorHandler.ts (NEW FILE)
+
+Create middleware that:
+- Catches all unhandled errors (but doesn't change existing error handlers)
+- Logs error with full stack trace and context
+- Returns appropriate HTTP status code (keep existing status codes)
+- Returns generic error message in production
+- Returns detailed error in development
+- Includes request ID for tracking
+
+CRITICAL: Register this middleware LAST (after all routes):
+
+app.use('/api/routes...'); // All existing routes first
+// ... all other routes
+app.use(errorHandler); // Error handler LAST
+
+4. Gradually replace console.log/console.error with logger:
+
+Start with NON-CRITICAL files first:
+- server/services/geocoding.ts
+- server/jobs/geofenceMonitor.ts
+
+Replace:
+console.error() → logger.error()
+console.log() → logger.info()
+console.warn() → logger.warn()
+
+KEEP console.log in critical startup code (server initialization) for now.
+
+Include context in logs:
+logger.error('Failed to geocode address', { 
+  address, 
+  userId, 
+  loadId,
+  error: err.message 
+});
+
+5. Add request logging middleware (optional, add BEFORE routes):
+
+File: server/middleware/requestLogger.ts (NEW FILE)
+
+Log all incoming requests with:
+- HTTP method and path
+- IP address
+- User ID (if authenticated)
+- Response status code (via response event)
+- Response time in milliseconds
+
+CRITICAL: Don't break request flow. Use response.on('finish') to log after response sent.
+
+EXPECTED RESULT:
+- All errors logged to file with full context
+- Easy to debug production issues by reading logs
+- Request/response logging for monitoring
+- Clear error messages for users
+- Stack traces preserved for debugging
+- Existing functionality unchanged
+
+FILES TO CREATE:
+- server/utils/logger.ts (NEW FILE)
+- server/middleware/errorHandler.ts (NEW FILE)
+- server/middleware/requestLogger.ts (NEW FILE, optional)
+
+FILES TO MODIFY:
+- server/server.ts (register error middleware LAST, request logger FIRST)
+- Gradually update route files to use logger (start with non-critical ones)
+
+TESTING:
+1. Start server - should work exactly as before
+2. Make successful API call - should work, check logs file created
+3. Trigger an intentional error - should work, check error logged
+4. Verify all existing routes still return correct responses
+5. Check logs/error.log and logs/combined.log files exist

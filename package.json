@@ -103,6 +103,8 @@
     "vaul": "^1.1.2",
     "vite-plugin-pwa": "^1.2.0",
     "vitest": "^4.0.15",
+    "winston": "^3.19.0",
+    "winston-daily-rotate-file": "^5.0.0",
     "workbox-window": "^7.4.0",
     "wouter": "^3.3.5",
     "ws": "^8.18.0",
