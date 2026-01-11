@@ -2,7 +2,7 @@ import express, { type Express, type Request, Response, NextFunction } from "exp
 import cookieParser from "cookie-parser";
 import { createServer as createHttpServer, Server } from "http";
 import { registerRoutes, registerHealthRoutes } from "./routes";
-import { errorHandler, securityHeaders, corsHandler, generalLimiter, logRateLimitStatus } from "./middleware";
+import { errorHandler, securityHeaders, corsHandler, generalLimiter, logRateLimitStatus, logCorsStatus } from "./middleware";
 
 declare module "http" {
   interface IncomingMessage {
@@ -35,6 +35,7 @@ export async function createApp(): Promise<AppInstance> {
   app.use(cookieParser());
   
   logRateLimitStatus();
+  logCorsStatus();
   app.use("/api", generalLimiter);
   app.use((req, res, next) => {
     // Skip JSON parsing for Stripe webhook - it needs raw body
