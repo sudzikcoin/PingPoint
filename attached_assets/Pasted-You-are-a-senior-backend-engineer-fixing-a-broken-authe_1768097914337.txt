@@ -1,0 +1,59 @@
+You are a senior backend engineer fixing a broken authentication flow in an existing Node.js + Express + PostgreSQL project.
+
+Context:
+- Project uses PostgreSQL
+- There is a trusted device login flow
+- CI tests are failing in server/tests/trustedDeviceLogin.test.ts
+- Errors include:
+  - expected 200 but received 404
+  - expected 403 EMAIL_NOT_VERIFIED but received 404
+  - null value in column "broker_id" of relation "broker_devices"
+- DO NOT change database schema
+- DO NOT disable or modify tests
+- Fix ONLY logic order and safety
+
+Goal:
+Implement a CLEAN, correct authentication flow for brokers with trusted devices and magic link verification.
+
+Required rules (must be followed strictly):
+
+LOGIN FLOW (/api/brokers/login):
+1. Always find broker by email FIRST
+2. If broker does not exist → return 404 BROKER_NOT_FOUND
+3. If broker exists but email is not verified → return 403 EMAIL_NOT_VERIFIED
+4. Only after broker is confirmed and verified:
+   - check trusted device by (broker_id + device_id)
+5. If trusted device exists → log in immediately (200)
+6. If trusted device does NOT exist → send magic link (200)
+7. NEVER create or touch broker_devices before broker_id is known
+
+MAGIC LINK VERIFICATION FLOW:
+1. Verify magic link token
+2. Fetch broker using token payload
+3. If broker not found → return 404
+4. ONLY after broker exists:
+   - create trusted device with broker_id
+   - set lastUsedAt
+5. Return successful login response (200)
+
+CRITICAL SAFETY REQUIREMENTS:
+- broker_id must NEVER be null when writing to broker_devices
+- Any operation involving broker_devices MUST require broker.id beforehand
+- Device trust logic must NEVER run before broker existence checks
+- Do NOT catch errors silently
+- Do NOT convert errors to 404 unless broker truly does not exist
+
+Implementation tasks:
+- Refactor /api/brokers/login handler to enforce correct order
+- Refactor magic link verification handler accordingly
+- Ensure broker_devices insert/update always receives broker_id
+- Ensure HTTP status codes match test expectations exactly
+
+Validation:
+- All tests in server/tests/trustedDeviceLogin.test.ts must pass
+- CI build-test must exit with code 0
+- No new tests added
+- No schema changes
+- No feature removals
+
+Proceed to implement the fix now.
