@@ -1,8 +1,6 @@
 import * as SecureStore from 'expo-secure-store';
 
-const API_BASE_URL = __DEV__ 
-  ? 'https://your-replit-url.replit.dev' 
-  : 'https://your-production-url.com';
+const API_BASE_URL = 'https://6770693b-fc9a-4c02-9b92-87ade92b7c79-00-3kcz61rsl8wvd.worf.replit.dev';
 
 let authToken: string | null = null;
 
