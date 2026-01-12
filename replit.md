@@ -29,6 +29,12 @@ Preferred communication style: Simple, everyday language.
 - **Build Process**: Custom esbuild for server bundling and Vite for client-side.
 - **PWA Support**: Manifest and a comprehensive icon set for installability on mobile devices.
 - **Driver Mobile App**: A separate Expo/React Native application (`apps/driver-mobile`) acts as a WebView wrapper for the driver interface, providing background GPS tracking, deep linking, and an offline ping queue.
+- **PingPoint Mobile App**: Native Expo/React Native app in `pingpoint-mobile/` for brokers with:
+    - **Screens**: Login, Dashboard, Load Details, Live Tracking
+    - **Tech Stack**: React Native, Expo SDK 50, React Navigation, TanStack Query
+    - **Auth**: SecureStore for token storage, magic link email authentication
+    - **API**: Ported from web version, same endpoints
+    - **Build**: EAS configured for Android APK (preview profile) and App Bundle (production)
 
 ### Feature Specifications
 
