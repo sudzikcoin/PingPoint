@@ -2,13 +2,11 @@ import { AppLayout } from "@/components/app-layout";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Plus, Copy, Search, Filter, ChevronRight, Menu, X, Settings, CloudLightning, Truck, Mail, FileText, Paperclip, Upload, Loader2, Download } from "lucide-react";
+import { Plus, Copy, Filter, ChevronRight, Paperclip, Download, Menu, X, Settings, CloudLightning, Truck, Mail } from "lucide-react";
 import { useLocation } from "wouter";
 import { cn } from "@/lib/utils";
 import { useTheme } from "@/context/theme-context";
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { format } from "date-fns";
 import { toast } from "sonner";
 import { api, type BrokerWorkspace } from "@/lib/api";
@@ -62,12 +60,6 @@ export default function AppLoads() {
   const [showVerificationBanner, setShowVerificationBanner] = useState(false);
   const [resendingEmail, setResendingEmail] = useState(false);
   const [entitlements, setEntitlements] = useState<Entitlements | null>(null);
-
-  const [showUploadModal, setShowUploadModal] = useState(false);
-  const [uploadFile, setUploadFile] = useState<File | null>(null);
-  const [uploadLoadId, setUploadLoadId] = useState<string>("");
-  const [uploading, setUploading] = useState(false);
-  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [showFilterPanel, setShowFilterPanel] = useState(false);
   const [filters, setFilters] = useState<LoadFilters>(emptyFilters);
@@ -162,54 +154,6 @@ export default function AppLoads() {
     setActiveFilters(emptyFilters);
     await fetchLoads(emptyFilters);
     setShowFilterPanel(false);
-  };
-
-  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      if (file.size > 10 * 1024 * 1024) {
-        toast.error("File size must be less than 10MB");
-        return;
-      }
-      setUploadFile(file);
-    }
-  };
-
-  const handleUploadRateConfirmation = async () => {
-    if (!uploadFile) {
-      toast.error("Please select a file");
-      return;
-    }
-
-    setUploading(true);
-    try {
-      const formData = new FormData();
-      formData.append("file", uploadFile);
-      if (uploadLoadId && uploadLoadId !== "none") {
-        formData.append("loadId", uploadLoadId);
-      }
-
-      const res = await fetch("/api/rate-confirmations", {
-        method: "POST",
-        credentials: "include",
-        body: formData,
-      });
-
-      if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.error || "Failed to upload");
-      }
-
-      toast.success("Rate confirmation uploaded");
-      setShowUploadModal(false);
-      setUploadFile(null);
-      setUploadLoadId("");
-      await fetchLoads();
-    } catch (error: any) {
-      toast.error(error.message || "Failed to upload rate confirmation");
-    } finally {
-      setUploading(false);
-    }
   };
 
   const handleDownloadRC = async (e: React.MouseEvent, loadId: string) => {
@@ -408,21 +352,6 @@ export default function AppLoads() {
             )}
           </div>
           
-          <Button
-            type="button"
-            onClick={() => setShowUploadModal(true)}
-            className={cn(
-              "h-12 px-6 text-sm font-bold uppercase tracking-wider transition-all hover:-translate-y-0.5 active:translate-y-0",
-              theme === "arcade90s"
-                ? "bg-cyan-500 text-black rounded-none border border-cyan-400 shadow-[0_0_20px_rgba(34,211,238,0.6)] hover:bg-cyan-400 arcade-pixel-font"
-                : "bg-cyan-600 text-white hover:bg-cyan-500 shadow-md rounded-full"
-            )}
-            data-testid="button-upload-rc"
-          >
-            <Upload className="w-4 h-4 mr-2" />
-            Upload Rate Confirmation
-          </Button>
-
           <div className="flex-1" />
 
           <Button 
@@ -711,121 +640,6 @@ export default function AppLoads() {
           )}
         </div>
       </div>
-
-      <Dialog open={showUploadModal} onOpenChange={setShowUploadModal}>
-        <DialogContent className={cn(
-          "max-w-md",
-          theme === "arcade90s" ? "bg-arc-panel border-arc-border rounded-none" : "bg-brand-card border-brand-border"
-        )}>
-          <DialogHeader>
-            <DialogTitle className={cn(theme === "arcade90s" ? "text-arc-text arcade-pixel-font" : "text-white")}>
-              Upload Rate Confirmation
-            </DialogTitle>
-          </DialogHeader>
-          
-          <div className="space-y-4 py-4">
-            <div>
-              <label className={cn("text-xs font-medium uppercase tracking-wide mb-2 block", theme === "arcade90s" ? "text-arc-muted" : "text-brand-muted")}>
-                Select File (PDF or Image, max 10MB)
-              </label>
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept="application/pdf,image/*"
-                onChange={handleFileSelect}
-                className="hidden"
-                data-testid="input-rc-file"
-              />
-              <div
-                onClick={() => fileInputRef.current?.click()}
-                className={cn(
-                  "border-2 border-dashed rounded p-6 text-center cursor-pointer transition-colors",
-                  theme === "arcade90s" 
-                    ? "border-arc-border hover:border-arc-secondary bg-arc-bg" 
-                    : "border-brand-border hover:border-brand-gold bg-brand-bg"
-                )}
-              >
-                {uploadFile ? (
-                  <div className="flex items-center justify-center gap-2">
-                    <FileText className={cn("w-5 h-5", theme === "arcade90s" ? "text-arc-secondary" : "text-brand-gold")} />
-                    <span className={cn("text-sm", theme === "arcade90s" ? "text-arc-text" : "text-white")}>
-                      {uploadFile.name} ({(uploadFile.size / 1024).toFixed(1)} KB)
-                    </span>
-                  </div>
-                ) : (
-                  <div>
-                    <Upload className={cn("w-8 h-8 mx-auto mb-2", theme === "arcade90s" ? "text-arc-muted" : "text-brand-muted")} />
-                    <p className={cn("text-sm", theme === "arcade90s" ? "text-arc-muted" : "text-brand-muted")}>
-                      Click to select a file
-                    </p>
-                  </div>
-                )}
-              </div>
-            </div>
-
-            <div>
-              <label className={cn("text-xs font-medium uppercase tracking-wide mb-2 block", theme === "arcade90s" ? "text-arc-muted" : "text-brand-muted")}>
-                Attach to Load (Optional)
-              </label>
-              <Select value={uploadLoadId} onValueChange={setUploadLoadId}>
-                <SelectTrigger 
-                  className={cn(
-                    theme === "arcade90s" ? "bg-arc-bg border-arc-border text-arc-text rounded-none" : "bg-brand-bg border-brand-border"
-                  )}
-                  data-testid="select-attach-load"
-                >
-                  <SelectValue placeholder="Select a load..." />
-                </SelectTrigger>
-                <SelectContent className={cn(theme === "arcade90s" ? "bg-arc-panel border-arc-border rounded-none" : "bg-brand-card border-brand-border")}>
-                  <SelectItem value="none">No load / attach later</SelectItem>
-                  {loads.map((load) => (
-                    <SelectItem key={load.id} value={load.id}>
-                      {load.loadNumber} — {load.shipperName} → {load.destinationCity || "Dest"}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-          </div>
-
-          <DialogFooter className="gap-2">
-            <Button
-              variant="outline"
-              onClick={() => {
-                setShowUploadModal(false);
-                setUploadFile(null);
-                setUploadLoadId("");
-              }}
-              className={cn(theme === "arcade90s" ? "rounded-none border-arc-border" : "")}
-              data-testid="button-cancel-upload"
-            >
-              Cancel
-            </Button>
-            <Button
-              onClick={handleUploadRateConfirmation}
-              disabled={!uploadFile || uploading}
-              className={cn(
-                theme === "arcade90s" 
-                  ? "bg-arc-secondary text-black rounded-none hover:bg-arc-secondary/80" 
-                  : "bg-brand-gold text-black hover:bg-brand-gold/80"
-              )}
-              data-testid="button-confirm-upload"
-            >
-              {uploading ? (
-                <>
-                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                  Uploading...
-                </>
-              ) : (
-                <>
-                  <Upload className="w-4 h-4 mr-2" />
-                  Upload Rate Confirmation
-                </>
-              )}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </AppLayout>
   );
 }
