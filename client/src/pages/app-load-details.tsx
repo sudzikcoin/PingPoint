@@ -53,16 +53,22 @@ export default function AppLoadDetails() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const { isCopied: isTrackingCopied, copyWithFeedback: copyTrackingFn } = useCopyFeedback();
-  const { isCopied: isDriverCopied, copyWithFeedback: copyDriverFn } = useCopyFeedback();
+  const { isCopied: isDriverWebCopied, copyWithFeedback: copyDriverWebFn } = useCopyFeedback();
+  const { isCopied: isDriverMobileCopied, copyWithFeedback: copyDriverMobileFn } = useCopyFeedback();
 
   const copyTracking = async (text: string) => {
     const ok = await copyTrackingFn(text);
     if (!ok) toast.error("Failed to copy tracking link");
   };
 
-  const copyDriver = async (text: string) => {
-    const ok = await copyDriverFn(text);
-    if (!ok) toast.error("Failed to copy driver link");
+  const copyDriverWeb = async (text: string) => {
+    const ok = await copyDriverWebFn(text);
+    if (!ok) toast.error("Failed to copy driver web link");
+  };
+
+  const copyDriverMobile = async (text: string) => {
+    const ok = await copyDriverMobileFn(text);
+    if (!ok) toast.error("Failed to copy driver mobile link");
   };
 
   useEffect(() => {
@@ -119,7 +125,8 @@ export default function AppLoadDetails() {
   const deliveryStop = stops.find(s => s.type === "DELIVERY");
 
   const trackingUrl = `${window.location.origin}/track/${load.trackingToken}`;
-  const driverUrl = `${window.location.origin}/driver/${load.driverToken}`;
+  const driverWebUrl = `${window.location.origin}/driver/${load.driverToken}`;
+  const driverMobileUrl = `pingpoint://driver/${load.driverToken}`;
 
   return (
     <AppLayout>
@@ -291,33 +298,33 @@ export default function AppLoadDetails() {
 
                 <div className="space-y-2">
                   <label className={cn("text-xs font-bold uppercase tracking-wide flex items-center gap-2", theme === "arcade90s" ? "text-arc-muted" : "text-brand-muted")}>
-                    <Truck className="w-3 h-3" /> Driver App Link
+                    <Truck className="w-3 h-3" /> Driver Mobile App Link
                   </label>
                   <div className="flex gap-2 items-center">
                     <div className={cn("flex-1 p-2 text-xs truncate rounded border", 
                       theme === "arcade90s" ? "bg-arc-bg border-arc-border text-arc-text font-mono" : "bg-brand-dark-pill border-brand-border text-brand-muted"
                     )}>
-                      {driverUrl}
+                      {driverMobileUrl}
                     </div>
                     <div className="relative">
                       <Button 
                         type="button"
                         size="icon" 
                         variant="outline" 
-                        onClick={() => copyDriver(driverUrl)} 
+                        onClick={() => copyDriverMobile(driverMobileUrl)} 
                         className={cn(
                           theme === "arcade90s" ? "rounded-none border-arc-border" : "",
-                          isDriverCopied && "border-emerald-400"
+                          isDriverMobileCopied && "border-emerald-400"
                         )}
-                        data-testid="button-copy-driver-link"
+                        data-testid="button-copy-driver-mobile-link"
                       >
-                        {isDriverCopied ? (
+                        {isDriverMobileCopied ? (
                           <Check className="w-4 h-4 text-emerald-400" />
                         ) : (
                           <Copy className="w-4 h-4" />
                         )}
                       </Button>
-                      {isDriverCopied && (
+                      {isDriverMobileCopied && (
                         <span className={cn(
                           "absolute -top-6 left-1/2 -translate-x-1/2 text-[10px] font-semibold tracking-wide px-2 py-0.5 rounded-full shadow-md whitespace-nowrap",
                           theme === "arcade90s" 
@@ -330,7 +337,52 @@ export default function AppLoadDetails() {
                     </div>
                   </div>
                   <p className={cn("text-[10px]", theme === "arcade90s" ? "text-arc-muted" : "text-brand-muted")}>
-                    Share this with the driver to open their mini-app
+                    Opens in PingPoint mobile app (Expo Go)
+                  </p>
+                </div>
+
+                <div className="space-y-2">
+                  <label className={cn("text-xs font-bold uppercase tracking-wide flex items-center gap-2", theme === "arcade90s" ? "text-arc-muted" : "text-brand-muted")}>
+                    <Link2 className="w-3 h-3" /> Driver Web Link
+                  </label>
+                  <div className="flex gap-2 items-center">
+                    <div className={cn("flex-1 p-2 text-xs truncate rounded border", 
+                      theme === "arcade90s" ? "bg-arc-bg border-arc-border text-arc-text font-mono" : "bg-brand-dark-pill border-brand-border text-brand-muted"
+                    )}>
+                      {driverWebUrl}
+                    </div>
+                    <div className="relative">
+                      <Button 
+                        type="button"
+                        size="icon" 
+                        variant="outline" 
+                        onClick={() => copyDriverWeb(driverWebUrl)} 
+                        className={cn(
+                          theme === "arcade90s" ? "rounded-none border-arc-border" : "",
+                          isDriverWebCopied && "border-emerald-400"
+                        )}
+                        data-testid="button-copy-driver-web-link"
+                      >
+                        {isDriverWebCopied ? (
+                          <Check className="w-4 h-4 text-emerald-400" />
+                        ) : (
+                          <Copy className="w-4 h-4" />
+                        )}
+                      </Button>
+                      {isDriverWebCopied && (
+                        <span className={cn(
+                          "absolute -top-6 left-1/2 -translate-x-1/2 text-[10px] font-semibold tracking-wide px-2 py-0.5 rounded-full shadow-md whitespace-nowrap",
+                          theme === "arcade90s" 
+                            ? "bg-arc-primary text-black" 
+                            : "bg-emerald-400 text-slate-900"
+                        )}>
+                          Copied!
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  <p className={cn("text-[10px]", theme === "arcade90s" ? "text-arc-muted" : "text-brand-muted")}>
+                    Opens in web browser
                   </p>
                 </div>
               </CardContent>
