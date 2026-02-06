@@ -1320,7 +1320,7 @@ export async function registerRoutes(
 
       return res.json({
         ...load,
-        stops: loadStops,
+        stops: loadStops.map(stop => ({ ...stop, status: stop.departedAt ? 'DEPARTED' : stop.arrivedAt ? 'ARRIVED' : 'PLANNED' })),
         trackingPings: trackingPingsList,
         rateConfirmationFile: rateConfirmationFile ? {
           id: rateConfirmationFile.id,
@@ -1411,7 +1411,7 @@ export async function registerRoutes(
         loadNumber: load.loadNumber,
         customerRef: load.customerRef,
         status: load.status,
-        stops: loadStops,
+        stops: loadStops.map(stop => ({ ...stop, status: stop.departedAt ? 'DEPARTED' : stop.arrivedAt ? 'ARRIVED' : 'PLANNED' })),
         rewardBalance,
       });
     } catch (error) {
@@ -3573,5 +3573,33 @@ export async function registerRoutes(
     }
   });
 
+
+
+
+  // Driver Arrive Endpoint
+  app.post("/api/driver/:token/stops/:stopId/arrive", async (req: Request, res: Response) => {
+    try {
+      const { stopId } = req.params;
+      const stop = await storage.updateStop(stopId, { arrivedAt: new Date() });
+      if (!stop) return res.status(404).json({ error: "Stop not found" });
+      res.json({ success: true, stop });
+    } catch (error) {
+      console.error("Error recording arrival:", error);
+      res.status(500).json({ error: "Failed to record arrival" });
+    }
+  });
+
+  // Driver Depart Endpoint
+  app.post("/api/driver/:token/stops/:stopId/depart", async (req: Request, res: Response) => {
+    try {
+      const { stopId } = req.params;
+      const stop = await storage.updateStop(stopId, { departedAt: new Date() });
+      if (!stop) return res.status(404).json({ error: "Stop not found" });
+      res.json({ success: true, stop });
+    } catch (error) {
+      console.error("Error recording departure:", error);
+      res.status(500).json({ error: "Failed to record departure" });
+    }
+  });
   return httpServer;
 }
