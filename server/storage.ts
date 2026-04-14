@@ -107,6 +107,7 @@ export interface IStorage {
   getLoadsByBroker(brokerId: string): Promise<Load[]>;
   getLoadsByBrokerPaginated(brokerId: string, options: LoadFilterOptions): Promise<{ loads: Load[]; total: number }>;
   getLoadByToken(token: string, type: 'tracking' | 'driver'): Promise<Load | undefined>;
+  getLoadByNumber(loadNumber: string): Promise<Load | undefined>;
   createLoad(load: InsertLoad): Promise<Load>;
   updateLoad(id: string, data: Partial<Load>): Promise<Load | undefined>;
 
@@ -437,6 +438,11 @@ export class DatabaseStorage implements IStorage {
   // Load operations
   async getLoad(id: string): Promise<Load | undefined> {
     const [load] = await db.select().from(loads).where(eq(loads.id, id));
+    return load || undefined;
+  }
+
+  async getLoadByNumber(loadNumber: string): Promise<Load | undefined> {
+    const [load] = await db.select().from(loads).where(eq(loads.loadNumber, loadNumber));
     return load || undefined;
   }
 
