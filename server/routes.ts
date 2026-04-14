@@ -1,6 +1,9 @@
 import type { Express, Request, Response } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
+import { db } from "./db";
+import { trackingPings } from "@shared/schema";
+import { eq } from "drizzle-orm";
 import { createBrokerSession, getBrokerFromRequest, clearBrokerSession, getOrCreateTrustedDevice, getTrustedDevice, isAdminEmail, getBrokerWithAdminFromRequest } from "./auth";
 import { requireAdminAuth, createAdminSession, clearAdminSession, getAdminFromRequest, validateAdminCredentials, isAdminFullyConfigured } from "./admin/adminAuth";
 import { randomBytes } from "crypto";
@@ -1330,6 +1333,125 @@ export async function registerRoutes(
       });
     } catch (error) {
       console.error("Error in /api/loads/:id:", error);
+      return res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  // Internal read endpoint for AgentOS — returns full load data by loadNumber
+  // Auth: x-internal-key header (PINGPOINT_INTERNAL_KEY env var)
+  // GET /api/internal/loads/:loadNumber
+  app.get("/api/internal/loads/:loadNumber", async (req: Request, res: Response) => {
+    try {
+      // Verify internal key
+      const internalKey = process.env.PINGPOINT_INTERNAL_KEY;
+      if (!internalKey || req.headers["x-internal-key"] !== internalKey) {
+        return res.status(401).json({ error: "Unauthorized" });
+      }
+
+      const { loadNumber } = req.params;
+
+      // Find load by loadNumber
+      const load = await storage.getLoadByNumber(loadNumber);
+      if (!load) {
+        return res.status(404).json({ error: "Load not found", loadNumber });
+      }
+
+      // Get stops for this load
+      const loadStops = await storage.getStopsByLoad(load.id);
+
+      // Get tracking pings (GPS track) — last 500 points
+      const pings = await db
+        .select()
+        .from(trackingPings)
+        .where(eq(trackingPings.loadId, load.id))
+        .orderBy(trackingPings.createdAt)
+        .limit(500);
+
+      // Compute on-time for this load
+      const GRACE_MINUTES = 15;
+      let onTime: boolean | null = null;
+      let delayMinutes: number | null = null;
+
+      const deliveryStop = loadStops.find((s) => s.type === "DELIVERY");
+      if (deliveryStop && load.deliveredAt && deliveryStop.windowTo) {
+        const planned = new Date(deliveryStop.windowTo).getTime();
+        const actual = new Date(load.deliveredAt).getTime();
+        delayMinutes = Math.round((actual - planned) / 60000);
+        onTime = delayMinutes <= GRACE_MINUTES;
+      }
+
+      // Compute dwell times from stop timestamps
+      const pickupStop = loadStops.find((s) => s.type === "PICKUP");
+      let pickupDwellMinutes: number | null = null;
+      let deliveryDwellMinutes: number | null = null;
+
+      if (pickupStop?.arrivedAt && pickupStop?.departedAt) {
+        pickupDwellMinutes = Math.round(
+          (new Date(pickupStop.departedAt).getTime() - new Date(pickupStop.arrivedAt).getTime()) / 60000
+        );
+      }
+      if (deliveryStop?.arrivedAt && deliveryStop?.departedAt) {
+        deliveryDwellMinutes = Math.round(
+          (new Date(deliveryStop.departedAt).getTime() - new Date(deliveryStop.arrivedAt).getTime()) / 60000
+        );
+      }
+
+      // Compute distance via haversine over GPS pings (PingPoint schema has no distanceMiles column)
+      let distanceMiles: number | null = null;
+      if (pings.length >= 2) {
+        let totalMiles = 0;
+        for (let i = 1; i < pings.length; i++) {
+          const prev = pings[i - 1];
+          const curr = pings[i];
+          const lat1 = parseFloat(String(prev.lat));
+          const lon1 = parseFloat(String(prev.lng));
+          const lat2 = parseFloat(String(curr.lat));
+          const lon2 = parseFloat(String(curr.lng));
+          const R = 3958.7613;
+          const toRad = (x: number) => (x * Math.PI) / 180;
+          const dLat = toRad(lat2 - lat1);
+          const dLon = toRad(lon2 - lon1);
+          const a = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+          totalMiles += R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+        }
+        distanceMiles = Math.round(totalMiles * 10) / 10;
+      }
+
+      // Build GPS track array (compact)
+      const gpsTrack = pings.map((p) => ({
+        lat: parseFloat(String(p.lat)),
+        lng: parseFloat(String(p.lng)),
+        speed: null, // trackingPings schema has no speed column
+        heading: null, // trackingPings schema has no heading column
+        ts: p.createdAt,
+      }));
+
+      return res.json({
+        loadNumber: load.loadNumber,
+        pingpointLoadId: load.id,
+        status: load.status,
+        createdAt: load.createdAt,
+        deliveredAt: load.deliveredAt || null,
+        distanceMiles,
+        onTime,
+        delayMinutes,
+        pickupDwellMinutes,
+        deliveryDwellMinutes,
+        stops: loadStops.map((s) => ({
+          type: s.type,
+          sequence: s.sequence,
+          city: s.city,
+          state: s.state,
+          windowFrom: s.windowFrom || null,
+          windowTo: s.windowTo || null,
+          arrivedAt: s.arrivedAt || null,
+          departedAt: s.departedAt || null,
+        })),
+        gpsTrack,
+        pingCount: pings.length,
+      });
+    } catch (error) {
+      console.error("[PingPoint] Error in GET /api/internal/loads/:loadNumber:", error);
       return res.status(500).json({ error: "Internal server error" });
     }
   });
