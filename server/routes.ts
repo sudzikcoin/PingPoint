@@ -3723,5 +3723,200 @@ export async function registerRoutes(
       res.status(500).json({ error: "Failed to record departure" });
     }
   });
+
+  // ============================================
+  // INTERNAL API
+  // Trusted server-to-server endpoints (e.g. AgentOS).
+  // Authenticated via x-internal-key header against INTERNAL_API_KEY env var.
+  // Skips broker email verification and billing limits.
+  // ============================================
+
+  // POST /api/internal/loads - Create a load from a trusted internal service.
+  app.post("/api/internal/loads", async (req: Request, res: Response) => {
+    try {
+      // Validate internal API key
+      const providedKey = req.headers["x-internal-key"];
+      const expectedKey = process.env.INTERNAL_API_KEY;
+      if (!expectedKey) {
+        console.error("[InternalAPI] INTERNAL_API_KEY is not configured");
+        return res.status(500).json({ error: "Internal API key not configured" });
+      }
+      if (!providedKey || providedKey !== expectedKey) {
+        return res.status(401).json({ error: "Unauthorized" });
+      }
+
+      const {
+        brokerEmail,
+        brokerName,
+        pickupAddress,
+        pickupCity,
+        pickupState,
+        pickupDate,
+        deliveryAddress,
+        deliveryCity,
+        deliveryState,
+        deliveryDate,
+        rate,
+        miles,
+        weight,
+        customerRef,
+        driverPhone,
+        carrierName,
+      } = req.body || {};
+
+      // Validate required fields
+      const missing: string[] = [];
+      if (!brokerEmail || typeof brokerEmail !== "string" || !brokerEmail.includes("@")) missing.push("brokerEmail");
+      if (!brokerName || typeof brokerName !== "string") missing.push("brokerName");
+      if (!pickupAddress) missing.push("pickupAddress");
+      if (!pickupCity) missing.push("pickupCity");
+      if (!pickupState) missing.push("pickupState");
+      if (!pickupDate) missing.push("pickupDate");
+      if (!deliveryAddress) missing.push("deliveryAddress");
+      if (!deliveryCity) missing.push("deliveryCity");
+      if (!deliveryState) missing.push("deliveryState");
+      if (!deliveryDate) missing.push("deliveryDate");
+      if (rate === undefined || rate === null || isNaN(Number(rate))) missing.push("rate");
+      if (miles === undefined || miles === null || isNaN(Number(miles))) missing.push("miles");
+      if (weight === undefined || weight === null || isNaN(Number(weight))) missing.push("weight");
+      if (!customerRef) missing.push("customerRef");
+      if (missing.length > 0) {
+        return res.status(400).json({ error: "Missing or invalid fields", fields: missing });
+      }
+
+      // Parse dates
+      const pickupDateParsed = new Date(pickupDate);
+      const deliveryDateParsed = new Date(deliveryDate);
+      if (isNaN(pickupDateParsed.getTime())) {
+        return res.status(400).json({ error: "Invalid pickupDate" });
+      }
+      if (isNaN(deliveryDateParsed.getTime())) {
+        return res.status(400).json({ error: "Invalid deliveryDate" });
+      }
+
+      // Find or create broker by email (skip verification requirements)
+      const emailNormalized = brokerEmail.trim().toLowerCase();
+      let broker = await storage.getBrokerByEmail(emailNormalized);
+      if (!broker) {
+        broker = await storage.createBroker({
+          email: emailNormalized,
+          name: brokerName,
+          phone: null,
+          timezone: "Central (CT)",
+        });
+      }
+
+      // Find or create driver by phone if provided
+      let driver = null;
+      if (driverPhone && typeof driverPhone === "string" && driverPhone.trim()) {
+        const phoneNormalized = driverPhone.trim();
+        driver = await storage.getDriverByPhone(phoneNormalized);
+        if (!driver) {
+          driver = await storage.createDriver({ phone: phoneNormalized });
+        }
+      }
+
+      // Generate tokens and load number (reuse existing helpers)
+      const loadNumber = generateLoadNumber();
+      const trackingToken = generateToken("trk");
+      const driverToken = generateToken("drv");
+
+      // Create load (skips billing limits check by design)
+      const load = await storage.createLoad({
+        brokerId: broker.id,
+        driverId: driver?.id || null,
+        loadNumber,
+        trackingToken,
+        driverToken,
+        shipperName: brokerName,
+        carrierName: (carrierName && typeof carrierName === "string" && carrierName.trim()) ? carrierName.trim() : "TBD",
+        equipmentType: "Unknown",
+        customerRef: customerRef,
+        rateAmount: Number(rate).toString(),
+        distanceMiles: Number(miles).toString(),
+        status: "PLANNED",
+        pickupEta: null,
+        deliveryEta: null,
+        billingMonth: null,
+        isBillable: true,
+      });
+
+      // Create pickup + delivery stops
+      await storage.createStops([
+        {
+          loadId: load.id,
+          sequence: 1,
+          type: "PICKUP",
+          name: pickupAddress,
+          fullAddress: pickupAddress,
+          city: pickupCity,
+          state: pickupState,
+          lat: null,
+          lng: null,
+          windowFrom: pickupDateParsed,
+          windowTo: null,
+          arrivedAt: null,
+          departedAt: null,
+        },
+        {
+          loadId: load.id,
+          sequence: 2,
+          type: "DELIVERY",
+          name: deliveryAddress,
+          fullAddress: deliveryAddress,
+          city: deliveryCity,
+          state: deliveryState,
+          lat: null,
+          lng: null,
+          windowFrom: deliveryDateParsed,
+          windowTo: null,
+          arrivedAt: null,
+          departedAt: null,
+        },
+      ]);
+
+      // Log activity (non-blocking) - include weight in metadata since there's no column
+      storage.createActivityLog({
+        entityType: "load",
+        entityId: load.id,
+        action: "load_created",
+        actorType: "system",
+        actorId: broker.id,
+        metadata: JSON.stringify({
+          loadNumber: load.loadNumber,
+          driverId: driver?.id || null,
+          source: "internal_api",
+          weight: Number(weight),
+        }),
+      }).catch((err) => console.error("Error logging activity:", err));
+
+      // Track usage (non-blocking)
+      incrementLoadsCreated(broker.id).catch((err) =>
+        console.error("Error tracking usage:", err)
+      );
+
+      // Emit webhook event (non-blocking)
+      emitLoadEvent({
+        brokerId: broker.id,
+        loadId: load.id,
+        eventType: "pingpoint.load.created",
+      }).catch((err) => console.error("Error emitting webhook:", err));
+
+      // Build response links using configured public URL
+      const baseUrl = getBaseUrl(req);
+      return res.status(201).json({
+        success: true,
+        loadId: load.id,
+        loadNumber: load.loadNumber,
+        trackingLink: `${baseUrl}/track/${trackingToken}`,
+        driverWebLink: `${baseUrl}/driver/${driverToken}`,
+        driverAppLink: `pingpoint://driver/${driverToken}`,
+      });
+    } catch (error) {
+      console.error("Error in POST /api/internal/loads:", error);
+      return res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
   return httpServer;
 }

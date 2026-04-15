@@ -259,6 +259,109 @@ npm start
 - Mobile native apps
 - SMS notifications via Twilio
 
+## Internal API
+
+Trusted server-to-server endpoints intended for PingPoint-owned services (for
+example, AgentOS running on a different host). Requests are authenticated with
+a static shared secret passed in the `x-internal-key` header. The secret is
+read from the `INTERNAL_API_KEY` environment variable — generate it with:
+
+```bash
+openssl rand -hex 16
+```
+
+and add the result to your `.env`:
+
+```
+INTERNAL_API_KEY=your-32-char-secret
+```
+
+Internal endpoints bypass the broker email-verification gate and the monthly
+billing allowance check. They should never be exposed to untrusted clients.
+
+### `POST /api/internal/loads`
+
+Creates a load on behalf of a broker, finding or creating the broker (by
+email) and optionally the driver (by phone). Returns tokenized tracking and
+driver links.
+
+**Headers**
+
+| Header           | Required | Description                 |
+| ---------------- | -------- | --------------------------- |
+| `x-internal-key` | yes      | Must equal `INTERNAL_API_KEY` |
+| `content-type`   | yes      | `application/json`          |
+
+**Request body**
+
+```json
+{
+  "brokerEmail": "broker@example.com",
+  "brokerName": "Acme Logistics",
+  "pickupAddress": "123 Main St",
+  "pickupCity": "Dallas",
+  "pickupState": "TX",
+  "pickupDate": "2026-04-10T08:00:00Z",
+  "deliveryAddress": "456 Market Ave",
+  "deliveryCity": "Atlanta",
+  "deliveryState": "GA",
+  "deliveryDate": "2026-04-11T17:00:00Z",
+  "rate": 2450,
+  "miles": 780,
+  "weight": 42000,
+  "customerRef": "PO-778812",
+  "driverPhone": "+15125551234",
+  "carrierName": "Speedy Freight LLC"
+}
+```
+
+`driverPhone` and `carrierName` are optional; all other fields are required.
+
+**Response** (`201 Created`)
+
+```json
+{
+  "success": true,
+  "loadId": "b1f0...",
+  "loadNumber": "LD-2026-0421",
+  "trackingLink": "https://pingpoint.suverse.io/track/trk_...",
+  "driverWebLink": "https://pingpoint.suverse.io/driver/drv_...",
+  "driverAppLink": "pingpoint://driver/drv_..."
+}
+```
+
+**Errors**
+
+- `400` — missing or invalid fields (response includes `fields` array)
+- `401` — missing or incorrect `x-internal-key`
+- `500` — server error or `INTERNAL_API_KEY` not configured
+
+**Example**
+
+```bash
+curl -X POST https://pingpoint.suverse.io/api/internal/loads \
+  -H "Content-Type: application/json" \
+  -H "x-internal-key: $INTERNAL_API_KEY" \
+  -d '{
+    "brokerEmail": "broker@example.com",
+    "brokerName": "Acme Logistics",
+    "pickupAddress": "123 Main St",
+    "pickupCity": "Dallas",
+    "pickupState": "TX",
+    "pickupDate": "2026-04-10T08:00:00Z",
+    "deliveryAddress": "456 Market Ave",
+    "deliveryCity": "Atlanta",
+    "deliveryState": "GA",
+    "deliveryDate": "2026-04-11T17:00:00Z",
+    "rate": 2450,
+    "miles": 780,
+    "weight": 42000,
+    "customerRef": "PO-778812",
+    "driverPhone": "+15125551234",
+    "carrierName": "Speedy Freight LLC"
+  }'
+```
+
 ## Documentation
 
 - [Architecture Overview](docs/ARCHITECTURE.md)
