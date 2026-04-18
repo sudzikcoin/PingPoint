@@ -20,7 +20,10 @@
         "NSLocationWhenInUseUsageDescription": "PingPoint needs your location to track deliveries and update customers in real-time.",
         "NSLocationAlwaysAndWhenInUseUsageDescription": "PingPoint needs background location access to continuously track deliveries even when the app is closed.",
         "NSLocationAlwaysUsageDescription": "PingPoint needs background location access to continuously track deliveries even when the app is closed.",
-        "UIBackgroundModes": ["location", "fetch"]
+        "UIBackgroundModes": [
+          "location",
+          "fetch"
+        ]
       }
     },
     "android": {
@@ -34,7 +37,12 @@
         "ACCESS_FINE_LOCATION",
         "ACCESS_BACKGROUND_LOCATION",
         "FOREGROUND_SERVICE",
-        "FOREGROUND_SERVICE_LOCATION"
+        "FOREGROUND_SERVICE_LOCATION",
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.ACCESS_BACKGROUND_LOCATION",
+        "android.permission.FOREGROUND_SERVICE",
+        "android.permission.FOREGROUND_SERVICE_LOCATION"
       ]
     },
     "plugins": [
@@ -53,8 +61,9 @@
         "origin": false
       },
       "eas": {
-        "projectId": "your-project-id"
+        "projectId": "a8c47007-d73f-4e8a-8cc1-f496de55fc29"
       }
-    }
+    },
+    "owner": "sudzik"
   }
 }
