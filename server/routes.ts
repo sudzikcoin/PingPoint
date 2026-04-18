@@ -247,7 +247,103 @@ export async function registerRoutes(
   httpServer: Server,
   app: Express
 ): Promise<Server> {
-  
+
+  // ============================================
+  // DEEP LINK REDIRECT (public, no auth)
+  // ============================================
+
+  // GET /open/driver/:token — HTML redirect page for Telegram/SMS
+  // Telegram doesn't support custom URI schemes (pingpoint://), so we serve
+  // an HTTPS page that auto-redirects to the app's deep link.
+  app.get("/open/driver/:token", (req: Request, res: Response) => {
+    const { token } = req.params;
+
+    if (!token || !/^[a-zA-Z0-9_\-]{10,200}$/.test(token)) {
+      return res.status(400).send("Invalid link");
+    }
+
+    const appLink = `pingpoint://driver/${token}`;
+    const webLink = `https://pingpoint.suverse.io/driver/${token}`;
+
+    const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Opening PingPoint Driver...</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background: #1a1a2e;
+      color: #ffffff;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      padding: 24px;
+      text-align: center;
+    }
+    .logo { font-size: 48px; margin-bottom: 16px; }
+    h1 { font-size: 22px; font-weight: 700; color: #9b59b6; margin-bottom: 8px; }
+    p { font-size: 14px; color: #a0a0a0; margin-bottom: 32px; line-height: 1.6; }
+    .btn {
+      display: inline-block;
+      background: #9b59b6;
+      color: #ffffff;
+      text-decoration: none;
+      padding: 14px 32px;
+      border-radius: 8px;
+      font-size: 16px;
+      font-weight: 600;
+      margin-bottom: 16px;
+      width: 100%;
+      max-width: 320px;
+    }
+    .btn-secondary {
+      display: inline-block;
+      background: transparent;
+      color: #9b59b6;
+      text-decoration: none;
+      padding: 12px 32px;
+      border-radius: 8px;
+      font-size: 14px;
+      border: 1px solid #9b59b6;
+      width: 100%;
+      max-width: 320px;
+    }
+    .status { font-size: 12px; color: #666; margin-top: 24px; }
+  </style>
+</head>
+<body>
+  <div class="logo">\u{1f4cd}</div>
+  <h1>PingPoint Driver</h1>
+  <p>Opening the PingPoint Driver app...<br>If it doesn't open automatically, tap the button below.</p>
+  <a href="${appLink}" class="btn">Open PingPoint Driver App</a>
+  <a href="${webLink}" class="btn-secondary">Open in Browser Instead</a>
+  <p class="status">Auto-redirecting in <span id="countdown">3</span>s</p>
+  <script>
+    let count = 3;
+    const el = document.getElementById('countdown');
+    const interval = setInterval(() => {
+      count--;
+      if (el) el.textContent = count;
+      if (count <= 0) {
+        clearInterval(interval);
+        window.location.href = '${appLink}';
+      }
+    }, 1000);
+    setTimeout(() => { window.location.href = '${appLink}'; }, 100);
+  </script>
+</body>
+</html>`;
+
+    res.setHeader("Content-Type", "text/html; charset=utf-8");
+    res.setHeader("Cache-Control", "no-store");
+    return res.send(html);
+  });
+
   // ============================================
   // DEBUG ENDPOINTS
   // ============================================
