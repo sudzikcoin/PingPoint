@@ -53,6 +53,9 @@ export async function addToQueue(ping: QueuedPing): Promise<void> {
   try {
     const queue = await getQueuedPings();
     queue.push(ping);
+    if (queue.length > 20) {
+      console.warn(`PingPoint: Ping queue overflow — dropped ${queue.length - 20} oldest pings`);
+    }
     const trimmed = queue.slice(-20);
     await AsyncStorage.setItem(QUEUE_KEY, JSON.stringify(trimmed));
   } catch (error) {

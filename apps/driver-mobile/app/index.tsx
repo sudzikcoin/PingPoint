@@ -50,6 +50,16 @@ export default function DriverApp() {
         await setStoredToken(parsedToken);
         setToken(parsedToken);
         setWebViewKey((k) => k + 1);
+
+        // Auto-start tracking when deep link provides a token
+        const alreadyTracking = await isTrackingActive();
+        if (!alreadyTracking) {
+          const started = await startLocationTracking();
+          setTracking(started);
+          if (!started) {
+            console.log('PingPoint: Could not auto-start tracking from deep link');
+          }
+        }
       }
     },
     [parseToken]
@@ -60,6 +70,12 @@ export default function DriverApp() {
       const storedToken = await getStoredToken();
       if (storedToken) {
         setToken(storedToken);
+        // Auto-resume tracking on launch
+        const alreadyTracking = await isTrackingActive();
+        if (!alreadyTracking) {
+          const started = await startLocationTracking();
+          setTracking(started);
+        }
       }
 
       const initialUrl = await ExpoLinking.getInitialURL();

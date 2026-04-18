@@ -8,6 +8,10 @@ export const LOCATION_TASK_NAME = 'PINGPOINT_LOCATION_TASK';
 
 let lastPingTime = 0;
 
+export function resetPingThrottle(): void {
+  lastPingTime = 0;
+}
+
 TaskManager.defineTask(LOCATION_TASK_NAME, async ({ data, error }) => {
   if (error) {
     console.error('Location task error:', error.message);
@@ -68,13 +72,17 @@ export async function startLocationTracking(): Promise<boolean> {
     return true;
   }
 
+  resetPingThrottle();
+
   try {
     await Location.startLocationUpdatesAsync(LOCATION_TASK_NAME, {
-      accuracy: Location.Accuracy.Balanced,
-      timeInterval: 20000,
-      distanceInterval: 75,
-      deferredUpdatesInterval: 20000,
-      deferredUpdatesDistance: 75,
+      accuracy: Location.Accuracy.BestForNavigation,
+      timeInterval: 15000,
+      distanceInterval: 30,
+      deferredUpdatesInterval: 0,
+      deferredUpdatesDistance: 0,
+      pausesUpdatesAutomatically: false,
+      activityType: Location.ActivityType.AutomotiveNavigation,
       showsBackgroundLocationIndicator: true,
       foregroundService: {
         notificationTitle: 'PingPoint Driver',
