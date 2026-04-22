@@ -1647,10 +1647,13 @@ export async function registerRoutes(
       if (!currentLoad || !currentLoad.driverId) {
         return res.json({ hasNewLoad: false });
       }
+      // Переключаем ТОЛЬКО если текущий груз доставлен/отменён
+      if (!["DELIVERED", "CANCELLED"].includes(currentLoad.status)) {
+        return res.json({ hasNewLoad: false });
+      }
       const nextLoad = await storage.getNextLoadForDriver(
         currentLoad.id,
-        currentLoad.driverId,
-        new Date(currentLoad.createdAt)
+        currentLoad.driverId
       );
       if (nextLoad) {
         return res.json({

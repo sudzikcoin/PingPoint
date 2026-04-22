@@ -107,7 +107,7 @@ export interface IStorage {
   getLoadsByBroker(brokerId: string): Promise<Load[]>;
   getLoadsByBrokerPaginated(brokerId: string, options: LoadFilterOptions): Promise<{ loads: Load[]; total: number }>;
   getLoadByToken(token: string, type: 'tracking' | 'driver'): Promise<Load | undefined>;
-  getNextLoadForDriver(currentLoadId: string, driverId: string, currentCreatedAt: Date): Promise<{ driverToken: string; loadNumber: string; status: string } | null>;
+  getNextLoadForDriver(currentLoadId: string, driverId: string): Promise<{ driverToken: string; loadNumber: string; status: string } | null>;
   getLoadByNumber(loadNumber: string): Promise<Load | undefined>;
   createLoad(load: InsertLoad): Promise<Load>;
   updateLoad(id: string, data: Partial<Load>): Promise<Load | undefined>;
@@ -531,7 +531,6 @@ export class DatabaseStorage implements IStorage {
   async getNextLoadForDriver(
     currentLoadId: string,
     driverId: string,
-    currentCreatedAt: Date
   ): Promise<{ driverToken: string; loadNumber: string; status: string } | null> {
     const [nextLoad] = await db
       .select({
@@ -544,11 +543,10 @@ export class DatabaseStorage implements IStorage {
         and(
           eq(loads.driverId, driverId),
           inArray(loads.status, ["PLANNED", "IN_TRANSIT", "AT_PICKUP"]),
-          gt(loads.createdAt, currentCreatedAt),
-          sql`${loads.id} != ${currentLoadId}::uuid`
+          sql`${loads.id}::text != ${currentLoadId}`
         )
       )
-      .orderBy(loads.createdAt)
+      .orderBy(sql`COALESCE(${loads.pickupEta}, ${loads.createdAt}) ASC`)
       .limit(1);
     return nextLoad || null;
   }
