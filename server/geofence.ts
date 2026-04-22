@@ -9,6 +9,12 @@ const CONSECUTIVE_PINGS_REQUIRED = 2;
 const MIN_TIME_GAP_MS = 60 * 1000;
 const ACCURACY_THRESHOLD_M = 150;
 const IMMEDIATE_TRIGGER_ACCURACY_M = 50;
+// Дефолтный радиус геофенса — 2 мили (~3200м) для снижения ложных срабатываний GPS drift
+const DEFAULT_GEOFENCE_RADIUS_M = 3200;
+
+// In-memory state: предыдущее состояние (inside/outside) по каждому стопу
+// Ключ — stopId, значение — был ли водитель внутри на прошлом тике
+const stopInsideState: Map<string, boolean> = new Map();
 
 export function haversineMeters(lat1: number, lng1: number, lat2: number, lng2: number): number {
   const R = 6371000;
@@ -140,6 +146,7 @@ export async function evaluateGeofencesForActiveLoad(
   }
 
   for (const stop of loadStops) {
+    // Полностью пропускаем стопы, с которых водитель уже уехал
     if (stop.departedAt) continue;
 
     let stopLat: number;
@@ -165,12 +172,16 @@ export async function evaluateGeofencesForActiveLoad(
       stopLng = parseFloat(stop.lng);
     }
 
-    const radius = stop.geofenceRadiusM || 300;
+    // Используем радиус из БД либо дефолтные 3200м (2 мили)
+    const radius = stop.geofenceRadiusM || DEFAULT_GEOFENCE_RADIUS_M;
     const distance = haversineMeters(currentLat, currentLng, stopLat, stopLng);
     const inside = isInsideGeofence(distance, radius);
     const outsideHysteresis = isOutsideWithHysteresis(distance, radius);
 
-    console.log(`[Geofence] Stop ${stop.id} (${stop.type}): dist=${Math.round(distance)}m radius=${radius}m inside=${inside} arrived=${!!stop.arrivedAt}`);
+    // Предыдущее состояние из памяти (undefined — стоп ещё не проверялся в этой сессии)
+    const prevInside = stopInsideState.get(stop.id);
+
+    console.log(`[Geofence] Stop ${stop.id} (${stop.type}): dist=${Math.round(distance)}m radius=${radius}m inside=${inside} prevInside=${prevInside} arrived=${!!stop.arrivedAt}`);
 
     const state = await getOrCreateGeofenceState(stop.id, driverId);
 
@@ -182,7 +193,11 @@ export async function evaluateGeofencesForActiveLoad(
         outsideStreak: 0,
       });
 
-      if (!stop.arrivedAt) {
+      // ARRIVE: переход outside → inside И стоп ещё не был отмечен как прибывший.
+      // Если prevInside === undefined (первый тик) — считаем это переходом только при достаточной точности GPS
+      // или при достижении порога подряд идущих пингов внутри.
+      const isTransitionIn = prevInside === false || prevInside === undefined;
+      if (isTransitionIn && !stop.arrivedAt) {
         const highAccuracy = parsedAccuracy != null && parsedAccuracy <= IMMEDIATE_TRIGGER_ACCURACY_M;
         const shouldTrigger = highAccuracy || newInsideStreak >= CONSECUTIVE_PINGS_REQUIRED;
 
@@ -198,6 +213,9 @@ export async function evaluateGeofencesForActiveLoad(
           }
         }
       }
+
+      // Фиксируем текущее состояние — внутри
+      stopInsideState.set(stop.id, true);
     } else if (outsideHysteresis) {
       const newOutsideStreak = state.outsideStreak + 1;
       await updateGeofenceState(stop.id, driverId, {
@@ -206,7 +224,14 @@ export async function evaluateGeofencesForActiveLoad(
         outsideStreak: newOutsideStreak,
       });
 
-      if (stop.arrivedAt && !stop.departedAt && newOutsideStreak >= CONSECUTIVE_PINGS_REQUIRED) {
+      // DEPART: переход inside → outside И arrivedAt есть И departedAt ещё нет
+      const isTransitionOut = prevInside === true;
+      if (
+        isTransitionOut &&
+        stop.arrivedAt &&
+        !stop.departedAt &&
+        newOutsideStreak >= CONSECUTIVE_PINGS_REQUIRED
+      ) {
         const timeSinceArrive = now.getTime() - new Date(stop.arrivedAt).getTime();
         const canTrigger =
           timeSinceArrive > MIN_TIME_GAP_MS &&
@@ -219,7 +244,11 @@ export async function evaluateGeofencesForActiveLoad(
           await updateGeofenceState(stop.id, driverId, { lastDepartAttemptAt: now });
         }
       }
+
+      // Фиксируем текущее состояние — снаружи (только если уверены, с учётом гистерезиса)
+      stopInsideState.set(stop.id, false);
     }
+    // Если в "серой зоне" гистерезиса — состояние не трогаем, чтобы избежать дрейфа
   }
 }
 
@@ -256,7 +285,7 @@ export async function getGeofenceDebugInfo(loadId: string): Promise<{
       targetStopSequence: null,
       stopLat: null,
       stopLng: null,
-      radiusM: 300,
+      radiusM: DEFAULT_GEOFENCE_RADIUS_M,
       lastPingLat: null,
       lastPingLng: null,
       distanceM: null,
@@ -266,7 +295,7 @@ export async function getGeofenceDebugInfo(loadId: string): Promise<{
     };
   }
 
-  const radius = targetStop.geofenceRadiusM ?? 300;
+  const radius = targetStop.geofenceRadiusM ?? DEFAULT_GEOFENCE_RADIUS_M;
 
   const [latestPing] = await db
     .select()

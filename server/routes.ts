@@ -2,8 +2,8 @@ import type { Express, Request, Response } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import { db } from "./db";
-import { trackingPings } from "@shared/schema";
-import { eq } from "drizzle-orm";
+import { trackingPings, loads as loadsTable, stops as stopsTable } from "@shared/schema";
+import { eq, and, or, desc, inArray } from "drizzle-orm";
 import { createBrokerSession, getBrokerFromRequest, clearBrokerSession, getOrCreateTrustedDevice, getTrustedDevice, isAdminEmail, getBrokerWithAdminFromRequest } from "./auth";
 import { requireAdminAuth, createAdminSession, clearAdminSession, getAdminFromRequest, validateAdminCredentials, isAdminFullyConfigured } from "./admin/adminAuth";
 import { randomBytes } from "crypto";
@@ -1688,6 +1688,75 @@ export async function registerRoutes(
       });
     } catch (error) {
       console.error("Error in /api/driver/:token/rewards:", error);
+      return res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  // GET /api/driver/:token/history - История доставленных/отменённых грузов водителя (до 50 последних)
+  app.get("/api/driver/:token/history", async (req: Request, res: Response) => {
+    try {
+      const { token } = req.params;
+      const load = await storage.getLoadByToken(token, 'driver');
+
+      if (!load) {
+        return res.status(404).json({ error: "Load not found" });
+      }
+
+      if (!load.driverId) {
+        return res.json([]);
+      }
+
+      // Все DELIVERED/CANCELLED грузы этого водителя, свежие — первыми
+      const history = await db
+        .select()
+        .from(loadsTable)
+        .where(
+          and(
+            eq(loadsTable.driverId, load.driverId),
+            or(eq(loadsTable.status, 'DELIVERED'), eq(loadsTable.status, 'CANCELLED'))
+          )
+        )
+        .orderBy(desc(loadsTable.deliveredAt))
+        .limit(50);
+
+      if (history.length === 0) {
+        return res.json([]);
+      }
+
+      // Подтягиваем стопы одним запросом через inArray и группируем в памяти
+      const loadIds = history.map((l) => l.id);
+      const allStops = await db
+        .select()
+        .from(stopsTable)
+        .where(inArray(stopsTable.loadId, loadIds))
+        .orderBy(stopsTable.sequence);
+
+      const stopsByLoad = new Map<string, typeof allStops>();
+      for (const stop of allStops) {
+        const arr = stopsByLoad.get(stop.loadId) ?? [];
+        arr.push(stop);
+        stopsByLoad.set(stop.loadId, arr);
+      }
+
+      const result = history.map((ld) => ({
+        id: ld.id,
+        loadNumber: ld.loadNumber,
+        status: ld.status,
+        deliveredAt: ld.deliveredAt,
+        stops: (stopsByLoad.get(ld.id) ?? []).map((s) => ({
+          type: s.type,
+          sequence: s.sequence,
+          fullAddress: s.fullAddress,
+          city: s.city,
+          state: s.state,
+          arrivedAt: s.arrivedAt,
+          departedAt: s.departedAt,
+        })),
+      }));
+
+      return res.json(result);
+    } catch (error) {
+      console.error("Error in /api/driver/:token/history:", error);
       return res.status(500).json({ error: "Internal server error" });
     }
   });
