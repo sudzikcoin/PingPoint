@@ -237,7 +237,7 @@ export const stops = pgTable("stops", {
   state: text("state").notNull(),
   lat: decimal("lat", { precision: 9, scale: 6 }),
   lng: decimal("lng", { precision: 9, scale: 6 }),
-  geofenceRadiusM: integer("geofence_radius_m").notNull().default(300),
+  geofenceRadiusM: integer("geofence_radius_m").notNull().default(3200),
   windowFrom: timestamp("window_from", { withTimezone: true }),
   windowTo: timestamp("window_to", { withTimezone: true }),
   arrivedAt: timestamp("arrived_at", { withTimezone: true }),
