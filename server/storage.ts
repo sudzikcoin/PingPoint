@@ -55,7 +55,7 @@ import {
   type InsertReceiver,
 } from "@shared/schema";
 import { db } from "./db";
-import { eq, and, desc, ilike, sql, lt, gte, lte, or } from "drizzle-orm";
+import { eq, and, desc, ilike, sql, lt, gte, lte, or, gt, inArray } from "drizzle-orm";
 
 export interface LoadFilterOptions {
   limit: number;
@@ -107,6 +107,7 @@ export interface IStorage {
   getLoadsByBroker(brokerId: string): Promise<Load[]>;
   getLoadsByBrokerPaginated(brokerId: string, options: LoadFilterOptions): Promise<{ loads: Load[]; total: number }>;
   getLoadByToken(token: string, type: 'tracking' | 'driver'): Promise<Load | undefined>;
+  getNextLoadForDriver(currentLoadId: string, driverId: string, currentCreatedAt: Date): Promise<{ driverToken: string; loadNumber: string; status: string } | null>;
   getLoadByNumber(loadNumber: string): Promise<Load | undefined>;
   createLoad(load: InsertLoad): Promise<Load>;
   updateLoad(id: string, data: Partial<Load>): Promise<Load | undefined>;
@@ -526,6 +527,32 @@ export class DatabaseStorage implements IStorage {
     const [load] = await db.select().from(loads).where(eq(field, token));
     return load || undefined;
   }
+
+  async getNextLoadForDriver(
+    currentLoadId: string,
+    driverId: string,
+    currentCreatedAt: Date
+  ): Promise<{ driverToken: string; loadNumber: string; status: string } | null> {
+    const [nextLoad] = await db
+      .select({
+        driverToken: loads.driverToken,
+        loadNumber: loads.loadNumber,
+        status: loads.status,
+      })
+      .from(loads)
+      .where(
+        and(
+          eq(loads.driverId, driverId),
+          inArray(loads.status, ["PLANNED", "IN_TRANSIT", "AT_PICKUP"]),
+          gt(loads.createdAt, currentCreatedAt),
+          sql`${loads.id} != ${currentLoadId}::uuid`
+        )
+      )
+      .orderBy(loads.createdAt)
+      .limit(1);
+    return nextLoad || null;
+  }
+
 
   async createLoad(insertLoad: InsertLoad): Promise<Load> {
     const [load] = await db

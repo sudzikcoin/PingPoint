@@ -118,6 +118,33 @@ export default function DriverDashboard() {
     fetchLoad();
   }, [driverToken]);
 
+  // Polling для автоматического открытия нового груза в APK (каждые 30 сек)
+  useEffect(() => {
+    if (!driverToken) return;
+
+    const checkNextLoad = async () => {
+      try {
+        const res = await fetch(`/api/driver/${driverToken}/next-load`);
+        if (!res.ok) return;
+        const data = await res.json();
+        if (data.hasNewLoad && data.newToken) {
+          if (typeof window !== "undefined" && (window as any).ReactNativeWebView) {
+            (window as any).ReactNativeWebView.postMessage(JSON.stringify({
+              type: "new_load",
+              token: data.newToken,
+              loadNumber: data.loadNumber,
+            }));
+          }
+        }
+      } catch {
+        // ignore
+      }
+    };
+
+    const pollingId = setInterval(checkNextLoad, 30000);
+    return () => clearInterval(pollingId);
+  }, [driverToken]);
+
   // Stop tracking and cleanup
   const stopTracking = useCallback(() => {
     if (watchIdRef.current !== null) {

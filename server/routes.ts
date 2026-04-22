@@ -1638,6 +1638,35 @@ export async function registerRoutes(
     }
   });
 
+
+  // GET /api/driver/:token/next-load — polling APK: проверяет есть ли новый груз для водителя
+  app.get("/api/driver/:token/next-load", async (req: Request, res: Response) => {
+    try {
+      const { token } = req.params;
+      const currentLoad = await storage.getLoadByToken(token, "driver");
+      if (!currentLoad || !currentLoad.driverId) {
+        return res.json({ hasNewLoad: false });
+      }
+      const nextLoad = await storage.getNextLoadForDriver(
+        currentLoad.id,
+        currentLoad.driverId,
+        new Date(currentLoad.createdAt)
+      );
+      if (nextLoad) {
+        return res.json({
+          hasNewLoad: true,
+          newToken: nextLoad.driverToken,
+          loadNumber: nextLoad.loadNumber,
+          status: nextLoad.status,
+        });
+      }
+      return res.json({ hasNewLoad: false });
+    } catch (error) {
+      console.error("Error in GET /api/driver/:token/next-load:", error);
+      return res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
   // GET /api/driver/:token/rewards - Get driver reward balance
   app.get("/api/driver/:token/rewards", async (req: Request, res: Response) => {
     try {

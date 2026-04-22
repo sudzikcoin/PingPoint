@@ -131,6 +131,24 @@ export default function DriverApp() {
     webViewRef.current?.goBack();
   };
 
+  // Обработчик new_load — автоматически переключает груз в APK
+  const handleWebViewMessage = useCallback(
+    async (event: { nativeEvent: { data: string } }) => {
+      try {
+        const data = JSON.parse(event.nativeEvent.data);
+        if (data.type === "new_load" && data.token && data.token !== token) {
+          console.log("[PingPoint] Auto-switching to new load:", data.token);
+          await setStoredToken(data.token);
+          setToken(data.token);
+          setWebViewKey((k) => k + 1);
+        }
+      } catch {
+        // ignore invalid JSON
+      }
+    },
+    [token]
+  );
+
   if (loading) {
     return (
       <SafeAreaView style={styles.container}>
@@ -187,6 +205,7 @@ export default function DriverApp() {
         source={{ uri: webUrl }}
         style={styles.webView}
         startInLoadingState
+        onMessage={handleWebViewMessage}
         renderLoading={() => (
           <View style={styles.webViewLoading}>
             <ActivityIndicator size="large" color="#9b59b6" />
