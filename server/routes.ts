@@ -45,6 +45,77 @@ if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
 }
 
+// IOSiX ELD telemetry: validate + normalize fields from a driver ping body.
+// Invalid/out-of-range values are silently dropped to null so the ping itself
+// is never rejected on account of bad telemetry.
+interface IosixPingFields {
+  rpm: number | null;
+  engineLoadPct: string | null;
+  coolantTempC: string | null;
+  oilPressureKpa: string | null;
+  fuelRateGph: string | null;
+  totalFuelGal: string | null;
+  engineHours: string | null;
+  throttlePct: string | null;
+  batteryVoltage: string | null;
+  odometerMiles: string | null;
+  tripMiles: string | null;
+  currentGear: number | null;
+  dpfSootPct: string | null;
+  defLevelPct: string | null;
+  activeDtcCount: number | null;
+  activeDtcCodes: string | null;
+  eldConnected: boolean | null;
+  eldMac: string | null;
+}
+
+function numOrNull(v: unknown, min: number, max: number): number | null {
+  if (v === null || v === undefined) return null;
+  const n = typeof v === "number" ? v : parseFloat(String(v));
+  if (!Number.isFinite(n) || n < min || n > max) return null;
+  return n;
+}
+function intOrNull(v: unknown, min: number, max: number): number | null {
+  const n = numOrNull(v, min, max);
+  return n === null ? null : Math.trunc(n);
+}
+function decStrOrNull(v: unknown, min: number, max: number): string | null {
+  const n = numOrNull(v, min, max);
+  return n === null ? null : n.toString();
+}
+
+function extractIosixPingFields(body: Record<string, unknown>): IosixPingFields {
+  const dtcCodes = body.activeDtcCodes;
+  let dtcCodesStr: string | null = null;
+  if (Array.isArray(dtcCodes)) {
+    const cleaned = dtcCodes
+      .filter((c): c is string => typeof c === "string" && c.length > 0 && c.length <= 16)
+      .slice(0, 32);
+    dtcCodesStr = cleaned.length > 0 ? JSON.stringify(cleaned) : null;
+  }
+  const mac = typeof body.eldMac === "string" ? body.eldMac.slice(0, 32) : null;
+  return {
+    rpm: intOrNull(body.rpm, 0, 10000),
+    engineLoadPct: decStrOrNull(body.engineLoadPct, 0, 100),
+    coolantTempC: decStrOrNull(body.coolantTempC, -50, 200),
+    oilPressureKpa: decStrOrNull(body.oilPressureKpa, 0, 2000),
+    fuelRateGph: decStrOrNull(body.fuelRateGph, 0, 50),
+    totalFuelGal: decStrOrNull(body.totalFuelUsedGal, 0, 100_000),
+    engineHours: decStrOrNull(body.engineHours, 0, 200_000),
+    throttlePct: decStrOrNull(body.throttlePct, 0, 100),
+    batteryVoltage: decStrOrNull(body.batteryVoltage, 0, 32),
+    odometerMiles: decStrOrNull(body.odometerMiles, 0, 2_000_000),
+    tripMiles: decStrOrNull(body.tripMiles, 0, 10_000),
+    currentGear: intOrNull(body.currentGear, -4, 24),
+    dpfSootPct: decStrOrNull(body.dpfSootLoadPct, 0, 100),
+    defLevelPct: decStrOrNull(body.defLevelPct, 0, 100),
+    activeDtcCount: intOrNull(body.activeDtcCount, 0, 256),
+    activeDtcCodes: dtcCodesStr,
+    eldConnected: typeof body.eldConnected === "boolean" ? body.eldConnected : null,
+    eldMac: mac,
+  };
+}
+
 const multerStorage = multer.diskStorage({
   destination: (_req, _file, cb) => {
     cb(null, uploadsDir);
@@ -1584,6 +1655,7 @@ export async function registerRoutes(
           heading: p.heading,
           source: p.source,
           createdAt: p.createdAt,
+          fuelRateGph: p.fuelRateGph ?? null,
         })),
       );
 
@@ -1824,6 +1896,7 @@ export async function registerRoutes(
     try {
       const { token } = req.params;
       const { lat, lng, accuracy, speed, heading, timestamp } = req.body;
+      const iosixFields = extractIosixPingFields(req.body);
       const ua = req.headers['user-agent'] || 'unknown';
       
       console.log(`[TrackingPing] recv token=${token ? token.substring(0, 8) + '...' : 'missing'} lat=${lat} lng=${lng} ua=${ua.substring(0, 50)}`);
@@ -1930,9 +2003,10 @@ export async function registerRoutes(
         speed: speed != null ? speed.toString() : null,
         heading: heading != null ? heading.toString() : null,
         source: "DRIVER_APP",
+        ...iosixFields,
       });
 
-      console.log(`[TrackingPing] stored load=${load.loadNumber} driver=${load.driverId} lat=${lat} lng=${lng} acc=${accuracy ?? 'unknown'}m`);
+      console.log(`[TrackingPing] stored load=${load.loadNumber} driver=${load.driverId} lat=${lat} lng=${lng} acc=${accuracy ?? 'unknown'}m${iosixFields.eldConnected ? ` iosix=ok rpm=${iosixFields.rpm ?? '-'} fuel=${iosixFields.fuelRateGph ?? '-'}gph` : ''}`);
 
       // Award FIRST_LOCATION_SHARE bonus for first ping
       let rewardResult: { pointsAwarded: number; newBalance: number; eventType: RewardEventType } | null = null;
@@ -4007,16 +4081,72 @@ export async function registerRoutes(
     }
   });
 
-  // Driver Depart Endpoint
+  // Driver Depart Endpoint — records timestamp AND advances load status:
+  //   depart PICKUP (seq 1)  → IN_TRANSIT
+  //   depart last stop (DELIVERY) → DELIVERED
   app.post("/api/driver/:token/stops/:stopId/depart", async (req: Request, res: Response) => {
     try {
       const { stopId } = req.params;
       const stop = await storage.updateStop(stopId, { departedAt: new Date() });
       if (!stop) return res.status(404).json({ error: "Stop not found" });
+
+      try {
+        const all = await storage.getStopsByLoad(stop.loadId);
+        const sorted = [...all].sort((a, b) => a.sequence - b.sequence);
+        const isFirst = sorted[0]?.id === stop.id;
+        const isLast = sorted[sorted.length - 1]?.id === stop.id;
+        if (isLast) {
+          await storage.updateLoad(stop.loadId, { status: "DELIVERED" });
+          console.log(`[Depart] ${stop.loadId.substring(0,8)} → DELIVERED`);
+        } else if (isFirst) {
+          await storage.updateLoad(stop.loadId, { status: "IN_TRANSIT" });
+          console.log(`[Depart] ${stop.loadId.substring(0,8)} → IN_TRANSIT`);
+        }
+      } catch (err) {
+        console.warn("[Depart] status-advance failed:", err);
+      }
+
       res.json({ success: true, stop });
     } catch (error) {
       console.error("Error recording departure:", error);
       res.status(500).json({ error: "Failed to record departure" });
+    }
+  });
+
+  // POST /api/driver/:token/iosix-raw-log — driver app ships captured BLE
+  // packets for offline ELD diagnostics. Appended to a daily JSONL file per
+  // driver token; tokens are treated as opaque IDs in the path so we guard
+  // against traversal before using them in the filesystem.
+  app.post("/api/driver/:token/iosix-raw-log", async (req: Request, res: Response) => {
+    try {
+      const { token } = req.params;
+      const load = await storage.getLoadByToken(token, "driver");
+      if (!load) return res.status(404).json({ error: "Invalid token" });
+
+      const entries = Array.isArray(req.body?.entries) ? req.body.entries : null;
+      if (!entries) return res.status(400).json({ error: "entries[] required" });
+
+      const safeToken = token.replace(/[^A-Za-z0-9_-]/g, "");
+      if (!safeToken) return res.status(400).json({ error: "bad token" });
+
+      const date = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+      const dir = path.join("/root/PingPoint/logs/iosix", date);
+      fs.mkdirSync(dir, { recursive: true });
+      const file = path.join(dir, `${safeToken}.jsonl`);
+
+      const lines = entries
+        .filter((e: unknown) => e && typeof e === "object")
+        .map((e: Record<string, unknown>) => JSON.stringify({
+          timestamp: typeof e.timestamp === "number" ? e.timestamp : Date.now(),
+          raw: typeof e.raw === "string" ? e.raw.slice(0, 4096) : null,
+        }))
+        .join("\n");
+      if (lines.length > 0) fs.appendFileSync(file, lines + "\n");
+
+      res.json({ success: true, received: entries.length });
+    } catch (error) {
+      console.error("Error in /api/driver/:token/iosix-raw-log:", error);
+      res.status(500).json({ error: "Failed to save raw log" });
     }
   });
 
@@ -4148,8 +4278,8 @@ export async function registerRoutes(
         rateAmount: Number(rate).toString(),
         distanceMiles: Number(miles).toString(),
         status: "PLANNED",
-        pickupEta: null,
-        deliveryEta: null,
+        pickupEta: pickupDateParsed,
+        deliveryEta: deliveryDateParsed,
         billingMonth: null,
         isBillable: true,
       });
@@ -4227,6 +4357,36 @@ export async function registerRoutes(
       });
     } catch (error) {
       console.error("Error in POST /api/internal/loads:", error);
+      return res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  // PATCH /api/internal/loads/:loadNumber/status — AgentOS-initiated status push.
+  // Used when AgentOS flips a load to DELIVERED/CANCELLED and needs the PingPoint
+  // side updated immediately (otherwise the cron-only sync lags until next run).
+  app.patch("/api/internal/loads/:loadNumber/status", async (req: Request, res: Response) => {
+    try {
+      if (req.headers["x-internal-key"] !== process.env.INTERNAL_API_KEY) {
+        return res.status(401).json({ error: "Unauthorized" });
+      }
+      const { loadNumber } = req.params;
+      const { status } = req.body || {};
+      const allowed = ["PLANNED", "IN_TRANSIT", "AT_PICKUP", "DELIVERED", "CANCELLED"];
+      if (!allowed.includes(status)) {
+        return res.status(400).json({ error: "Invalid status" });
+      }
+      const r = await db
+        .update(loadsTable)
+        .set({ status, updatedAt: new Date() })
+        .where(eq(loadsTable.loadNumber, loadNumber))
+        .returning({ id: loadsTable.id, status: loadsTable.status });
+      if (r.length === 0) {
+        return res.status(404).json({ error: "Load not found" });
+      }
+      console.log(`[internal:status] ${loadNumber} → ${status}`);
+      return res.json({ ok: true, loadNumber, status: r[0].status });
+    } catch (err) {
+      console.error("Error in PATCH /api/internal/loads/:loadNumber/status:", err);
       return res.status(500).json({ error: "Internal server error" });
     }
   });
