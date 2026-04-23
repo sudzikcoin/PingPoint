@@ -29,10 +29,6 @@ export interface RateLimitOptions {
   keyPrefix?: string;
   message?: string;
   useUserId?: boolean;
-  // Status codes that should NOT consume the bucket. If the final response
-  // status matches, the counter is decremented on `res.finish`. Useful so
-  // validation rejections (e.g. 422) don't let a client lock itself out.
-  skipCountOnStatus?: number[];
 }
 
 function extractUserIdentifier(req: Request, useUserId: boolean): string {
@@ -66,28 +62,14 @@ export function rateLimit(options?: RateLimitOptions) {
     const now = Date.now();
     
     let entry = rateLimitStore.get(key);
-
+    
     if (!entry || entry.resetAt <= now) {
       entry = { count: 1, resetAt: now + windowMs };
       rateLimitStore.set(key, entry);
     } else {
       entry.count++;
     }
-
-    // Optionally refund this request if the final response status is one
-    // that shouldn't consume the bucket (e.g. 422 validation reject).
-    const skipOn = options?.skipCountOnStatus;
-    if (skipOn && skipOn.length > 0) {
-      res.on("finish", () => {
-        if (skipOn.includes(res.statusCode)) {
-          const cur = rateLimitStore.get(key);
-          if (cur && cur.resetAt > Date.now() && cur.count > 0) {
-            cur.count--;
-          }
-        }
-      });
-    }
-
+    
     const remaining = Math.max(0, maxRequests - entry.count);
     const resetSeconds = Math.ceil((entry.resetAt - now) / 1000);
     
@@ -110,12 +92,8 @@ export function rateLimit(options?: RateLimitOptions) {
   };
 }
 
-export function strictRateLimit(
-  maxRequests = 10,
-  windowMs = 60000,
-  skipCountOnStatus?: number[],
-) {
-  return rateLimit({ maxRequests, windowMs, skipCountOnStatus });
+export function strictRateLimit(maxRequests = 10, windowMs = 60000) {
+  return rateLimit({ maxRequests, windowMs });
 }
 
 export const generalLimiter = rateLimit({

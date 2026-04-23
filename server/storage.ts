@@ -109,6 +109,7 @@ export interface IStorage {
   getLoadByToken(token: string, type: 'tracking' | 'driver'): Promise<Load | undefined>;
   getNextLoadForDriver(currentLoadId: string, driverId: string): Promise<{ driverToken: string; loadNumber: string; status: string } | null>;
   getLoadByNumber(loadNumber: string): Promise<Load | undefined>;
+  getLoadByCustomerRef(customerRef: string): Promise<Load | undefined>;
   createLoad(load: InsertLoad): Promise<Load>;
   updateLoad(id: string, data: Partial<Load>): Promise<Load | undefined>;
 
@@ -447,6 +448,14 @@ export class DatabaseStorage implements IStorage {
     return load || undefined;
   }
 
+  async getLoadByCustomerRef(customerRef: string): Promise<Load | undefined> {
+    const [load] = await db.select().from(loads)
+      .where(eq(loads.customerRef, customerRef))
+      .orderBy(desc(loads.createdAt))
+      .limit(1);
+    return load || undefined;
+  }
+
   async getLoadsByBroker(brokerId: string): Promise<Load[]> {
     return await db
       .select()
@@ -551,6 +560,40 @@ export class DatabaseStorage implements IStorage {
     return nextLoad || null;
   }
 
+
+  async getNextLoadByBrokerAndToken(
+    currentLoadId: string,
+    currentDriverToken: string,
+    brokerId: string
+  ): Promise<{ driverToken: string; loadNumber: string; status: string } | null> {
+    // Ищем следующий груз для того же водителя по driver_token текущего груза.
+    // Находим truck_number водителя через таблицу drivers по driver_token,
+    // затем ищем все грузы с любым driverToken принадлежащим тому же truck_number.
+    const driverRow = await db
+      .select({ truckNumber: drivers.truckNumber })
+      .from(drivers)
+      .innerJoin(loads, eq(loads.driverToken, currentDriverToken))
+      .limit(1);
+    
+    // Fallback: ищем просто следующий PLANNED груз того же брокера
+    const [nextLoad] = await db
+      .select({
+        driverToken: loads.driverToken,
+        loadNumber: loads.loadNumber,
+        status: loads.status,
+      })
+      .from(loads)
+      .where(
+        and(
+          eq(loads.brokerId, brokerId),
+          inArray(loads.status, ["PLANNED", "IN_TRANSIT", "AT_PICKUP"]),
+          sql`${loads.id}::text != ${currentLoadId}`
+        )
+      )
+      .orderBy(sql`COALESCE(${loads.pickupEta}, ${loads.createdAt}) ASC`)
+      .limit(1);
+    return nextLoad || null;
+  }
 
   async createLoad(insertLoad: InsertLoad): Promise<Load> {
     const [load] = await db

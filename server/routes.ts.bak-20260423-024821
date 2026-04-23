@@ -1552,48 +1552,6 @@ export async function registerRoutes(
     }
   });
 
-  // GET /api/internal/loads/:loadNumber/trip-stats
-  // Aggregates this load's tracking_pings into a TripStats object on demand.
-  // No DB schema change — computation is pure and happens here, at request
-  // time (typically once, right after delivery, when AgentOS computes CO2).
-  // Auth: same x-internal-key as the other /api/internal/loads/* routes.
-  app.get("/api/internal/loads/:loadNumber/trip-stats", async (req: Request, res: Response) => {
-    try {
-      const internalKey = process.env.INTERNAL_API_KEY;
-      if (!internalKey || req.headers["x-internal-key"] !== internalKey) {
-        return res.status(401).json({ error: "Unauthorized" });
-      }
-
-      const { loadNumber } = req.params;
-      const load = await storage.getLoadByNumber(loadNumber);
-      if (!load) {
-        return res.status(404).json({ error: "Load not found" });
-      }
-
-      const pings = await storage.getTrackingPingsByLoad(load.id);
-      // getTrackingPingsByLoad returns DESC by created_at; computeTripStats
-      // sorts internally, but passing ASC-ish keeps debugging sane.
-      pings.reverse();
-      const { computeTripStats } = await import("./pingAnalytics");
-      const stats = computeTripStats(
-        pings.map((p) => ({
-          lat: p.lat,
-          lng: p.lng,
-          accuracy: p.accuracy,
-          speed: p.speed,
-          heading: p.heading,
-          source: p.source,
-          createdAt: p.createdAt,
-        })),
-      );
-
-      return res.json({ loadNumber, loadId: load.id, stats });
-    } catch (error) {
-      console.error("[PingPoint] Error in GET /api/internal/loads/:loadNumber/trip-stats:", error);
-      return res.status(500).json({ error: "Internal server error" });
-    }
-  });
-
   // Public tracking endpoint (secured with rate limiting, TTL, and safe response)
   // GET /api/track/:token
   app.get("/api/track/:token", async (req: Request, res: Response) => {
@@ -1639,12 +1597,6 @@ export async function registerRoutes(
           lat: latestPing.lat,
           lng: latestPing.lng,
           timestamp: latestPing.createdAt,
-          // Mobile app reports speed in m/s (Android Location.getSpeed default).
-          // Convert to mph here so the client can render it directly without
-          // needing to know the unit convention.
-          speedMph: latestPing.speed != null && Number.isFinite(Number(latestPing.speed))
-            ? Number((Number(latestPing.speed) * 2.23693629).toFixed(1))
-            : null,
         } : null,
       };
 
@@ -1818,9 +1770,8 @@ export async function registerRoutes(
     }
   });
 
-  // POST /api/driver/:token/ping - Submit location ping (rate limited: 60 per minute, 1 per 30s per load).
-  // 422 responses do not consume the bucket — a brief spell of bad GPS shouldn't lock the driver out.
-  app.post("/api/driver/:token/ping", strictRateLimit(60, 60000, [422]), async (req: Request, res: Response) => {
+  // POST /api/driver/:token/ping - Submit location ping (rate limited: 60 per minute, 1 per 30s per load)
+  app.post("/api/driver/:token/ping", strictRateLimit(60, 60000), async (req: Request, res: Response) => {
     try {
       const { token } = req.params;
       const { lat, lng, accuracy, speed, heading, timestamp } = req.body;
@@ -1871,8 +1822,7 @@ export async function registerRoutes(
       // Anti-teleport detection: check speed against last ping (efficient single-row fetch)
       const lastPing = await storage.getMostRecentPing(load.id);
       const isFirstPing = !lastPing;
-      let lowConfidence = false;
-
+      
       if (lastPing && lastPing.lat && lastPing.lng) {
         const lastLat = parseFloat(lastPing.lat);
         const lastLng = parseFloat(lastPing.lng);
@@ -1880,36 +1830,13 @@ export async function registerRoutes(
         // Use provided timestamp if available, otherwise use current time
         const pingTime = timestamp ? new Date(timestamp).getTime() : Date.now();
         const timeDeltaMs = pingTime - new Date(lastPing.createdAt).getTime();
-
-        // Reconnect-after-gap: if too much time has passed since the last ping,
-        // we can't infer actual speed (the driver may have been moving the
-        // whole time and we just missed the intermediate samples). Accept the
-        // new ping as a fresh baseline, flagged low-confidence. Without this,
-        // a single stale stored ping would make every subsequent ping look
-        // like a 200+ km teleport.
-        const RECONNECT_GAP_MS = 15 * 60 * 1000;
-        if (timeDeltaMs > RECONNECT_GAP_MS) {
-          lowConfidence = true;
-          console.log(`[TrackingPing] reconnect-accept (gap too large for speed inference): gap=${Math.round(timeDeltaMs / 1000)}s dist=${distanceM.toFixed(0)}m`);
-        } else if (timeDeltaMs > 5000) {
-          // Only check speed if enough time has passed (> 5 seconds)
+        
+        // Only check speed if enough time has passed (> 5 seconds)
+        if (timeDeltaMs > 5000) {
           const speedMph = calculateSpeedMph(distanceM, timeDeltaMs);
           if (speedMph > GPS_MAX_SPEED_MPH) {
-            // Distinguish real teleportation from GPS jitter: when the combined
-            // accuracy uncertainty of the two fixes can account for the apparent
-            // move, it's sensor noise (common for stationary vehicles with poor
-            // sky view), not a teleport. Accept but flag as low-confidence —
-            // the `accuracy` column on the stored ping already carries the signal.
-            const prevAcc = lastPing.accuracy ? parseFloat(lastPing.accuracy) : 0;
-            const curAcc = accuracy != null ? parseFloat(accuracy.toString()) : 0;
-            const combinedAccuracy = prevAcc + curAcc;
-            if (combinedAccuracy > 0 && distanceM < combinedAccuracy) {
-              lowConfidence = true;
-              console.log(`[TrackingPing] low-confidence accept (jitter within combined accuracy): dist=${distanceM.toFixed(0)}m combinedAcc=${combinedAccuracy.toFixed(0)}m speed=${speedMph.toFixed(1)}mph`);
-            } else {
-              console.log(`[TrackingPing] REJECTED reason=teleport_detected speed=${speedMph.toFixed(1)}mph dist=${distanceM.toFixed(0)}m delta=${timeDeltaMs}ms prevAcc=${prevAcc}m curAcc=${curAcc}m`);
-              return res.status(422).json({ ok: false, error: "Unrealistic GPS jump" });
-            }
+            console.log(`[TrackingPing] REJECTED reason=teleport_detected speed=${speedMph.toFixed(1)}mph dist=${distanceM.toFixed(0)}m delta=${timeDeltaMs}ms`);
+            return res.status(422).json({ ok: false, error: "Unrealistic GPS jump" });
           }
         }
       }
@@ -1955,11 +1882,10 @@ export async function registerRoutes(
       evaluateGeofencesForActiveLoad(load.driverId, load.id, parseFloat(lat.toString()), parseFloat(lng.toString()), parsedAccuracy)
         .catch(err => console.error("Error evaluating geofences:", err));
 
-      return res.json({
-        ok: true,
+      return res.json({ 
+        ok: true, 
         pingId: ping.id,
         reward: rewardResult || undefined,
-        lowConfidence: lowConfidence || undefined,
       });
     } catch (error) {
       console.error("Error in /api/driver/:token/ping:", error);
@@ -1967,9 +1893,8 @@ export async function registerRoutes(
     }
   });
 
-  // POST /api/driver/location - Alternative endpoint for location updates (matches spec, 1 per 30s per load).
-  // 422 responses do not consume the bucket (see /ping route comment).
-  app.post("/api/driver/location", strictRateLimit(60, 60000, [422]), async (req: Request, res: Response) => {
+  // POST /api/driver/location - Alternative endpoint for location updates (matches spec, 1 per 30s per load)
+  app.post("/api/driver/location", strictRateLimit(60, 60000), async (req: Request, res: Response) => {
     try {
       const { token, lat, lng, accuracy, speed, heading, timestamp } = req.body;
       const ua = req.headers['user-agent'] || 'unknown';
@@ -2023,7 +1948,6 @@ export async function registerRoutes(
 
       // Anti-teleport detection: check speed against last ping (efficient single-row fetch)
       const lastPing = await storage.getMostRecentPing(load.id);
-      let lowConfidence = false;
       if (lastPing && lastPing.lat && lastPing.lng) {
         const lastLat = parseFloat(lastPing.lat);
         const lastLng = parseFloat(lastPing.lng);
@@ -2031,26 +1955,12 @@ export async function registerRoutes(
         // Use provided timestamp if available, otherwise use current time
         const pingTime = timestamp ? new Date(timestamp).getTime() : Date.now();
         const timeDeltaMs = pingTime - new Date(lastPing.createdAt).getTime();
-
-        // Reconnect-after-gap: see /api/driver/:token/ping for rationale.
-        const RECONNECT_GAP_MS = 15 * 60 * 1000;
-        if (timeDeltaMs > RECONNECT_GAP_MS) {
-          lowConfidence = true;
-          console.log(`[TrackingPing] reconnect-accept (gap too large for speed inference): gap=${Math.round(timeDeltaMs / 1000)}s dist=${distanceM.toFixed(0)}m`);
-        } else if (timeDeltaMs > 5000) {
+        
+        if (timeDeltaMs > 5000) {
           const speedMph = calculateSpeedMph(distanceM, timeDeltaMs);
           if (speedMph > GPS_MAX_SPEED_MPH) {
-            // Accuracy-aware jitter check — see /api/driver/:token/ping for rationale.
-            const prevAcc = lastPing.accuracy ? parseFloat(lastPing.accuracy) : 0;
-            const curAcc = accuracy != null ? parseFloat(accuracy.toString()) : 0;
-            const combinedAccuracy = prevAcc + curAcc;
-            if (combinedAccuracy > 0 && distanceM < combinedAccuracy) {
-              lowConfidence = true;
-              console.log(`[TrackingPing] low-confidence accept (jitter within combined accuracy): dist=${distanceM.toFixed(0)}m combinedAcc=${combinedAccuracy.toFixed(0)}m speed=${speedMph.toFixed(1)}mph`);
-            } else {
-              console.log(`[TrackingPing] REJECTED reason=teleport_detected speed=${speedMph.toFixed(1)}mph dist=${distanceM.toFixed(0)}m prevAcc=${prevAcc}m curAcc=${curAcc}m`);
-              return res.status(422).json({ ok: false, error: "Unrealistic GPS jump" });
-            }
+            console.log(`[TrackingPing] REJECTED reason=teleport_detected speed=${speedMph.toFixed(1)}mph`);
+            return res.status(422).json({ ok: false, error: "Unrealistic GPS jump" });
           }
         }
       }
@@ -2080,7 +1990,7 @@ export async function registerRoutes(
       evaluateGeofencesForActiveLoad(load.driverId, load.id, parseFloat(lat.toString()), parseFloat(lng.toString()), parsedAccuracy)
         .catch(err => console.error("Error evaluating geofences:", err));
 
-      return res.json({ ok: true, pingId: ping.id, lowConfidence: lowConfidence || undefined });
+      return res.json({ ok: true, pingId: ping.id });
     } catch (error) {
       console.error("Error in /api/driver/location:", error);
       return res.status(500).json({ error: "Internal server error" });

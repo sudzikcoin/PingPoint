@@ -1639,12 +1639,6 @@ export async function registerRoutes(
           lat: latestPing.lat,
           lng: latestPing.lng,
           timestamp: latestPing.createdAt,
-          // Mobile app reports speed in m/s (Android Location.getSpeed default).
-          // Convert to mph here so the client can render it directly without
-          // needing to know the unit convention.
-          speedMph: latestPing.speed != null && Number.isFinite(Number(latestPing.speed))
-            ? Number((Number(latestPing.speed) * 2.23693629).toFixed(1))
-            : null,
         } : null,
       };
 

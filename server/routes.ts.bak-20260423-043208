@@ -1552,48 +1552,6 @@ export async function registerRoutes(
     }
   });
 
-  // GET /api/internal/loads/:loadNumber/trip-stats
-  // Aggregates this load's tracking_pings into a TripStats object on demand.
-  // No DB schema change — computation is pure and happens here, at request
-  // time (typically once, right after delivery, when AgentOS computes CO2).
-  // Auth: same x-internal-key as the other /api/internal/loads/* routes.
-  app.get("/api/internal/loads/:loadNumber/trip-stats", async (req: Request, res: Response) => {
-    try {
-      const internalKey = process.env.INTERNAL_API_KEY;
-      if (!internalKey || req.headers["x-internal-key"] !== internalKey) {
-        return res.status(401).json({ error: "Unauthorized" });
-      }
-
-      const { loadNumber } = req.params;
-      const load = await storage.getLoadByNumber(loadNumber);
-      if (!load) {
-        return res.status(404).json({ error: "Load not found" });
-      }
-
-      const pings = await storage.getTrackingPingsByLoad(load.id);
-      // getTrackingPingsByLoad returns DESC by created_at; computeTripStats
-      // sorts internally, but passing ASC-ish keeps debugging sane.
-      pings.reverse();
-      const { computeTripStats } = await import("./pingAnalytics");
-      const stats = computeTripStats(
-        pings.map((p) => ({
-          lat: p.lat,
-          lng: p.lng,
-          accuracy: p.accuracy,
-          speed: p.speed,
-          heading: p.heading,
-          source: p.source,
-          createdAt: p.createdAt,
-        })),
-      );
-
-      return res.json({ loadNumber, loadId: load.id, stats });
-    } catch (error) {
-      console.error("[PingPoint] Error in GET /api/internal/loads/:loadNumber/trip-stats:", error);
-      return res.status(500).json({ error: "Internal server error" });
-    }
-  });
-
   // Public tracking endpoint (secured with rate limiting, TTL, and safe response)
   // GET /api/track/:token
   app.get("/api/track/:token", async (req: Request, res: Response) => {
@@ -1639,12 +1597,6 @@ export async function registerRoutes(
           lat: latestPing.lat,
           lng: latestPing.lng,
           timestamp: latestPing.createdAt,
-          // Mobile app reports speed in m/s (Android Location.getSpeed default).
-          // Convert to mph here so the client can render it directly without
-          // needing to know the unit convention.
-          speedMph: latestPing.speed != null && Number.isFinite(Number(latestPing.speed))
-            ? Number((Number(latestPing.speed) * 2.23693629).toFixed(1))
-            : null,
         } : null,
       };
 

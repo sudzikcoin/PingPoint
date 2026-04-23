@@ -57,9 +57,7 @@ interface TrackingData {
     lat: string;
     lng: string;
     timestamp: string;
-    speedMph?: number | null;
   } | null;
-  truckNumber?: string | null;
 }
 
 export default function PublicTracking() {
@@ -248,38 +246,6 @@ export default function PublicTracking() {
               <MapUpdater lat={parseFloat(data.lastLocation.lat)} lng={parseFloat(data.lastLocation.lng)} />
             </MapContainer>
           ) : (
-            <></>
-          )}
-          {/* Live info overlay — top-right of map, absolute-positioned.
-              Shows only when speedMph is present; gracefully absent for old
-              loads whose API response predates the speedMph field. */}
-          {data.lastLocation && data.lastLocation.speedMph != null && (
-            <div
-              className="absolute top-3 right-3 z-[400] rounded-lg px-3 py-2 text-xs shadow-lg bg-black/70 text-white backdrop-blur-sm pointer-events-none max-w-[180px]"
-              data-testid="card-live-info-overlay"
-            >
-              {data.truckNumber && (
-                <div className="font-semibold text-[11px] flex items-center gap-1">
-                  <span>🚛</span>
-                  <span>{data.truckNumber}</span>
-                </div>
-              )}
-              <div className="flex items-center gap-1 mt-0.5">
-                <span>⚡</span>
-                <span className="tabular-nums">{data.lastLocation.speedMph.toFixed(1)} mph</span>
-              </div>
-              <div className="flex items-center gap-1 mt-0.5 text-emerald-300">
-                <span>🌿</span>
-                <span className="tabular-nums">
-                  {((data.lastLocation.speedMph / 7.0) * 10.180).toFixed(1)} kg/h CO₂
-                </span>
-              </div>
-              <div className="mt-1 text-[10px] text-white/60 tabular-nums">
-                {formatDistanceToNow(new Date(data.lastLocation.timestamp), { addSuffix: true })}
-              </div>
-            </div>
-          )}
-          {!data.lastLocation && (
             <>
               <div className={cn("absolute inset-0 flex items-center justify-center bg-cover bg-center opacity-10 grayscale transition-opacity", 
                  theme === "arcade90s" ? "bg-[radial-gradient(#22d3ee_1px,transparent_1px)] [background-size:20px_20px] opacity-20" : "bg-[url('https://images.unsplash.com/photo-1524661135-423995f22d0b?q=80&w=2074&auto=format&fit=crop')]"
