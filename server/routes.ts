@@ -2112,8 +2112,11 @@ export async function registerRoutes(
         return res.status(409).json({ error: "Tracking ended", trackingEnded: true });
       }
 
-      // Anti-teleport detection: check speed against last ping (efficient single-row fetch)
-      const lastPing = await storage.getMostRecentPing(load.id);
+      // Anti-teleport detection: check speed against last DRIVER_APP ping only.
+      // IOSIX_RAW pings are written by a separate pipeline without accuracy
+      // values; mixing them as teleport baselines collapses combinedAccuracy
+      // to ~curAcc and causes legitimate moving-truck pings to be rejected.
+      const lastPing = await storage.getMostRecentPingBySource(load.id, "DRIVER_APP");
       const isFirstPing = !lastPing;
       let lowConfidence = false;
 
@@ -2266,8 +2269,9 @@ export async function registerRoutes(
         return res.status(409).json({ error: "Tracking ended", trackingEnded: true });
       }
 
-      // Anti-teleport detection: check speed against last ping (efficient single-row fetch)
-      const lastPing = await storage.getMostRecentPing(load.id);
+      // Anti-teleport detection: check speed against last DRIVER_APP ping only
+      // (see /api/driver/:token/ping for rationale).
+      const lastPing = await storage.getMostRecentPingBySource(load.id, "DRIVER_APP");
       let lowConfidence = false;
       if (lastPing && lastPing.lat && lastPing.lng) {
         const lastLat = parseFloat(lastPing.lat);
