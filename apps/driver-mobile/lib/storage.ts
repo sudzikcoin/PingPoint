@@ -1,4 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { IOSiXData } from './iosix/types';
 
 const TOKEN_KEY = 'pp_driver_token';
 const QUEUE_KEY = 'pp_ping_queue';
@@ -38,6 +39,7 @@ export interface QueuedPing {
   accuracy?: number;
   speed?: number;
   timestamp: number;
+  iosix?: IOSiXData | null;
 }
 
 export async function getQueuedPings(): Promise<QueuedPing[]> {

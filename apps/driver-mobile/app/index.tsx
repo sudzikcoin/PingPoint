@@ -19,6 +19,7 @@ import {
   isTrackingActive,
   requestLocationPermissions,
 } from '@/lib/locationTask';
+import { useIOSiXTelemetry } from '@/lib/iosix/hook';
 
 export default function DriverApp() {
   const [token, setToken] = useState<string | null>(null);
@@ -26,6 +27,7 @@ export default function DriverApp() {
   const [tracking, setTracking] = useState(false);
   const [webViewKey, setWebViewKey] = useState(0);
   const webViewRef = useRef<WebView>(null);
+  const iosix = useIOSiXTelemetry(true);
 
   const parseToken = useCallback((url: string): string | null => {
     try {
@@ -179,6 +181,24 @@ export default function DriverApp() {
 
   const webUrl = `${WEB_BASE_URL}/driver/${token}`;
 
+  const eldDotStyle = iosix.connected
+    ? styles.eldDotConnected
+    : iosix.scanning
+    ? styles.eldDotScanning
+    : styles.eldDotIdle;
+  const eldText = (() => {
+    if (iosix.connected) {
+      const parts: string[] = ['ELD'];
+      if (iosix.telemetry.rpm !== null) parts.push(`${Math.round(iosix.telemetry.rpm)} RPM`);
+      if (iosix.telemetry.fuelRateGph !== null) parts.push(`${iosix.telemetry.fuelRateGph.toFixed(1)} gal/h`);
+      if (iosix.telemetry.batteryVoltage !== null) parts.push(`${iosix.telemetry.batteryVoltage.toFixed(1)}V`);
+      return parts.join(' · ');
+    }
+    if (iosix.scanning) return 'Scanning for ELD...';
+    if (iosix.error === 'ble_permission_denied') return 'ELD: Bluetooth permission denied';
+    return 'ELD Not Connected';
+  })();
+
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
       <View style={styles.topBar}>
@@ -197,6 +217,13 @@ export default function DriverApp() {
         >
           <Text style={styles.trackingButtonText}>{tracking ? 'Pause' : 'Resume'}</Text>
         </TouchableOpacity>
+      </View>
+
+      <View style={styles.eldBar}>
+        <View style={[styles.eldDot, eldDotStyle]} />
+        <Text style={styles.eldText} numberOfLines={1}>
+          {eldText}
+        </Text>
       </View>
 
       <WebView
@@ -329,6 +356,35 @@ const styles = StyleSheet.create({
     color: '#ffffff',
     fontSize: 12,
     fontWeight: '600',
+  },
+  eldBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    backgroundColor: '#20203a',
+    borderBottomWidth: 1,
+    borderBottomColor: '#3a3a6e',
+  },
+  eldDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    marginRight: 8,
+  },
+  eldDotConnected: {
+    backgroundColor: '#2ecc71',
+  },
+  eldDotScanning: {
+    backgroundColor: '#3498db',
+  },
+  eldDotIdle: {
+    backgroundColor: '#7f8c8d',
+  },
+  eldText: {
+    color: '#cfcfe0',
+    fontSize: 11,
+    flex: 1,
   },
   webView: {
     flex: 1,

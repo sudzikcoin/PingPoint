@@ -3,6 +3,7 @@ import * as Location from 'expo-location';
 import { sendPingWithRetry } from './api';
 import { getStoredToken } from './storage';
 import { PING_THROTTLE_MS } from './config';
+import { getFreshTelemetry } from './iosix/store';
 
 export const LOCATION_TASK_NAME = 'PINGPOINT_LOCATION_TASK';
 
@@ -38,6 +39,11 @@ TaskManager.defineTask(LOCATION_TASK_NAME, async ({ data, error }) => {
   const location = locations[locations.length - 1];
   const { latitude, longitude, accuracy, speed } = location.coords;
 
+  let iosix = null;
+  try {
+    iosix = await getFreshTelemetry();
+  } catch {}
+
   try {
     await sendPingWithRetry(token, {
       lat: latitude,
@@ -45,6 +51,7 @@ TaskManager.defineTask(LOCATION_TASK_NAME, async ({ data, error }) => {
       accuracy: accuracy ?? undefined,
       speed: speed ?? undefined,
       timestamp: location.timestamp,
+      iosix,
     });
   } catch (err) {
     console.error('Failed to send ping');

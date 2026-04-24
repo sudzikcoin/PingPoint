@@ -1,5 +1,7 @@
 import { API_BASE_URL, API_TIMEOUT_MS } from './config';
 import { QueuedPing, getQueuedPings, removeFromQueue, addToQueue, getStoredToken } from './storage';
+import { IOSiXData } from './iosix/types';
+import { IOSIX_MAC } from './iosix/service';
 
 export interface PingData {
   lat: number;
@@ -7,6 +9,39 @@ export interface PingData {
   accuracy?: number;
   speed?: number;
   timestamp?: number;
+  iosix?: IOSiXData | null;
+}
+
+function buildPingBody(data: PingData): Record<string, unknown> {
+  const t = data.iosix ?? null;
+  const body: Record<string, unknown> = {
+    lat: data.lat,
+    lng: data.lng,
+    accuracy: data.accuracy,
+    speed: data.speed,
+    heading: t?.heading ?? undefined,
+    timestamp: data.timestamp || Date.now(),
+    rpm: t?.rpm ?? null,
+    engineLoadPct: t?.engineLoadPct ?? null,
+    coolantTempC: t?.coolantTempC ?? null,
+    oilPressureKpa: t?.oilPressureKpa ?? null,
+    fuelRateGph: t?.fuelRateGph ?? null,
+    totalFuelUsedGal: t?.totalFuelUsedGal ?? null,
+    engineHours: t?.engineHours ?? null,
+    throttlePct: t?.throttlePct ?? null,
+    batteryVoltage: t?.batteryVoltage ?? null,
+    odometerMiles: t?.odometerMiles ?? null,
+    tripMiles: t?.tripMiles ?? null,
+    currentGear: t?.currentGear ?? null,
+    dpfSootLoadPct: t?.dpfSootLoadPct ?? null,
+    defLevelPct: t?.defLevelPct ?? null,
+    activeDtcCount: t?.activeDtcCount ?? null,
+    activeDtcCodes: t?.activeDtcCodes ?? null,
+    eldConnected: t?.connected ?? false,
+    eldMac: t?.connected ? IOSIX_MAC : null,
+    eldPacketCycleComplete: t?.packetCycleComplete ?? false,
+  };
+  return body;
 }
 
 export async function sendPing(token: string, data: PingData): Promise<boolean> {
@@ -19,13 +54,7 @@ export async function sendPing(token: string, data: PingData): Promise<boolean> 
       headers: {
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({
-        lat: data.lat,
-        lng: data.lng,
-        accuracy: data.accuracy,
-        speed: data.speed,
-        timestamp: data.timestamp || Date.now(),
-      }),
+      body: JSON.stringify(buildPingBody(data)),
       signal: controller.signal,
     });
 
@@ -39,7 +68,7 @@ export async function sendPing(token: string, data: PingData): Promise<boolean> 
 
 export async function sendPingWithRetry(token: string, data: PingData): Promise<boolean> {
   const success = await sendPing(token, data);
-  
+
   if (!success) {
     await addToQueue({
       token,
@@ -48,10 +77,11 @@ export async function sendPingWithRetry(token: string, data: PingData): Promise<
       accuracy: data.accuracy,
       speed: data.speed,
       timestamp: data.timestamp || Date.now(),
+      iosix: data.iosix ?? null,
     });
     return false;
   }
-  
+
   await flushQueue(token);
   return true;
 }
@@ -77,6 +107,7 @@ export async function flushQueue(currentToken: string): Promise<void> {
       accuracy: ping.accuracy,
       speed: ping.speed,
       timestamp: ping.timestamp,
+      iosix: ping.iosix ?? null,
     });
     
     if (success) {

@@ -20,9 +20,12 @@
         "NSLocationWhenInUseUsageDescription": "PingPoint needs your location to track deliveries and update customers in real-time.",
         "NSLocationAlwaysAndWhenInUseUsageDescription": "PingPoint needs background location access to continuously track deliveries even when the app is closed.",
         "NSLocationAlwaysUsageDescription": "PingPoint needs background location access to continuously track deliveries even when the app is closed.",
+        "NSBluetoothAlwaysUsageDescription": "PingPoint connects to your truck's IOSiX ELD over Bluetooth to report engine telemetry.",
+        "NSBluetoothPeripheralUsageDescription": "PingPoint connects to your truck's IOSiX ELD over Bluetooth to report engine telemetry.",
         "UIBackgroundModes": [
           "location",
-          "fetch"
+          "fetch",
+          "bluetooth-central"
         ]
       }
     },
@@ -38,11 +41,19 @@
         "ACCESS_BACKGROUND_LOCATION",
         "FOREGROUND_SERVICE",
         "FOREGROUND_SERVICE_LOCATION",
+        "BLUETOOTH",
+        "BLUETOOTH_ADMIN",
+        "BLUETOOTH_CONNECT",
+        "BLUETOOTH_SCAN",
         "android.permission.ACCESS_COARSE_LOCATION",
         "android.permission.ACCESS_FINE_LOCATION",
         "android.permission.ACCESS_BACKGROUND_LOCATION",
         "android.permission.FOREGROUND_SERVICE",
-        "android.permission.FOREGROUND_SERVICE_LOCATION"
+        "android.permission.FOREGROUND_SERVICE_LOCATION",
+        "android.permission.BLUETOOTH",
+        "android.permission.BLUETOOTH_ADMIN",
+        "android.permission.BLUETOOTH_CONNECT",
+        "android.permission.BLUETOOTH_SCAN"
       ]
     },
     "plugins": [
@@ -55,7 +66,15 @@
           "isAndroidForegroundServiceEnabled": true
         }
       ],
-      "expo-asset"
+      "expo-asset",
+      [
+        "react-native-ble-plx",
+        {
+          "isBackgroundEnabled": true,
+          "modes": ["central"],
+          "bluetoothAlwaysPermission": "PingPoint connects to your truck's IOSiX ELD over Bluetooth to report engine telemetry."
+        }
+      ]
     ],
     "extra": {
       "router": {

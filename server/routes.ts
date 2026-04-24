@@ -3,7 +3,7 @@ import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import { db } from "./db";
 import { trackingPings, loads as loadsTable, stops as stopsTable } from "@shared/schema";
-import { eq, and, or, desc, inArray } from "drizzle-orm";
+import { eq, and, or, desc, inArray, sql } from "drizzle-orm";
 import { createBrokerSession, getBrokerFromRequest, clearBrokerSession, getOrCreateTrustedDevice, getTrustedDevice, isAdminEmail, getBrokerWithAdminFromRequest } from "./auth";
 import { requireAdminAuth, createAdminSession, clearAdminSession, getAdminFromRequest, validateAdminCredentials, isAdminFullyConfigured } from "./admin/adminAuth";
 import { randomBytes } from "crypto";
@@ -1662,6 +1662,55 @@ export async function registerRoutes(
       return res.json({ loadNumber, loadId: load.id, stats });
     } catch (error) {
       console.error("[PingPoint] Error in GET /api/internal/loads/:loadNumber/trip-stats:", error);
+      return res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  // GET /api/internal/drivers/latest-ping?phone=<digits>
+  // Returns the latest tracking_pings row for any driver whose phone (digits
+  // only) matches the given phone. Used by AgentOS to surface real-time status
+  // for PingPoint/IOSiX-tracked trucks that aren't on DIMO.
+  // Auth: x-internal-key header (INTERNAL_API_KEY env var).
+  app.get("/api/internal/drivers/latest-ping", async (req: Request, res: Response) => {
+    try {
+      const internalKey = process.env.INTERNAL_API_KEY;
+      if (!internalKey || req.headers["x-internal-key"] !== internalKey) {
+        return res.status(401).json({ error: "Unauthorized" });
+      }
+      const phoneRaw = typeof req.query.phone === "string" ? req.query.phone : "";
+      const phoneDigits = phoneRaw.replace(/\D/g, "");
+      if (phoneDigits.length < 7) {
+        return res.status(400).json({ error: "phone query parameter required (>=7 digits)" });
+      }
+      const result = await db.execute(sql`
+        SELECT tp.lat, tp.lng, tp.speed, tp.rpm, tp.odometer_miles, tp.throttle_pct,
+               tp.fuel_rate_gph, tp.total_fuel_gal, tp.engine_load_pct, tp.eld_connected,
+               tp.source, tp.created_at
+        FROM tracking_pings tp
+        JOIN drivers d ON d.id = tp.driver_id
+        WHERE regexp_replace(d.phone, '\D', '', 'g') = ${phoneDigits}
+        ORDER BY tp.created_at DESC
+        LIMIT 1
+      `);
+      const row = (result as any).rows?.[0] ?? (Array.isArray(result) ? result[0] : null);
+      if (!row) return res.json(null);
+      return res.json({
+        phone: phoneDigits,
+        lat: row.lat != null ? Number(row.lat) : null,
+        lng: row.lng != null ? Number(row.lng) : null,
+        speed: row.speed != null ? Number(row.speed) : null,
+        rpm: row.rpm != null ? Number(row.rpm) : null,
+        odometerMiles: row.odometer_miles != null ? Number(row.odometer_miles) : null,
+        throttlePct: row.throttle_pct != null ? Number(row.throttle_pct) : null,
+        fuelRateGph: row.fuel_rate_gph != null ? Number(row.fuel_rate_gph) : null,
+        totalFuelGal: row.total_fuel_gal != null ? Number(row.total_fuel_gal) : null,
+        engineLoadPct: row.engine_load_pct != null ? Number(row.engine_load_pct) : null,
+        eldConnected: row.eld_connected ?? null,
+        source: row.source ?? null,
+        timestamp: row.created_at instanceof Date ? row.created_at.toISOString() : String(row.created_at),
+      });
+    } catch (error) {
+      console.error("[PingPoint] Error in GET /api/internal/drivers/latest-ping:", error);
       return res.status(500).json({ error: "Internal server error" });
     }
   });

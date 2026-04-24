@@ -551,11 +551,12 @@ export class DatabaseStorage implements IStorage {
       .where(
         and(
           eq(loads.driverId, driverId),
-          inArray(loads.status, ["PLANNED", "IN_TRANSIT", "AT_PICKUP"]),
-          sql`${loads.id}::text != ${currentLoadId}`
+          eq(loads.status, "PLANNED"),
+          sql`${loads.id}::text != ${currentLoadId}`,
+          sql`${loads.deliveryEta} >= NOW()`
         )
       )
-      .orderBy(sql`COALESCE(${loads.pickupEta}, ${loads.createdAt}) ASC`)
+      .orderBy(sql`${loads.pickupEta} ASC`)
       .limit(1);
     return nextLoad || null;
   }

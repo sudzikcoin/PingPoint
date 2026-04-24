@@ -18,6 +18,7 @@ export interface PingRow {
   heading: string | null;
   source: string;
   createdAt: Date | string;
+  fuelRateGph: string | null;  // IOSiX ELD engine fuel rate, gallons/hour
 }
 
 export interface TripStats {
@@ -35,6 +36,8 @@ export interface TripStats {
   coveragePct: number;         // dataPoints / expected-at-1-per-minute
   firstAt: string | null;
   lastAt: string | null;
+  iosixFuelGallons: number | null;  // ∫ fuel_rate_gph dt across IOSiX pings
+  iosixDataPoints: number;          // count of pings carrying fuel_rate_gph
 }
 
 const EMPTY_STATS: TripStats = {
@@ -52,6 +55,8 @@ const EMPTY_STATS: TripStats = {
   coveragePct: 0,
   firstAt: null,
   lastAt: null,
+  iosixFuelGallons: null,
+  iosixDataPoints: 0,
 };
 
 function haversineMiles(aLat: number, aLng: number, bLat: number, bLng: number): number {
@@ -97,6 +102,13 @@ export function computeTripStats(pings: PingRow[]): TripStats {
   let hardBrakeCount = 0;
   let parkedPings = 0;
   let nightPings = 0;
+  // IOSiX fuel burn: ∫ fuel_rate_gph dt via trapezoidal rule across
+  // consecutive pings that BOTH carry fuel_rate_gph. Gaps > 5 min are
+  // skipped — the engine may have been off or the ELD disconnected.
+  let iosixFuelGallons = 0;
+  let iosixDataPoints = 0;
+  let iosixSegments = 0;      // consecutive-pair count actually integrated
+  const MAX_INTEGRATION_GAP_MIN = 5;
 
   // Precompute each ping's effective speed: use reported speed if present,
   // else derive from segment haversine + time delta against predecessor.
@@ -130,6 +142,9 @@ export function computeTripStats(pings: PingRow[]): TripStats {
     if (spd > maxSpeedMph) maxSpeedMph = spd;
     if (spd <= 5) parkedPings += 1;
 
+    const fuelRate = parseNum(p.fuelRateGph);
+    if (fuelRate !== null && fuelRate >= 0) iosixDataPoints += 1;
+
     // Night driving classification: UTC hour of the ping.
     const hourUtc = new Date(toMs(p.createdAt)).getUTCHours();
     if (hourUtc >= 23 || hourUtc <= 6) nightPings += 1;
@@ -160,6 +175,21 @@ export function computeTripStats(pings: PingRow[]): TripStats {
       if (accelMphPerMin > 15) hardAccelCount += 1;    // was >10; Class 8 rarely hits this genuinely
       if (accelMphPerMin < -20) hardBrakeCount += 1;   // was <-15
     }
+
+    // IOSiX fuel integration (trapezoidal). Only valid when both the
+    // previous and current ping carry a non-negative fuel_rate_gph AND
+    // they are close enough in time for linear interpolation to be sane.
+    const prevFuelRate = parseNum(a.fuelRateGph);
+    const curFuelRate = parseNum(p.fuelRateGph);
+    if (
+      prevFuelRate !== null && prevFuelRate >= 0 &&
+      curFuelRate !== null && curFuelRate >= 0 &&
+      dtMin > 0 && dtMin <= MAX_INTEGRATION_GAP_MIN
+    ) {
+      const dtHours = dtMin / 60;
+      iosixFuelGallons += ((prevFuelRate + curFuelRate) / 2) * dtHours;
+      iosixSegments += 1;
+    }
   }
 
   const avgSpeedMph =
@@ -189,5 +219,7 @@ export function computeTripStats(pings: PingRow[]): TripStats {
     coveragePct: Number(coveragePct.toFixed(2)),
     firstAt: new Date(firstAt).toISOString(),
     lastAt: new Date(lastAt).toISOString(),
+    iosixFuelGallons: iosixSegments > 0 ? Number(iosixFuelGallons.toFixed(3)) : null,
+    iosixDataPoints,
   };
 }
