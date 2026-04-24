@@ -211,6 +211,7 @@ async function ingestIosixPingsFromRaw(
         driverId,
         lat: lat.toString(),
         lng: lng.toString(),
+        accuracy: "15",
         speed: speedMs != null ? speedMs.toFixed(2) : null,
         heading: Number.isFinite(heading) ? heading.toString() : null,
         source: "IOSIX_RAW",
