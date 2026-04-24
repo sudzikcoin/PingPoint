@@ -14,6 +14,7 @@ import path from "path";
 import fs from "fs";
 import express from "express";
 import { sendBrokerVerificationEmail, sendDriverAppLink } from "./email";
+import { geocodeAddressSafe } from "./geocode";
 import { strictRateLimit, authLimiter, signupLimiter, pdfParsingLimiter, loadCreationLimiter } from "./middleware/rateLimit";
 import { shouldAcceptPing, MIN_PING_INTERVAL_MS } from "./utils/rateLimit";
 import { checkAndConsumeLoadAllowance, rollbackLoadAllowance, getBillingSummary, FREE_INCLUDED_LOADS } from "./billing/entitlements";
@@ -114,6 +115,127 @@ function extractIosixPingFields(body: Record<string, unknown>): IosixPingFields 
     eldConnected: typeof body.eldConnected === "boolean" ? body.eldConnected : null,
     eldMac: mac,
   };
+}
+
+// Per-token reassembly buffer for IOSiX BLE raw log. Each incoming batch is
+// 20-byte fragments with a 1-byte sequence header; complete IOSiX CSV lines
+// are CRLF-terminated. The tail of one POST is usually the head of the next,
+// so we keep the trailing partial line across requests.
+const iosixReassemblyBuffers = new Map<string, string>();
+const iosixLastInsertAt = new Map<string, number>();
+const IOSIX_PING_MIN_INTERVAL_MS = 15_000;
+const IOSIX_LINE_RE = /Data:\s*1,([A-Z0-9]{1,32}),(-?\d+),(-?\d+(?:\.\d+)?),([\d.]+),([\d.]+),([\d.]+),([\d.]+),([\d.]+),(\d{2}\/\d{2}\/\d{2}),(\d{2}:\d{2}:\d{2}),(-?\d+\.\d+),(-?\d+\.\d+),(-?\d+),(-?\d+),(-?\d+),(\d+),([\d.]+),(\d+),(\d+)/;
+
+async function ingestIosixPingsFromRaw(
+  loadId: string,
+  driverId: string,
+  bufferKey: string,
+  entries: Array<{ timestamp: number; raw: string | null }>,
+): Promise<number> {
+  let buf = iosixReassemblyBuffers.get(bufferKey) ?? "";
+  for (const e of entries) {
+    if (!e.raw) continue;
+    try {
+      const decoded = Buffer.from(e.raw, "base64");
+      // 1st byte is a BLE sequence counter; rest is ASCII CSV fragment.
+      if (decoded.length <= 1) continue;
+      buf += decoded.slice(1).toString("latin1");
+    } catch {
+      // ignore bad base64
+    }
+  }
+
+  // Process complete CRLF-terminated lines; keep the trailing partial.
+  const parts = buf.split(/\r\n|\n/);
+  const tail = parts.pop() ?? "";
+  iosixReassemblyBuffers.set(bufferKey, tail.length > 8192 ? "" : tail);
+
+  let inserted = 0;
+  let matchedLines = 0;
+  const lastTs = iosixLastInsertAt.get(loadId) ?? 0;
+  let pendingLast = lastTs;
+
+  for (const line of parts) {
+    const m = IOSIX_LINE_RE.exec(line);
+    if (!m) continue;
+    matchedLines += 1;
+    const mphStr = m[3];
+    const odoStr = m[4];
+    const tripStr = m[5];
+    const engHrStr = m[6];
+    const fuelRateStr = m[7];
+    const batteryStr = m[8];
+    const dateStr = m[9];
+    const timeStr = m[10];
+    const latStr = m[11];
+    const lngStr = m[12];
+    const headingStr = m[13];
+    const gearStr = m[15];
+    const rpmStr = m[16];
+    const throttleStr = m[19];
+
+    const lat = Number(latStr);
+    const lng = Number(lngStr);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
+    if (Math.abs(lat) > 90 || Math.abs(lng) > 180) continue;
+    if (lat === 0 && lng === 0) continue;
+
+    // "MM/DD/YY" + "HH:MM:SS" — IOSiX packets are UTC.
+    const [mm, dd, yy] = dateStr.split("/");
+    const iso = `20${yy}-${mm}-${dd}T${timeStr}Z`;
+    const pingTs = Date.parse(iso);
+    if (!Number.isFinite(pingTs)) continue;
+    // Skip samples we've already recorded (same or older than last inserted).
+    if (pingTs <= pendingLast) continue;
+    // Throttle to one per 15s per load.
+    if (pingTs - pendingLast < IOSIX_PING_MIN_INTERVAL_MS && pendingLast !== 0) continue;
+
+    // IOSiX CSV speed field is km/h (verified by haversine vs field value). Store as m/s.
+    const kph = Number(mphStr);
+    const speedMs = Number.isFinite(kph) ? (kph / 3.6) : null;
+    const heading = Number(headingStr);
+    const rpm = Number(rpmStr);
+    const fuelRate = Number(fuelRateStr);
+    const battery = Number(batteryStr);
+    const odo = Number(odoStr);
+    const trip = Number(tripStr);
+    const engHr = Number(engHrStr);
+    const gear = Number(gearStr);
+    const throttle = Number(throttleStr);
+
+    try {
+      // Direct drizzle insert so we can pin createdAt to the IOSiX packet
+      // timestamp (storage.createTrackingPing omits createdAt).
+      await db.insert(trackingPings).values({
+        loadId,
+        driverId,
+        lat: lat.toString(),
+        lng: lng.toString(),
+        speed: speedMs != null ? speedMs.toFixed(2) : null,
+        heading: Number.isFinite(heading) ? heading.toString() : null,
+        source: "IOSIX_RAW",
+        createdAt: new Date(pingTs),
+        rpm: Number.isFinite(rpm) ? Math.trunc(rpm) : null,
+        fuelRateGph: Number.isFinite(fuelRate) ? fuelRate.toFixed(3) : null,
+        engineHours: Number.isFinite(engHr) ? engHr.toFixed(1) : null,
+        batteryVoltage: Number.isFinite(battery) ? battery.toFixed(2) : null,
+        odometerMiles: Number.isFinite(odo) ? odo.toFixed(1) : null,
+        tripMiles: Number.isFinite(trip) ? trip.toFixed(1) : null,
+        currentGear: Number.isFinite(gear) ? Math.trunc(gear) : null,
+        eldConnected: true,
+      } as any);
+      pendingLast = pingTs;
+      inserted += 1;
+    } catch (err) {
+      console.error("[IosixRaw] failed to insert tracking_ping:", err);
+    }
+  }
+
+  if (inserted > 0) {
+    iosixLastInsertAt.set(loadId, pendingLast);
+  }
+  console.log(`[IosixRaw] load=${loadId} entries=${entries.length} parts=${parts.length} matched=${matchedLines} inserted=${inserted} bufBytes=${buf.length} tailBytes=${tail.length}`);
+  return inserted;
 }
 
 const multerStorage = multer.diskStorage({
@@ -4166,6 +4288,12 @@ export async function registerRoutes(
   // packets for offline ELD diagnostics. Appended to a daily JSONL file per
   // driver token; tokens are treated as opaque IDs in the path so we guard
   // against traversal before using them in the filesystem.
+  //
+  // We also reassemble the BLE fragments on the fly and, for any complete
+  // IOSiX CSV line carrying a GPS fix, insert a row into tracking_pings so
+  // the public tracking map renders the truck. This keeps APK 1.0.0 usable
+  // (it never learned to POST /api/driver/:token/ping directly) until all
+  // trucks are upgraded.
   app.post("/api/driver/:token/iosix-raw-log", async (req: Request, res: Response) => {
     try {
       const { token } = req.params;
@@ -4183,16 +4311,20 @@ export async function registerRoutes(
       fs.mkdirSync(dir, { recursive: true });
       const file = path.join(dir, `${safeToken}.jsonl`);
 
-      const lines = entries
+      const normalized = entries
         .filter((e: unknown) => e && typeof e === "object")
-        .map((e: Record<string, unknown>) => JSON.stringify({
+        .map((e: Record<string, unknown>) => ({
           timestamp: typeof e.timestamp === "number" ? e.timestamp : Date.now(),
           raw: typeof e.raw === "string" ? e.raw.slice(0, 4096) : null,
-        }))
-        .join("\n");
+        }));
+      const lines = normalized.map((e) => JSON.stringify(e)).join("\n");
       if (lines.length > 0) fs.appendFileSync(file, lines + "\n");
 
-      res.json({ success: true, received: entries.length });
+      const pingsInserted = load.driverId
+        ? await ingestIosixPingsFromRaw(load.id, load.driverId, safeToken, normalized)
+        : 0;
+
+      res.json({ success: true, received: entries.length, pingsInserted });
     } catch (error) {
       console.error("Error in /api/driver/:token/iosix-raw-log:", error);
       res.status(500).json({ error: "Failed to save raw log" });
@@ -4333,6 +4465,12 @@ export async function registerRoutes(
         isBillable: true,
       });
 
+      // Geocode pickup + delivery in parallel; leave lat/lng null if provider misses
+      const [pickupGeo, deliveryGeo] = await Promise.all([
+        geocodeAddressSafe(`${pickupAddress}, ${pickupCity}, ${pickupState}`),
+        geocodeAddressSafe(`${deliveryAddress}, ${deliveryCity}, ${deliveryState}`),
+      ]);
+
       // Create pickup + delivery stops
       await storage.createStops([
         {
@@ -4343,8 +4481,8 @@ export async function registerRoutes(
           fullAddress: pickupAddress,
           city: pickupCity,
           state: pickupState,
-          lat: null,
-          lng: null,
+          lat: pickupGeo?.lat != null ? String(pickupGeo.lat) : null,
+          lng: pickupGeo?.lng != null ? String(pickupGeo.lng) : null,
           windowFrom: pickupDateParsed,
           windowTo: null,
           arrivedAt: null,
@@ -4358,8 +4496,8 @@ export async function registerRoutes(
           fullAddress: deliveryAddress,
           city: deliveryCity,
           state: deliveryState,
-          lat: null,
-          lng: null,
+          lat: deliveryGeo?.lat != null ? String(deliveryGeo.lat) : null,
+          lng: deliveryGeo?.lng != null ? String(deliveryGeo.lng) : null,
           windowFrom: deliveryDateParsed,
           windowTo: null,
           arrivedAt: null,

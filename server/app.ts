@@ -54,13 +54,14 @@ export async function createApp(): Promise<AppInstance> {
       return next();
     }
     express.json({
+      limit: "10mb",
       verify: (req, _res, buf) => {
         req.rawBody = buf;
       },
     })(req, res, next);
   });
 
-  app.use(express.urlencoded({ extended: false }));
+  app.use(express.urlencoded({ extended: false, limit: "10mb" }));
 
   registerHealthRoutes(app);
 
