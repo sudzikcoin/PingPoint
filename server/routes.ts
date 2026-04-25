@@ -4402,7 +4402,7 @@ export async function registerRoutes(
         miles,
         weight,
         customerRef,
-        driverPhone,
+        truckNumber,
         carrierName,
       } = req.body || {};
 
@@ -4465,13 +4465,13 @@ export async function registerRoutes(
         });
       }
 
-      // Find or create driver by phone if provided
+      // Find or create driver by truck_number if provided
       let driver = null;
-      if (driverPhone && typeof driverPhone === "string" && driverPhone.trim()) {
-        const phoneNormalized = driverPhone.trim();
-        driver = await storage.getDriverByPhone(phoneNormalized);
+      if (truckNumber && typeof truckNumber === "string" && truckNumber.trim()) {
+        const truckNumberNormalized = truckNumber.trim();
+        driver = await storage.getDriverByTruckNumber(truckNumberNormalized);
         if (!driver) {
-          driver = await storage.createDriver({ phone: phoneNormalized });
+          driver = await storage.createDriver({ phone: "", truckNumber: truckNumberNormalized });
         }
       }
 
