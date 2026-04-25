@@ -18,3 +18,6 @@ logs/
 
 # Local deploy helper containing server-specific secret defaults
 restart-pingpoint.sh
+
+# Firebase admin SDK secret
+firebase-service-account.json
