@@ -159,20 +159,36 @@ async function ingestIosixPingsFromRaw(
     const m = IOSIX_LINE_RE.exec(line);
     if (!m) continue;
     matchedLines += 1;
-    const mphStr = m[3];
+    // Field mapping per IOSiX PT30 protocol analysis (1-based regex groups,
+    // VIN at m[1]; CSV fields f1..f19 documented in iosix-pt30-protocol repo):
+    //   m[3]  f3  GPS speed km/h
+    //   m[4]  f4  odometer miles
+    //   m[5]  f5  trip miles
+    //   m[6]  f6  engine hours
+    //   m[7]  f7  cumulative trip fuel (gallons, monotonic) — NOT instantaneous rate
+    //   m[8]  f8  battery voltage
+    //   m[11] f11 lat / m[12] f12 lng
+    //   m[13] f13 wheel speed (SPN 84, km/h, capped at 119) — NEW
+    //   m[14] f14 compass heading (0-358°) — was wrongly read from m[13]
+    //   m[15] f15 current gear (0-10, 0=neutral)
+    //   m[16] f16 unknown — DO NOT USE (was wrongly labeled rpm; rpm comes from DRIVER_APP)
+    //   m[17] f17 INSTANTANEOUS FUEL RATE × 0.1 in L/h; sentinel 99.9 = no data
+    //   m[18] f18 session counter (~1/sec)
+    //   m[19] f19 packet flag (always 349)
+    const speedKphStr = m[3];
     const odoStr = m[4];
     const tripStr = m[5];
     const engHrStr = m[6];
-    const fuelRateStr = m[7];
+    const tripFuelGalStr = m[7];
     const batteryStr = m[8];
     const dateStr = m[9];
     const timeStr = m[10];
     const latStr = m[11];
     const lngStr = m[12];
-    const headingStr = m[13];
+    const wheelSpeedKphStr = m[13];
+    const headingStr = m[14];
     const gearStr = m[15];
-    const rpmStr = m[16];
-    const throttleStr = m[19];
+    const fuelRateLphTenthsStr = m[17];
 
     const lat = Number(latStr);
     const lng = Number(lngStr);
@@ -190,22 +206,35 @@ async function ingestIosixPingsFromRaw(
     // Throttle to one per 15s per load.
     if (pingTs - pendingLast < IOSIX_PING_MIN_INTERVAL_MS && pendingLast !== 0) continue;
 
-    // IOSiX CSV speed field is km/h (verified by haversine vs field value). Store as m/s.
-    const kph = Number(mphStr);
+    // GPS speed (f3): IOSiX reports km/h, store as m/s to match endpoint convention.
+    const kph = Number(speedKphStr);
     const speedMs = Number.isFinite(kph) ? (kph / 3.6) : null;
+    // Wheel speed (f13, SPN 84, km/h, capped 119).
+    const wheelSpeedKph = Number(wheelSpeedKphStr);
+    // Heading (f14, 0-358°).
     const heading = Number(headingStr);
-    const rpm = Number(rpmStr);
-    const fuelRate = Number(fuelRateStr);
+    // Cumulative trip fuel (f7, gallons, monotonic counter — total_fuel_gal column).
+    const tripFuelGal = Number(tripFuelGalStr);
+    // Instantaneous fuel rate (f17 = L/h × 0.1, sentinel 99.9 = unavailable).
+    // Convert to gal/h with sanity clamp (DD15 max ~12 gph at full load).
+    const f17 = Number(fuelRateLphTenthsStr);
+    let fuelRateGph: number | null = null;
+    if (Number.isFinite(f17) && f17 < 90) {
+      const lph = f17 * 10;
+      const gph = lph / 3.785;
+      if (gph >= 0 && gph <= 12) fuelRateGph = gph;
+    }
     const battery = Number(batteryStr);
     const odo = Number(odoStr);
     const trip = Number(tripStr);
     const engHr = Number(engHrStr);
     const gear = Number(gearStr);
-    const throttle = Number(throttleStr);
 
     try {
       // Direct drizzle insert so we can pin createdAt to the IOSiX packet
       // timestamp (storage.createTrackingPing omits createdAt).
+      // RPM intentionally omitted — IOSIX_RAW field m[16] is not RPM (range
+      // includes negatives); the real RPM arrives via DRIVER_APP source.
       await db.insert(trackingPings).values({
         loadId,
         driverId,
@@ -216,13 +245,14 @@ async function ingestIosixPingsFromRaw(
         heading: Number.isFinite(heading) ? heading.toString() : null,
         source: "IOSIX_RAW",
         createdAt: new Date(pingTs),
-        rpm: Number.isFinite(rpm) ? Math.trunc(rpm) : null,
-        fuelRateGph: Number.isFinite(fuelRate) ? fuelRate.toFixed(3) : null,
+        fuelRateGph: fuelRateGph != null ? fuelRateGph.toFixed(3) : null,
+        totalFuelGal: Number.isFinite(tripFuelGal) ? tripFuelGal.toFixed(2) : null,
         engineHours: Number.isFinite(engHr) ? engHr.toFixed(1) : null,
         batteryVoltage: Number.isFinite(battery) ? battery.toFixed(2) : null,
         odometerMiles: Number.isFinite(odo) ? odo.toFixed(1) : null,
         tripMiles: Number.isFinite(trip) ? trip.toFixed(1) : null,
         currentGear: Number.isFinite(gear) ? Math.trunc(gear) : null,
+        wheelSpeedKph: Number.isFinite(wheelSpeedKph) ? wheelSpeedKph.toFixed(1) : null,
         eldConnected: true,
       } as any);
       pendingLast = pingTs;

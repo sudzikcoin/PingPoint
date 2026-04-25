@@ -286,6 +286,7 @@ export const trackingPings = pgTable("tracking_pings", {
   activeDtcCodes: text("active_dtc_codes"),
   eldConnected: boolean("eld_connected"),
   eldMac: text("eld_mac"),
+  wheelSpeedKph: decimal("wheel_speed_kph", { precision: 5, scale: 1 }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`now()`),
 }, (table) => [
   index("tp_load_idx").on(table.loadId),
