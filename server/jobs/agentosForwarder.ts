@@ -13,9 +13,9 @@ import { logger } from "../utils/logger";
  */
 
 const POLL_INTERVAL_MS = 30_000;
-const BATCH_SIZE = 200;
+const BATCH_SIZE = 50;
 const STATE_KEY = "agentos_telemetry_last_ts";
-const REQUEST_TIMEOUT_MS = 15_000;
+const REQUEST_TIMEOUT_MS = 60_000;
 
 let intervalId: NodeJS.Timeout | null = null;
 let isRunning = false;

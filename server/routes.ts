@@ -1819,10 +1819,10 @@ export async function registerRoutes(
     }
   });
 
-  // GET /api/internal/drivers/latest-ping?phone=<digits>
-  // Returns the latest tracking_pings row for any driver whose phone (digits
-  // only) matches the given phone. Used by AgentOS to surface real-time status
-  // for PingPoint/IOSiX-tracked trucks that aren't on DIMO.
+  // GET /api/internal/drivers/latest-ping?truckNumber=<n>  (preferred)
+  //                                       ?phone=<digits>   (legacy fallback)
+  // Returns the latest tracking_pings row for the matching driver. Used by
+  // AgentOS to surface real-time status for PingPoint-tracked trucks.
   // Auth: x-internal-key header (INTERNAL_API_KEY env var).
   app.get("/api/internal/drivers/latest-ping", async (req: Request, res: Response) => {
     try {
@@ -1830,25 +1830,42 @@ export async function registerRoutes(
       if (!internalKey || req.headers["x-internal-key"] !== internalKey) {
         return res.status(401).json({ error: "Unauthorized" });
       }
+      const truckNumberRaw = typeof req.query.truckNumber === "string" ? req.query.truckNumber.trim() : "";
       const phoneRaw = typeof req.query.phone === "string" ? req.query.phone : "";
       const phoneDigits = phoneRaw.replace(/\D/g, "");
-      if (phoneDigits.length < 7) {
-        return res.status(400).json({ error: "phone query parameter required (>=7 digits)" });
+
+      let result: any;
+      if (truckNumberRaw) {
+        result = await db.execute(sql`
+          SELECT tp.lat, tp.lng, tp.speed, tp.rpm, tp.odometer_miles, tp.throttle_pct,
+                 tp.fuel_rate_gph, tp.total_fuel_gal, tp.engine_load_pct, tp.eld_connected,
+                 tp.source, tp.created_at, d.truck_number, d.phone
+          FROM tracking_pings tp
+          JOIN drivers d ON d.id = tp.driver_id
+          WHERE d.truck_number = ${truckNumberRaw}
+          ORDER BY tp.created_at DESC
+          LIMIT 1
+        `);
+      } else if (phoneDigits.length >= 7) {
+        result = await db.execute(sql`
+          SELECT tp.lat, tp.lng, tp.speed, tp.rpm, tp.odometer_miles, tp.throttle_pct,
+                 tp.fuel_rate_gph, tp.total_fuel_gal, tp.engine_load_pct, tp.eld_connected,
+                 tp.source, tp.created_at, d.truck_number, d.phone
+          FROM tracking_pings tp
+          JOIN drivers d ON d.id = tp.driver_id
+          WHERE regexp_replace(d.phone, '\D', '', 'g') = ${phoneDigits}
+          ORDER BY tp.created_at DESC
+          LIMIT 1
+        `);
+      } else {
+        return res.status(400).json({ error: "truckNumber or phone (>=7 digits) query parameter required" });
       }
-      const result = await db.execute(sql`
-        SELECT tp.lat, tp.lng, tp.speed, tp.rpm, tp.odometer_miles, tp.throttle_pct,
-               tp.fuel_rate_gph, tp.total_fuel_gal, tp.engine_load_pct, tp.eld_connected,
-               tp.source, tp.created_at
-        FROM tracking_pings tp
-        JOIN drivers d ON d.id = tp.driver_id
-        WHERE regexp_replace(d.phone, '\D', '', 'g') = ${phoneDigits}
-        ORDER BY tp.created_at DESC
-        LIMIT 1
-      `);
+
       const row = (result as any).rows?.[0] ?? (Array.isArray(result) ? result[0] : null);
       if (!row) return res.json(null);
       return res.json({
-        phone: phoneDigits,
+        truckNumber: row.truck_number ?? null,
+        phone: row.phone ?? null,
         lat: row.lat != null ? Number(row.lat) : null,
         lng: row.lng != null ? Number(row.lng) : null,
         speed: row.speed != null ? Number(row.speed) : null,
