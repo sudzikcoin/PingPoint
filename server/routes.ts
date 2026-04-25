@@ -2,7 +2,7 @@ import type { Express, Request, Response } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import { db } from "./db";
-import { trackingPings, loads as loadsTable, stops as stopsTable } from "@shared/schema";
+import { trackingPings, loads as loadsTable, stops as stopsTable, drivers as driversTable } from "@shared/schema";
 import { eq, and, or, desc, inArray, sql } from "drizzle-orm";
 import { createBrokerSession, getBrokerFromRequest, clearBrokerSession, getOrCreateTrustedDevice, getTrustedDevice, isAdminEmail, getBrokerWithAdminFromRequest } from "./auth";
 import { requireAdminAuth, createAdminSession, clearAdminSession, getAdminFromRequest, validateAdminCredentials, isAdminFullyConfigured } from "./admin/adminAuth";
@@ -2106,6 +2106,35 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Error in /api/driver/:token/history:", error);
       return res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  // POST /api/driver/:token/fcm-register - Register the driver's FCM token
+  // for silent-push GPS triggering. The :token is the load's driverToken;
+  // we resolve it to a driverId via storage.getLoadByToken and store the
+  // FCM token on the drivers row (one device per driver).
+  app.post("/api/driver/:token/fcm-register", async (req: Request, res: Response) => {
+    try {
+      const { token } = req.params;
+      const { fcmToken } = req.body ?? {};
+      if (typeof fcmToken !== "string" || fcmToken.length < 20) {
+        return res.status(400).json({ ok: false, error: "fcmToken required" });
+      }
+      const load = await storage.getLoadByToken(token, "driver");
+      if (!load || !load.driverId) {
+        return res.status(404).json({ ok: false, error: "Load/driver not found" });
+      }
+      await db
+        .update(driversTable)
+        .set({ fcmToken, fcmTokenUpdatedAt: new Date() })
+        .where(eq(driversTable.id, load.driverId));
+      console.log(
+        `[FCMRegister] driver=${load.driverId} token=${fcmToken.substring(0, 16)}...`,
+      );
+      return res.json({ ok: true });
+    } catch (error) {
+      console.error("Error in /api/driver/:token/fcm-register:", error);
+      return res.status(500).json({ ok: false, error: "Internal server error" });
     }
   });
 

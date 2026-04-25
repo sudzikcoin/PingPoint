@@ -99,6 +99,8 @@ export const drivers = pgTable("drivers", {
   statsTotalLoads: integer("stats_total_loads").notNull().default(0),
   statsOnTimeLoads: integer("stats_on_time_loads").notNull().default(0),
   statsLateLoads: integer("stats_late_loads").notNull().default(0),
+  fcmToken: text("fcm_token"),
+  fcmTokenUpdatedAt: timestamp("fcm_token_updated_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`now()`),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().default(sql`now()`),
 }, (table) => [

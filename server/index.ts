@@ -6,6 +6,7 @@ import { ensureDatabase } from "./migrate";
 import { startExceptionScanning } from "./services/exceptionService";
 import { startGeofenceMonitoring, stopGeofenceMonitoring } from "./jobs/geofenceMonitor";
 import { startAgentOsForwarder, stopAgentOsForwarder } from "./jobs/agentosForwarder";
+import { startFcmPingTrigger, stopFcmPingTrigger } from "./jobs/fcmPingTrigger";
 
 (async () => {
   const bootConfig = getBootConfig();
@@ -56,6 +57,7 @@ import { startAgentOsForwarder, stopAgentOsForwarder } from "./jobs/agentosForwa
           console.log('[Cron] Starting background jobs...');
           startGeofenceMonitoring();
           startAgentOsForwarder();
+          startFcmPingTrigger();
           console.log('[Cron] Geofence monitoring started - running every minute');
         } else {
           console.log('[Cron] Cron jobs disabled via ENABLE_CRON_JOBS env var');
@@ -80,6 +82,7 @@ import { startAgentOsForwarder, stopAgentOsForwarder } from "./jobs/agentosForwa
     try {
       stopGeofenceMonitoring();
       stopAgentOsForwarder();
+      stopFcmPingTrigger();
     } catch (err) {
       console.error('[Server] Error stopping geofence monitor:', err);
     }
