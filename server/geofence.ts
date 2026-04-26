@@ -135,64 +135,6 @@ async function applyArriveLoadTransition(
   }
 }
 
-async function notifyAgentOSDelivery(loadId: string): Promise<void> {
-  const agentosUrl = process.env.AGENTOS_API_BASE_URL || "https://agentos.suverse.io";
-  const internalKey = process.env.INTERNAL_API_KEY || process.env.PINGPOINT_INTERNAL_KEY;
-  if (!internalKey) {
-    console.warn("[Geofence] INTERNAL_API_KEY not set — skipping AgentOS delivery webhook");
-    return;
-  }
-
-  try {
-    // Получаем данные груза и GPS трек
-    const [load] = await db.select().from(loads).where(eq(loads.id, loadId));
-    if (!load) {
-      console.warn(`[Geofence] notifyAgentOSDelivery: load ${loadId} not found`);
-      return;
-    }
-
-    const allPings = await db
-      .select({ lat: trackingPings.lat, lng: trackingPings.lng, ts: trackingPings.createdAt })
-      .from(trackingPings)
-      .where(eq(trackingPings.loadId, loadId))
-      .orderBy(trackingPings.createdAt);
-
-    const gpsTrack = allPings.map(p => ({
-      lat: parseFloat(p.lat),
-      lng: parseFloat(p.lng),
-      ts: p.ts instanceof Date ? p.ts.toISOString() : String(p.ts),
-    }));
-
-    const payload = {
-      pingpointLoadId: load.id,
-      pingpointLoadNumber: load.loadNumber,
-      customerRef: load.customerRef,
-      driverToken: load.driverToken,
-      deliveredAt: new Date().toISOString(),
-      gpsTrack,
-      pingCount: gpsTrack.length,
-    };
-
-    const res = await fetch(`${agentosUrl}/api/internal/pingpoint-delivery`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-internal-key": internalKey,
-      },
-      body: JSON.stringify(payload),
-      signal: AbortSignal.timeout(15000),
-    });
-
-    if (res.ok) {
-      console.log(`[Geofence] ✅ AgentOS delivery webhook sent for load ${load.loadNumber} (${gpsTrack.length} pings)`);
-    } else {
-      console.warn(`[Geofence] AgentOS delivery webhook non-2xx: ${res.status}`);
-    }
-  } catch (err: any) {
-    console.warn(`[Geofence] AgentOS delivery webhook failed:`, err?.message || err);
-  }
-}
-
 async function markStopDeparted(
   stopId: string,
   stopType: string,
@@ -258,14 +200,8 @@ async function markStopDeparted(
     console.error("[Geofence] Error awarding points for depart:", err)
   );
 
-  // При выезде из DELIVERY — уведомляем AgentOS для CO2/Solana верификации
-  if (stopType === "DELIVERY") {
-    setImmediate(() => {
-      notifyAgentOSDelivery(loadId).catch((err: any) =>
-        console.error("[Geofence] notifyAgentOSDelivery error:", err?.message || err)
-      );
-    });
-  }
+  // AgentOS delivery webhook moved to finalizeDelivery() — fires only when
+  // the load actually flips to DELIVERED (post-BOL or post-30h cron timeout).
 }
 
 export async function evaluateGeofencesForActiveLoad(
