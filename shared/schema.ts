@@ -216,7 +216,7 @@ export const loads = pgTable("loads", {
   equipmentType: text("equipment_type").notNull(),
   customerRef: text("customer_ref"),
   rateAmount: decimal("rate_amount", { precision: 10, scale: 2 }).notNull(),
-  status: text("status").notNull().default("PLANNED"), // PLANNED, IN_TRANSIT, AT_PICKUP, DELIVERED, etc.
+  status: text("status").notNull().default("PLANNED"), // PLANNED, AT_PICKUP, IN_TRANSIT, AT_DELIVERY, DELIVERED_PENDING_BOL, DELIVERED, CANCELLED
   trackingToken: text("tracking_token").notNull().unique(),
   driverToken: text("driver_token").notNull().unique(),
   pickupEta: timestamp("pickup_eta", { withTimezone: true }),
@@ -227,6 +227,12 @@ export const loads = pgTable("loads", {
   archivedAt: timestamp("archived_at", { withTimezone: true }),
   deliveredAt: timestamp("delivered_at", { withTimezone: true }),
   trackingEndedAt: timestamp("tracking_ended_at", { withTimezone: true }),
+  // Set by geofence on ARRIVE last DELIVERY — starts the 30h BOL-wait window.
+  deliveredPendingAt: timestamp("delivered_pending_at", { withTimezone: true }),
+  // Set by BOL handler when BOL PDF is received.
+  bolReceivedAt: timestamp("bol_received_at", { withTimezone: true }),
+  // True when the 30h cron auto-closed the load without a BOL.
+  bolMissing: boolean("bol_missing").notNull().default(false),
   distanceMiles: decimal("distance_miles", { precision: 10, scale: 2 }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`now()`),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().default(sql`now()`),
