@@ -1,12 +1,23 @@
 import { db } from "../db";
-import { drivers, loads, truckTokens } from "@shared/schema";
-import { and, eq, isNotNull, isNull, inArray, lt, or } from "drizzle-orm";
+import {
+  drivers,
+  loads,
+  truckTokens,
+  trackingDiagnostics,
+} from "@shared/schema";
+import { and, eq, isNotNull, isNull, inArray, lt, or, desc } from "drizzle-orm";
 import { sendDataPush, isFcmEnabled } from "../services/fcmService";
 
 const TICK_INTERVAL_MS = 60 * 1000;
-// Smart-push staleness threshold: if the APK has heart-beat'd within this
-// window we trust it to keep pinging on its own and skip the data push.
-const STALENESS_THRESHOLD_MS = 2 * 60 * 1000;
+// Smart-push staleness threshold. Transistorsoft intentionally goes
+// quiet on stationary state, so a tight 2-minute window from the
+// expo-location era would push every parked truck constantly. 10 min
+// is comfortably past the SDK's stop-detection settle.
+const STALENESS_THRESHOLD_MS = 10 * 60 * 1000;
+// Per-truck throttle: even if stale, never push the same truck more
+// than once per this window. Prevents Firebase deprioritization.
+const PER_TRUCK_THROTTLE_MS = 5 * 60 * 1000;
+const lastPushAt = new Map<string, number>();
 const ACTIVE_LOAD_STATUSES = [
   "PLANNED",
   "IN_TRANSIT",
@@ -111,10 +122,48 @@ async function tick(): Promise<void> {
 
     const invalidTokenIds: string[] = [];
     const ts = new Date().toISOString();
+    const now = Date.now();
 
     await Promise.all(
       rows.map(async (row) => {
         if (!row.fcmToken) return;
+
+        // Per-truck throttle.
+        const last = lastPushAt.get(row.truckTokenId);
+        if (last && now - last < PER_TRUCK_THROTTLE_MS) {
+          return;
+        }
+
+        // Skip if the SDK has reported stationary state more recently
+        // than any motion event — the truck is parked, the silence is
+        // intentional and we shouldn't waste an FCM credit on it.
+        // (resolveTruckToken stores the truck token string under
+        // truck_token in tracking_diagnostics.)
+        const [tokenRow] = await db
+          .select({ token: truckTokens.token })
+          .from(truckTokens)
+          .where(eq(truckTokens.id, row.truckTokenId))
+          .limit(1);
+        if (tokenRow?.token) {
+          const [latestMotion] = await db
+            .select({ data: trackingDiagnostics.eventData })
+            .from(trackingDiagnostics)
+            .where(
+              and(
+                eq(trackingDiagnostics.truckToken, tokenRow.token),
+                eq(trackingDiagnostics.eventType, "motionchange"),
+              ),
+            )
+            .orderBy(desc(trackingDiagnostics.recordedAt))
+            .limit(1);
+          if (
+            latestMotion &&
+            (latestMotion.data as { is_moving?: boolean } | null)?.is_moving === false
+          ) {
+            return;
+          }
+        }
+
         const ageSec = row.lastSeen
           ? Math.round((Date.now() - row.lastSeen.getTime()) / 1000)
           : -1;
@@ -124,6 +173,7 @@ async function tick(): Promise<void> {
         });
         if (result.ok) {
           lastSuccessCount++;
+          lastPushAt.set(row.truckTokenId, now);
           console.log(
             `[SmartPush] sent truck=${row.truckNumber} last_seen_age=${ageSec}s`,
           );
