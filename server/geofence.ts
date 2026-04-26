@@ -166,6 +166,28 @@ async function markStopDeparted(
   await db.update(stops).set({ departedAt: now, updatedAt: now }).where(eq(stops.id, stopId));
   console.log(`[Geofence] Auto-DEPART triggered for stop ${stopId}`);
 
+  // Mirror manual /stops/:id/depart handler: advance loads.status so the
+  // truck dashboard clears the load when the last DELIVERY auto-departs,
+  // and flips to IN_TRANSIT after the first PICKUP departs.
+  try {
+    const allStops = await db
+      .select({ id: stops.id, sequence: stops.sequence })
+      .from(stops)
+      .where(eq(stops.loadId, loadId));
+    const sorted = [...allStops].sort((a, b) => a.sequence - b.sequence);
+    const isFirst = sorted[0]?.id === stopId;
+    const isLast = sorted[sorted.length - 1]?.id === stopId;
+    if (isLast) {
+      await db.update(loads).set({ status: "DELIVERED", updatedAt: now }).where(eq(loads.id, loadId));
+      console.log(`[Geofence] load=${loadId.substring(0, 8)} → DELIVERED`);
+    } else if (isFirst) {
+      await db.update(loads).set({ status: "IN_TRANSIT", updatedAt: now }).where(eq(loads.id, loadId));
+      console.log(`[Geofence] load=${loadId.substring(0, 8)} → IN_TRANSIT`);
+    }
+  } catch (err) {
+    console.warn("[Geofence] status-advance failed:", err);
+  }
+
   const eventType: RewardEventType =
     stopType === "PICKUP" ? "DEPART_PICKUP" : "DEPART_DELIVERY";
   awardPointsForEvent({ loadId, driverId, eventType }).catch((err) =>

@@ -16,6 +16,7 @@ import {
   validateGpsAccuracy,
   validateGpsTimestamp,
 } from "./utils/securityUtils";
+import { evaluateGeofencesForActiveLoad } from "./geofence";
 
 const ACTIVE_LOAD_STATUSES = [
   "PLANNED",
@@ -387,6 +388,22 @@ export function registerTruckRoutes(app: Express): void {
         console.log(
           `[TruckPing] truck=${tok.truckNumber} load=${load.id} driver=${tok.driverId} src=${sourceLabel}`,
         );
+
+        // Mirror /api/driver/:token/ping — non-blocking auto-arrive/depart.
+        const parsedAccuracy =
+          typeof accuracy === "number" && Number.isFinite(accuracy)
+            ? accuracy
+            : null;
+        evaluateGeofencesForActiveLoad(
+          tok.driverId,
+          load.id,
+          lat,
+          lng,
+          parsedAccuracy,
+        ).catch((err) =>
+          console.error("[TruckPing] geofence eval error:", err),
+        );
+
         return res.json({ ok: true, wrote_ping: true, load_id: load.id });
       } catch (err) {
         console.error("[TruckPing] error:", err);
