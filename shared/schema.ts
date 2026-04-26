@@ -115,6 +115,38 @@ export const driversRelations = relations(drivers, ({ one, many }) => ({
   }),
   loads: many(loads),
   trackingPings: many(trackingPings),
+  truckToken: one(truckTokens, {
+    fields: [drivers.id],
+    references: [truckTokens.driverId],
+  }),
+}));
+
+// Truck Token model — per-truck permanent token used by the driver mobile app.
+// Replaces per-load drv_xxx tokens for the new workflow. Old per-load tokens
+// remain on loads.driver_token for historical/DELIVERED loads compatibility.
+export const truckTokens = pgTable("truck_tokens", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  truckId: uuid("truck_id").notNull(), // AgentOS trucks.id (no FK — different DB)
+  truckNumber: text("truck_number").notNull(),
+  companyId: uuid("company_id").notNull(), // AgentOS companies.id
+  driverId: uuid("driver_id").references(() => drivers.id, { onDelete: "set null" }),
+  token: text("token").notNull().unique(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`now()`),
+  lastSeen: timestamp("last_seen", { withTimezone: true }),
+  fcmToken: text("fcm_token"),
+  fcmTokenUpdatedAt: timestamp("fcm_token_updated_at", { withTimezone: true }),
+}, (table) => [
+  uniqueIndex("truck_tokens_truck_id_unique").on(table.truckId),
+  index("truck_tokens_truck_number_idx").on(table.truckNumber),
+  index("truck_tokens_token_idx").on(table.token),
+  index("truck_tokens_company_idx").on(table.companyId),
+]);
+
+export const truckTokensRelations = relations(truckTokens, ({ one }) => ({
+  driver: one(drivers, {
+    fields: [truckTokens.driverId],
+    references: [drivers.id],
+  }),
 }));
 
 // Shipper model (mini-CRM)
@@ -738,6 +770,8 @@ export type Stop = typeof stops.$inferSelect;
 export type InsertStop = z.infer<typeof insertStopSchema>;
 export type TrackingPing = typeof trackingPings.$inferSelect;
 export type InsertTrackingPing = z.infer<typeof insertTrackingPingSchema>;
+export type TruckToken = typeof truckTokens.$inferSelect;
+export type InsertTruckToken = typeof truckTokens.$inferInsert;
 export type RateConfirmationFile = typeof rateConfirmationFiles.$inferSelect;
 export type ActivityLog = typeof activityLogs.$inferSelect;
 export type BrokerEntitlement = typeof brokerEntitlements.$inferSelect;

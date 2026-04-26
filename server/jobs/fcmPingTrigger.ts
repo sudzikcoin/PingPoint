@@ -1,10 +1,18 @@
 import { db } from "../db";
-import { drivers, loads } from "@shared/schema";
-import { and, eq, isNotNull, inArray } from "drizzle-orm";
+import { drivers, loads, truckTokens } from "@shared/schema";
+import { and, eq, isNotNull, isNull, inArray, lt, or } from "drizzle-orm";
 import { sendDataPush, isFcmEnabled } from "../services/fcmService";
 
 const TICK_INTERVAL_MS = 60 * 1000;
-const ACTIVE_LOAD_STATUSES = ["PLANNED", "IN_TRANSIT", "AT_PICKUP", "AT_DELIVERY"];
+// Smart-push staleness threshold: if the APK has heart-beat'd within this
+// window we trust it to keep pinging on its own and skip the data push.
+const STALENESS_THRESHOLD_MS = 2 * 60 * 1000;
+const ACTIVE_LOAD_STATUSES = [
+  "PLANNED",
+  "IN_TRANSIT",
+  "AT_PICKUP",
+  "AT_DELIVERY",
+];
 
 let intervalId: NodeJS.Timeout | null = null;
 let isRunning = false;
@@ -12,6 +20,7 @@ let lastRunTime: Date | null = null;
 let lastSuccessCount = 0;
 let lastFailureCount = 0;
 let lastInvalidatedCount = 0;
+let lastSkippedFreshCount = 0;
 
 export interface FcmPingTriggerStatus {
   enabled: boolean;
@@ -20,6 +29,7 @@ export interface FcmPingTriggerStatus {
   lastSuccessCount: number;
   lastFailureCount: number;
   lastInvalidatedCount: number;
+  lastSkippedFreshCount: number;
 }
 
 export function getFcmPingTriggerStatus(): FcmPingTriggerStatus {
@@ -30,6 +40,7 @@ export function getFcmPingTriggerStatus(): FcmPingTriggerStatus {
     lastSuccessCount,
     lastFailureCount,
     lastInvalidatedCount,
+    lastSkippedFreshCount,
   };
 }
 
@@ -45,67 +56,120 @@ async function tick(): Promise<void> {
   lastSuccessCount = 0;
   lastFailureCount = 0;
   lastInvalidatedCount = 0;
+  lastSkippedFreshCount = 0;
 
   try {
-    // Drivers with an FCM token AND at least one active load.
+    const cutoff = new Date(Date.now() - STALENESS_THRESHOLD_MS);
+
+    // Truck tokens with FCM + an active load whose last_seen heartbeat is
+    // either missing or older than the staleness threshold. The APK pings
+    // every 2 minutes on its own — we only nudge it when we haven't heard
+    // from it in that window.
     const rows = await db
       .selectDistinct({
-        driverId: drivers.id,
-        fcmToken: drivers.fcmToken,
+        truckTokenId: truckTokens.id,
+        truckNumber: truckTokens.truckNumber,
+        fcmToken: truckTokens.fcmToken,
+        lastSeen: truckTokens.lastSeen,
       })
-      .from(drivers)
-      .innerJoin(loads, eq(loads.driverId, drivers.id))
+      .from(truckTokens)
+      .innerJoin(loads, eq(loads.driverId, truckTokens.driverId))
       .where(
         and(
-          isNotNull(drivers.fcmToken),
+          isNotNull(truckTokens.fcmToken),
+          isNotNull(truckTokens.driverId),
           inArray(loads.status, ACTIVE_LOAD_STATUSES),
+          or(
+            isNull(truckTokens.lastSeen),
+            lt(truckTokens.lastSeen, cutoff),
+          ),
         ),
       );
 
-    if (rows.length === 0) return;
+    // Count fresh trucks for visibility (not pushed because heart-beat is recent).
+    const freshRows = await db
+      .selectDistinct({ truckTokenId: truckTokens.id })
+      .from(truckTokens)
+      .innerJoin(loads, eq(loads.driverId, truckTokens.driverId))
+      .where(
+        and(
+          isNotNull(truckTokens.fcmToken),
+          isNotNull(truckTokens.driverId),
+          inArray(loads.status, ACTIVE_LOAD_STATUSES),
+        ),
+      );
+    lastSkippedFreshCount = Math.max(0, freshRows.length - rows.length);
 
-    console.log(`[FCMPing] sending data push to ${rows.length} driver(s)`);
+    if (rows.length === 0) {
+      if (freshRows.length > 0) {
+        console.log(
+          `[SmartPush] all ${freshRows.length} active truck(s) fresh — no push needed`,
+        );
+      }
+      return;
+    }
 
-    const invalidDriverIds: string[] = [];
+    const invalidTokenIds: string[] = [];
     const ts = new Date().toISOString();
 
     await Promise.all(
       rows.map(async (row) => {
         if (!row.fcmToken) return;
+        const ageSec = row.lastSeen
+          ? Math.round((Date.now() - row.lastSeen.getTime()) / 1000)
+          : -1;
         const result = await sendDataPush(row.fcmToken, {
           type: "ping_request",
           timestamp: ts,
         });
         if (result.ok) {
           lastSuccessCount++;
+          console.log(
+            `[SmartPush] sent truck=${row.truckNumber} last_seen_age=${ageSec}s`,
+          );
         } else {
           lastFailureCount++;
           console.warn(
-            `[FCMPing] send failed driver=${row.driverId} code=${result.errorCode} msg=${result.errorMessage}`,
+            `[SmartPush] failed truck=${row.truckNumber} code=${result.errorCode} msg=${result.errorMessage}`,
           );
           if (result.invalidToken) {
-            invalidDriverIds.push(row.driverId);
+            invalidTokenIds.push(row.truckTokenId);
           }
         }
       }),
     );
 
-    if (invalidDriverIds.length > 0) {
-      lastInvalidatedCount = invalidDriverIds.length;
+    if (invalidTokenIds.length > 0) {
+      lastInvalidatedCount = invalidTokenIds.length;
+      const now = new Date();
       await db
-        .update(drivers)
-        .set({ fcmToken: null, fcmTokenUpdatedAt: new Date() })
-        .where(inArray(drivers.id, invalidDriverIds));
+        .update(truckTokens)
+        .set({ fcmToken: null, fcmTokenUpdatedAt: now })
+        .where(inArray(truckTokens.id, invalidTokenIds));
+      // Mirror the invalidation to drivers so legacy lookups stay consistent.
+      const trucksAffected = await db
+        .select({ driverId: truckTokens.driverId })
+        .from(truckTokens)
+        .where(inArray(truckTokens.id, invalidTokenIds));
+      const driverIds = trucksAffected
+        .map((r) => r.driverId)
+        .filter((d): d is string => !!d);
+      if (driverIds.length > 0) {
+        await db
+          .update(drivers)
+          .set({ fcmToken: null, fcmTokenUpdatedAt: now })
+          .where(inArray(drivers.id, driverIds));
+      }
       console.log(
-        `[FCMPing] cleared ${invalidDriverIds.length} invalid FCM token(s)`,
+        `[SmartPush] cleared ${invalidTokenIds.length} invalid FCM token(s)`,
       );
     }
 
     console.log(
-      `[FCMPing] ok=${lastSuccessCount} fail=${lastFailureCount} invalid=${lastInvalidatedCount}`,
+      `[SmartPush] tick: pushed=${lastSuccessCount} failed=${lastFailureCount} invalid=${lastInvalidatedCount} fresh=${lastSkippedFreshCount}`,
     );
   } catch (err) {
-    console.error("[FCMPing] tick error:", err);
+    console.error("[SmartPush] tick error:", err);
   } finally {
     isRunning = false;
   }
@@ -114,10 +178,9 @@ async function tick(): Promise<void> {
 export function startFcmPingTrigger(): void {
   if (intervalId !== null) return;
   if (!isFcmEnabled()) {
-    console.log("[FCMPing] FCM disabled, not starting cron");
+    console.log("[SmartPush] FCM disabled, not starting cron");
     return;
   }
-  // Stagger first run by 5s so it doesn't collide with other startup work.
   setTimeout(() => {
     void tick();
   }, 5_000);
@@ -125,7 +188,7 @@ export function startFcmPingTrigger(): void {
     void tick();
   }, TICK_INTERVAL_MS);
   console.log(
-    `[FCMPing] cron started (every ${TICK_INTERVAL_MS / 1000}s)`,
+    `[SmartPush] cron started (every ${TICK_INTERVAL_MS / 1000}s, staleness=${STALENESS_THRESHOLD_MS / 1000}s)`,
   );
 }
 
@@ -133,6 +196,6 @@ export function stopFcmPingTrigger(): void {
   if (intervalId !== null) {
     clearInterval(intervalId);
     intervalId = null;
-    console.log("[FCMPing] cron stopped");
+    console.log("[SmartPush] cron stopped");
   }
 }

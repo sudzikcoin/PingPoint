@@ -16,6 +16,7 @@ import express from "express";
 import { sendBrokerVerificationEmail, sendDriverAppLink } from "./email";
 import { geocodeAddressSafe } from "./geocode";
 import { strictRateLimit, authLimiter, signupLimiter, pdfParsingLimiter, loadCreationLimiter } from "./middleware/rateLimit";
+import { registerTruckRoutes } from "./truck-routes";
 import { shouldAcceptPing, MIN_PING_INTERVAL_MS } from "./utils/rateLimit";
 import { checkAndConsumeLoadAllowance, rollbackLoadAllowance, getBillingSummary, FREE_INCLUDED_LOADS } from "./billing/entitlements";
 import { createCheckoutSession, createSubscriptionCheckoutSession, createBillingPortalSession, getStripeCustomerByEmail, verifyWebhookSignature, processStripeEvent, grantReferralRewardsIfEligible } from "./billing/stripe";
@@ -471,6 +472,9 @@ export async function registerRoutes(
   httpServer: Server,
   app: Express
 ): Promise<Server> {
+
+  // Truck-token API (per-truck permanent token, replaces per-load drv_xxx flow)
+  registerTruckRoutes(app);
 
   // ============================================
   // DEEP LINK REDIRECT (public, no auth)
