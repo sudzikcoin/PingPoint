@@ -1,6 +1,6 @@
 import { sql } from "drizzle-orm";
 import { relations } from "drizzle-orm";
-import { pgTable, text, varchar, boolean, timestamp, decimal, integer, uuid, uniqueIndex, index } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, boolean, timestamp, decimal, integer, uuid, uniqueIndex, index, jsonb } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
@@ -321,11 +321,28 @@ export const trackingPings = pgTable("tracking_pings", {
   eldConnected: boolean("eld_connected"),
   eldMac: text("eld_mac"),
   wheelSpeedKph: decimal("wheel_speed_kph", { precision: 5, scale: 1 }),
+  // Device-side capture time. Nullable for backwards compat with the
+  // expo-location pings that only carried server-side created_at.
+  // Used as the dedup key when transistorsoft replays an offline buffer.
+  recordedAt: timestamp("recorded_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`now()`),
 }, (table) => [
   index("tp_load_idx").on(table.loadId),
   index("tp_load_created_idx").on(table.loadId, table.createdAt),
   index("tp_driver_idx").on(table.driverId),
+]);
+
+// Non-location events from transistorsoft (motionchange, providerchange,
+// http_failure, etc) — used by the public tracking page to render a
+// "Stationary" / "Provider disabled" state instead of guessing from gaps.
+export const trackingDiagnostics = pgTable("tracking_diagnostics", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  truckToken: text("truck_token").notNull(),
+  eventType: text("event_type").notNull(),
+  eventData: jsonb("event_data"),
+  recordedAt: timestamp("recorded_at", { withTimezone: true }).notNull().default(sql`now()`),
+}, (table) => [
+  index("td_token_recorded_idx").on(table.truckToken, table.recordedAt),
 ]);
 
 export const trackingPingsRelations = relations(trackingPings, ({ one }) => ({

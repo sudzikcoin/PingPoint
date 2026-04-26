@@ -6,6 +6,7 @@ import {
   drivers as driversTable,
   loads as loadsTable,
   trackingPings,
+  trackingDiagnostics,
   stops as stopsTable,
 } from "@shared/schema";
 import { eq, and, desc, inArray } from "drizzle-orm";
@@ -292,8 +293,21 @@ export function registerTruckRoutes(app: Express): void {
             .status(404)
             .json({ ok: false, error: "Invalid truck token" });
 
-        const { lat, lng, accuracy, speed, heading, timestamp } =
-          req.body ?? {};
+        // Body shape:
+        //   legacy expo-location: { lat, lng, accuracy, speed, heading, timestamp }
+        //   transistorsoft (httpRootProperty:"."): same flat fields plus
+        //                          { recorded_at, source, truck_id }
+        const body = req.body ?? {};
+        const {
+          lat,
+          lng,
+          accuracy,
+          speed,
+          heading,
+          timestamp,
+          recorded_at,
+          source: bodySource,
+        } = body;
 
         if (
           typeof lat !== "number" ||
@@ -310,8 +324,9 @@ export function registerTruckRoutes(app: Express): void {
         const accErr = validateGpsAccuracy(accuracy);
         if (accErr)
           return res.status(422).json({ ok: false, error: accErr });
-        if (timestamp != null) {
-          const tsErr = validateGpsTimestamp(timestamp);
+        const tsCandidate = recorded_at ?? timestamp;
+        if (tsCandidate != null) {
+          const tsErr = validateGpsTimestamp(tsCandidate);
           if (tsErr)
             return res.status(422).json({ ok: false, error: tsErr });
         }
@@ -346,23 +361,73 @@ export function registerTruckRoutes(app: Express): void {
           });
         }
 
-        await db.insert(trackingPings).values({
-          loadId: load.id,
-          driverId: tok.driverId,
-          lat: String(lat),
-          lng: String(lng),
-          accuracy: accuracy != null ? String(accuracy) : null,
-          speed: speed != null ? String(speed) : null,
-          heading: heading != null ? String(heading) : null,
-          source: "DRIVER_APP",
-        });
+        const sourceLabel =
+          bodySource === "transistorsoft" ? "TRANSISTORSOFT" : "DRIVER_APP";
+        const recordedAtDate = recorded_at ? new Date(recorded_at) : null;
+
+        // Dedup: transistorsoft replays its offline buffer on reconnect, so
+        // (driver_id, recorded_at) collisions are expected and benign.
+        await db
+          .insert(trackingPings)
+          .values({
+            loadId: load.id,
+            driverId: tok.driverId,
+            lat: String(lat),
+            lng: String(lng),
+            accuracy: accuracy != null ? String(accuracy) : null,
+            speed: speed != null ? String(speed) : null,
+            heading: heading != null ? String(heading) : null,
+            source: sourceLabel,
+            recordedAt: recordedAtDate,
+          })
+          .onConflictDoNothing({
+            target: [trackingPings.driverId, trackingPings.recordedAt],
+          });
 
         console.log(
-          `[TruckPing] truck=${tok.truckNumber} load=${load.id} driver=${tok.driverId}`,
+          `[TruckPing] truck=${tok.truckNumber} load=${load.id} driver=${tok.driverId} src=${sourceLabel}`,
         );
         return res.json({ ok: true, wrote_ping: true, load_id: load.id });
       } catch (err) {
         console.error("[TruckPing] error:", err);
+        return res
+          .status(500)
+          .json({ ok: false, error: "Internal server error" });
+      }
+    },
+  );
+
+  // Non-location SDK events. Cheap append-only log used by the public
+  // tracking page to render "Stationary" / "Provider disabled" banners
+  // instead of inferring those states from ping gaps.
+  app.post(
+    "/api/truck/:token/diagnostics",
+    strictRateLimit(120, 60000, [422]),
+    async (req: Request, res: Response) => {
+      try {
+        const tok = await resolveTruckToken(req.params.token);
+        if (!tok)
+          return res
+            .status(404)
+            .json({ ok: false, error: "Invalid truck token" });
+
+        const body = req.body ?? {};
+        const eventType = typeof body.event_type === "string" ? body.event_type : null;
+        if (!eventType) {
+          return res
+            .status(400)
+            .json({ ok: false, error: "event_type required" });
+        }
+
+        await db.insert(trackingDiagnostics).values({
+          truckToken: req.params.token,
+          eventType,
+          eventData: body.event_data ?? null,
+        });
+
+        return res.json({ ok: true });
+      } catch (err) {
+        console.error("[TruckDiag] error:", err);
         return res
           .status(500)
           .json({ ok: false, error: "Internal server error" });
