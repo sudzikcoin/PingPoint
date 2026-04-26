@@ -1,10 +1,12 @@
 import type { Express, Request, Response } from "express";
 import { db } from "./db";
+import { storage } from "./storage";
 import {
   truckTokens,
   drivers as driversTable,
   loads as loadsTable,
   trackingPings,
+  stops as stopsTable,
 } from "@shared/schema";
 import { eq, and, desc, inArray } from "drizzle-orm";
 import { randomBytes } from "crypto";
@@ -190,7 +192,29 @@ export function registerTruckRoutes(app: Express): void {
           )
           .orderBy(desc(loadsTable.createdAt))
           .limit(1);
-        return res.json({ load: load ?? null });
+        if (!load) return res.json({ load: null });
+        // Return the same shape as the legacy /api/driver/:token endpoint so
+        // the mobile app can reuse the existing transformAPIResponse mapper.
+        const loadStops = await storage.getStopsByLoad(load.id);
+        return res.json({
+          load: {
+            id: load.id,
+            loadNumber: load.loadNumber,
+            customerRef: load.customerRef,
+            status: load.status,
+            // Tokens for legacy paths (deeplinks, drv_xxx-based per-load auth)
+            driverToken: load.driverToken,
+            trackingToken: load.trackingToken,
+            stops: loadStops.map((stop) => ({
+              ...stop,
+              status: stop.departedAt
+                ? "DEPARTED"
+                : stop.arrivedAt
+                  ? "ARRIVED"
+                  : "PLANNED",
+            })),
+          },
+        });
       } catch (err) {
         console.error("[TruckActiveLoad] error:", err);
         return res.status(500).json({ error: "Internal server error" });
