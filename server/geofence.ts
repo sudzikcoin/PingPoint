@@ -5,6 +5,7 @@ import { eq, and, isNull, isNotNull, desc } from "drizzle-orm";
 import { ensureStopCoords } from "./geocode";
 import { awardPointsForEvent } from "./services/rewardService";
 import { syncLoadStatusToAgentOS } from "./services/agentosStatusSync";
+import { computeAndCacheDeliveryMetrics } from "./services/deliveryMetricsService";
 
 const CONSECUTIVE_PINGS_REQUIRED = 2;
 const MIN_TIME_GAP_MS = 60 * 1000;
@@ -127,9 +128,12 @@ async function applyArriveLoadTransition(
       .where(eq(loads.id, loadId));
     console.log(`[Geofence] load=${loadId.substring(0, 8)} → AT_DELIVERY`);
     syncLoadStatusToAgentOS(customerRef, "AT_DELIVERY", { deliveredPendingAt: now });
-    // Block F: фоновые расчёты (CO2, pings hash и пр.) подключатся через setImmediate
+    // Block F: precompute delivery_preview (real miles, CO2, fuel, time)
+    // off the hot path so it's ready by the time finalizeDelivery runs.
     setImmediate(() => {
-      // intentional: placeholder for Block F background work
+      computeAndCacheDeliveryMetrics(loadId).catch((err: any) =>
+        console.error(`[Geofence] computeAndCacheDeliveryMetrics failed load=${loadId.substring(0, 8)}:`, err?.message || err),
+      );
     });
   } else if (stopType === "PICKUP") {
     const promoted = await db

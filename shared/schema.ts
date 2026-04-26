@@ -234,6 +234,10 @@ export const loads = pgTable("loads", {
   // True when the 30h cron auto-closed the load without a BOL.
   bolMissing: boolean("bol_missing").notNull().default(false),
   distanceMiles: decimal("distance_miles", { precision: 10, scale: 2 }),
+  // Free-form jsonb container for cross-cutting state: delivery_preview
+  // (Block F precomputed metrics) and future flags. Default '{}' is safe
+  // for existing rows.
+  metadata: jsonb("metadata").notNull().default({}),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`now()`),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().default(sql`now()`),
 }, (table) => [

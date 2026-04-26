@@ -69,6 +69,13 @@ async function sendAgentOsDeliveryWebhook(
       ts: p.ts instanceof Date ? p.ts.toISOString() : String(p.ts),
     }));
 
+    const meta = (load.metadata && typeof load.metadata === "object" && !Array.isArray(load.metadata))
+      ? (load.metadata as Record<string, unknown>)
+      : {};
+    const deliveryPreview = (meta.delivery_preview && typeof meta.delivery_preview === "object")
+      ? meta.delivery_preview
+      : null;
+
     const payload = {
       pingpointLoadId: load.id,
       pingpointLoadNumber: load.loadNumber,
@@ -82,6 +89,9 @@ async function sendAgentOsDeliveryWebhook(
       bolMissing: load.bolMissing === true,
       bolStatus: load.bolMissing ? "missing" : "received",
       finalizeReason: reason,
+      // Precomputed by Block F deliveryMetricsService at AT_DELIVERY time.
+      // AgentOS may use this for fast reporting without recomputing from gpsTrack.
+      deliveryPreview,
       gpsTrack,
       pingCount: gpsTrack.length,
     };
