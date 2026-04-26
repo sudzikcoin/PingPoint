@@ -1,14 +1,15 @@
 import { db } from "../db";
 import { loads, trackingPings } from "@shared/schema";
 import { eq } from "drizzle-orm";
+import { syncLoadStatusToAgentOS } from "./agentosStatusSync";
 
 export type FinalizeReason = "bol_received" | "cron_timeout";
 
 /**
  * Final-stage handler for a delivered load. Caller must have already flipped
  * loads.status → 'DELIVERED' (and set delivered_at, bol_missing, etc.) before
- * calling this. Fires downstream side-effects: AgentOS status webhook (Block E
- * placeholder), AgentOS delivery webhook with GPS track + CO2 trigger.
+ * calling this. Fires AgentOS status sync + AgentOS delivery webhook (CO2,
+ * Solana, Telegram).
  */
 export async function finalizeDelivery(
   loadId: string,
@@ -28,10 +29,11 @@ export async function finalizeDelivery(
     return;
   }
 
-  // Block E placeholder: status-update webhook to AgentOS
-  console.log(
-    `[Finalize] (placeholder) status-update webhook → AgentOS load=${loadId.substring(0, 8)} reason=${reason} bol_missing=${load.bolMissing}`,
-  );
+  syncLoadStatusToAgentOS(load.customerRef, "DELIVERED", {
+    deliveredAt: load.deliveredAt,
+    bolStatus: load.bolMissing ? "missing" : "received",
+    finalizeReason: reason,
+  });
 
   await sendAgentOsDeliveryWebhook(loadId, reason);
 
