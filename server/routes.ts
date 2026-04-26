@@ -23,6 +23,7 @@ import { createCheckoutSession, createSubscriptionCheckoutSession, createBilling
 import { incrementLoadsCreated, getUsageSummary } from "./billing/usage";
 import { createProPaymentIntent, checkAndConfirmIntent, getMerchantInfo } from "./billing/solana";
 import { evaluateGeofencesForActiveLoad, getGeofenceDebugInfo } from "./geofence";
+import { finalizeDelivery } from "./services/finalizeDelivery";
 import { getOrCreateWebhookConfigForUser, updateWebhookConfigForUser, emitLoadEvent } from "./webhooks/webhookService";
 import { notifyLoadStatusChange } from "./services/notificationService";
 import * as analyticsService from "./services/analyticsService";
@@ -4659,6 +4660,81 @@ export async function registerRoutes(
       return res.json({ ok: true, loadNumber, status: r[0].status });
     } catch (err) {
       console.error("Error in PATCH /api/internal/loads/:loadNumber/status:", err);
+      return res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  // POST /api/internal/loads/:loadNumber/bol-confirm — AgentOS notifies us
+  // that a BOL has been received and processed. We flip the load to DELIVERED
+  // (if it was waiting at AT_DELIVERY or DELIVERED_PENDING_BOL) and run
+  // finalizeDelivery so the AgentOS pingpoint-delivery webhook (CO2 / Solana /
+  // Telegram) and the AgentOS status-sync webhook fire from the PingPoint side.
+  app.post("/api/internal/loads/:loadNumber/bol-confirm", async (req: Request, res: Response) => {
+    try {
+      if (req.headers["x-internal-key"] !== process.env.INTERNAL_API_KEY) {
+        return res.status(401).json({ error: "Unauthorized" });
+      }
+      const { loadNumber } = req.params;
+      const { bol_received_at } = (req.body || {}) as { bol_received_at?: string };
+      const bolReceivedAt = bol_received_at ? new Date(bol_received_at) : new Date();
+      if (Number.isNaN(bolReceivedAt.getTime())) {
+        return res.status(400).json({ error: "invalid bol_received_at" });
+      }
+
+      const [load] = await db
+        .select({ id: loadsTable.id, status: loadsTable.status })
+        .from(loadsTable)
+        .where(eq(loadsTable.loadNumber, loadNumber))
+        .limit(1);
+      if (!load) {
+        return res.status(404).json({ error: "Load not found" });
+      }
+
+      const oldStatus = load.status;
+
+      // Idempotent: load already DELIVERED — just record bol_received_at and return.
+      if (oldStatus === "DELIVERED") {
+        await db
+          .update(loadsTable)
+          .set({ bolReceivedAt, bolMissing: false, updatedAt: new Date() })
+          .where(eq(loadsTable.id, load.id));
+        console.log(`[BolConfirm] load=${loadNumber} status=DELIVERED old_status=${oldStatus} (idempotent)`);
+        return res.json({ ok: true, idempotent: true });
+      }
+
+      // Happy path: load is waiting for BOL at the delivery stop.
+      if (oldStatus === "AT_DELIVERY" || oldStatus === "DELIVERED_PENDING_BOL") {
+        const now = new Date();
+        await db
+          .update(loadsTable)
+          .set({
+            status: "DELIVERED",
+            deliveredAt: now,
+            bolReceivedAt,
+            bolMissing: false,
+            updatedAt: now,
+          })
+          .where(eq(loadsTable.id, load.id));
+        console.log(`[BolConfirm] load=${loadNumber} status=DELIVERED old_status=${oldStatus}`);
+        // Non-blocking finalize — AgentOS already has DELIVERED + bol_received_at,
+        // so this primarily fires the pingpoint-delivery webhook for CO2/Solana.
+        finalizeDelivery(load.id, "bol_received").catch((err: any) =>
+          console.error(`[BolConfirm] finalizeDelivery failed load=${loadNumber}:`, err?.message || err),
+        );
+        return res.json({ ok: true, oldStatus, newStatus: "DELIVERED" });
+      }
+
+      // Edge case: BOL arrived before the geofence detected delivery.
+      // Don't flip status — let geofence drive the lifecycle. Caller will see
+      // the warning. State will reconcile when the driver actually arrives.
+      console.warn(`[BolConfirm] load=${loadNumber} status=${oldStatus} — BOL received but load not at delivery yet (mismatch with AgentOS)`);
+      return res.status(422).json({
+        error: "load not at delivery yet",
+        status: oldStatus,
+        reason: "bol_received_before_geofence_arrive",
+      });
+    } catch (err) {
+      console.error("Error in POST /api/internal/loads/:loadNumber/bol-confirm:", err);
       return res.status(500).json({ error: "Internal server error" });
     }
   });
