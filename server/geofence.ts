@@ -85,17 +85,54 @@ async function markStopArrived(
   stopId: string,
   stopType: string,
   driverId: string,
-  loadId: string
-): Promise<void> {
+  loadId: string,
+  isLast: boolean,
+): Promise<boolean> {
   const now = new Date();
-  await db.update(stops).set({ arrivedAt: now, updatedAt: now }).where(eq(stops.id, stopId));
+  // Idempotent claim: only proceed if this call is the one that set arrived_at.
+  const claimed = await db
+    .update(stops)
+    .set({ arrivedAt: now, updatedAt: now })
+    .where(and(eq(stops.id, stopId), isNull(stops.arrivedAt)))
+    .returning({ id: stops.id });
+  if (claimed.length === 0) {
+    console.log(`[Geofence] ARRIVE skipped — stop ${stopId} already arrived`);
+    return false;
+  }
   console.log(`[Geofence] Auto-ARRIVE triggered for stop ${stopId}`);
+
+  await applyArriveLoadTransition(loadId, stopType, isLast, now);
 
   const eventType: RewardEventType =
     stopType === "PICKUP" ? "ARRIVE_PICKUP" : "ARRIVE_DELIVERY";
   awardPointsForEvent({ loadId, driverId, eventType }).catch((err) =>
     console.error("[Geofence] Error awarding points for arrive:", err)
   );
+  return true;
+}
+
+async function applyArriveLoadTransition(
+  loadId: string,
+  stopType: string,
+  isLast: boolean,
+  now: Date,
+): Promise<void> {
+  if (isLast) {
+    await db
+      .update(loads)
+      .set({ status: "AT_DELIVERY", deliveredPendingAt: now, updatedAt: now })
+      .where(eq(loads.id, loadId));
+    console.log(`[Geofence] load=${loadId.substring(0, 8)} → AT_DELIVERY`);
+    // Block F: фоновые расчёты (CO2, pings hash и пр.) подключатся через setImmediate
+    setImmediate(() => {
+      // intentional: placeholder for Block F background work
+    });
+  } else if (stopType === "PICKUP") {
+    await db
+      .update(loads)
+      .set({ status: "AT_PICKUP", updatedAt: now })
+      .where(and(eq(loads.id, loadId), eq(loads.status, "PLANNED")));
+  }
 }
 
 async function notifyAgentOSDelivery(loadId: string): Promise<void> {
@@ -163,29 +200,56 @@ async function markStopDeparted(
   loadId: string
 ): Promise<void> {
   const now = new Date();
-  await db.update(stops).set({ departedAt: now, updatedAt: now }).where(eq(stops.id, stopId));
+
+  // Determine ordering up-front (used by both ARRIVE-synthesis and IN_TRANSIT logic).
+  const allStops = await db
+    .select({ id: stops.id, sequence: stops.sequence })
+    .from(stops)
+    .where(eq(stops.loadId, loadId));
+  const sorted = [...allStops].sort((a, b) => a.sequence - b.sequence);
+  const isFirst = sorted[0]?.id === stopId;
+  const isLast = sorted[sorted.length - 1]?.id === stopId;
+
+  // Synthesize ARRIVE if depart fires without a prior arrive (GPS gap, fast pass-through).
+  // Claim atomically by gating on arrived_at IS NULL so two concurrent depart calls
+  // don't both try to fire ARRIVE downstream.
+  const synthClaimed = await db
+    .update(stops)
+    .set({
+      arrivedAt: new Date(now.getTime() - 1000),
+      departedAt: now,
+      updatedAt: now,
+    })
+    .where(and(eq(stops.id, stopId), isNull(stops.arrivedAt)))
+    .returning({ id: stops.id });
+
+  const synthesizedArrive = synthClaimed.length > 0;
+
+  if (synthesizedArrive) {
+    console.log(`[Geofence] DEPART without prior ARRIVE — synthesizing ARRIVE for stop ${stopId}`);
+    await applyArriveLoadTransition(loadId, stopType, isLast, now);
+    const arriveEvent: RewardEventType =
+      stopType === "PICKUP" ? "ARRIVE_PICKUP" : "ARRIVE_DELIVERY";
+    awardPointsForEvent({ loadId, driverId, eventType: arriveEvent }).catch((err) =>
+      console.error("[Geofence] Error awarding points for synthesized arrive:", err)
+    );
+  } else {
+    await db.update(stops).set({ departedAt: now, updatedAt: now }).where(eq(stops.id, stopId));
+  }
   console.log(`[Geofence] Auto-DEPART triggered for stop ${stopId}`);
 
-  // Mirror manual /stops/:id/depart handler: advance loads.status so the
-  // truck dashboard clears the load when the last DELIVERY auto-departs,
-  // and flips to IN_TRANSIT after the first PICKUP departs.
-  try {
-    const allStops = await db
-      .select({ id: stops.id, sequence: stops.sequence })
-      .from(stops)
-      .where(eq(stops.loadId, loadId));
-    const sorted = [...allStops].sort((a, b) => a.sequence - b.sequence);
-    const isFirst = sorted[0]?.id === stopId;
-    const isLast = sorted[sorted.length - 1]?.id === stopId;
-    if (isLast) {
-      await db.update(loads).set({ status: "DELIVERED", updatedAt: now }).where(eq(loads.id, loadId));
-      console.log(`[Geofence] load=${loadId.substring(0, 8)} → DELIVERED`);
-    } else if (isFirst) {
-      await db.update(loads).set({ status: "IN_TRANSIT", updatedAt: now }).where(eq(loads.id, loadId));
+  // Status advance on depart: only first PICKUP → IN_TRANSIT.
+  // Last-delivery DELIVERED transition removed — that flips later via BOL flow.
+  if (isFirst) {
+    try {
+      await db
+        .update(loads)
+        .set({ status: "IN_TRANSIT", updatedAt: now })
+        .where(eq(loads.id, loadId));
       console.log(`[Geofence] load=${loadId.substring(0, 8)} → IN_TRANSIT`);
+    } catch (err) {
+      console.warn("[Geofence] status-advance failed:", err);
     }
-  } catch (err) {
-    console.warn("[Geofence] status-advance failed:", err);
   }
 
   const eventType: RewardEventType =
@@ -219,15 +283,29 @@ export async function evaluateGeofencesForActiveLoad(
     return;
   }
 
+  // Early return: don't fire geofence events on loads that have already passed
+  // the AT_DELIVERY gate, are awaiting BOL, are delivered, or were cancelled.
+  const [loadRow] = await db
+    .select({ status: loads.status })
+    .from(loads)
+    .where(eq(loads.id, loadId));
+  if (
+    loadRow &&
+    ["AT_DELIVERY", "DELIVERED_PENDING_BOL", "DELIVERED", "CANCELLED"].includes(loadRow.status)
+  ) {
+    console.log(`[Geofence] SKIPPED — load ${loadId.substring(0, 8)} status=${loadRow.status}`);
+    return;
+  }
+
   const loadStops = await db
     .select()
     .from(stops)
     .where(eq(stops.loadId, loadId));
 
   const now = new Date();
-  const currentStop = loadStops
-    .sort((a, b) => a.sequence - b.sequence)
-    .find(s => !s.arrivedAt);
+  const sortedStops = [...loadStops].sort((a, b) => a.sequence - b.sequence);
+  const lastStopId = sortedStops[sortedStops.length - 1]?.id;
+  const currentStop = sortedStops.find(s => !s.arrivedAt);
 
   if (!currentStop) {
     console.log(`[Geofence] No pending stops for load=${loadId}`);
@@ -297,7 +375,7 @@ export async function evaluateGeofencesForActiveLoad(
 
           if (canTrigger) {
             console.log(`[Geofence] TRIGGER ARRIVE stop=${stop.id} type=${stop.type} dist=${Math.round(distance)}m radius=${radius}m streak=${newInsideStreak} acc=${parsedAccuracy ?? 'unknown'}m`);
-            await markStopArrived(stop.id, stop.type, driverId, loadId);
+            await markStopArrived(stop.id, stop.type, driverId, loadId, stop.id === lastStopId);
             await updateGeofenceState(stop.id, driverId, { lastArriveAttemptAt: now });
           }
         }
