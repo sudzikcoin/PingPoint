@@ -16,7 +16,7 @@ import express from "express";
 import { sendBrokerVerificationEmail, sendDriverAppLink } from "./email";
 import { geocodeAddressSafe } from "./geocode";
 import { strictRateLimit, authLimiter, signupLimiter, pdfParsingLimiter, loadCreationLimiter } from "./middleware/rateLimit";
-import { registerTruckRoutes } from "./truck-routes";
+import { registerTruckRoutes, resolveActiveLoadForTruckToken } from "./truck-routes";
 import { shouldAcceptPing, MIN_PING_INTERVAL_MS } from "./utils/rateLimit";
 import { checkAndConsumeLoadAllowance, rollbackLoadAllowance, getBillingSummary, FREE_INCLUDED_LOADS } from "./billing/entitlements";
 import { createCheckoutSession, createSubscriptionCheckoutSession, createBillingPortalSession, getStripeCustomerByEmail, verifyWebhookSignature, processStripeEvent, grantReferralRewardsIfEligible } from "./billing/stripe";
@@ -4383,7 +4383,14 @@ export async function registerRoutes(
   app.post("/api/driver/:token/iosix-raw-log", async (req: Request, res: Response) => {
     try {
       const { token } = req.params;
-      const load = await storage.getLoadByToken(token, "driver");
+      // Mobile post-transistorsoft uses the per-truck trk_* token as its
+      // primary auth, but this endpoint's path is hard-coded /api/driver/.
+      // Accept either: drv_* via the per-load lookup, or trk_* resolved
+      // through truck_tokens to the driver's currently-active load.
+      let load = await storage.getLoadByToken(token, "driver");
+      if (!load && token.startsWith("trk_")) {
+        load = await resolveActiveLoadForTruckToken(token);
+      }
       if (!load) return res.status(404).json({ error: "Invalid token" });
 
       const entries = Array.isArray(req.body?.entries) ? req.body.entries : null;

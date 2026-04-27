@@ -80,6 +80,27 @@ async function resolveTruckToken(token: string) {
   return row;
 }
 
+// Resolve a trk_* token to its driver's currently-active load. Used by
+// non-truck-namespaced endpoints (e.g. /api/driver/:token/iosix-raw-log)
+// to accept truck tokens for trucks that have already migrated off the
+// per-load drv_* flow.
+export async function resolveActiveLoadForTruckToken(token: string) {
+  const tok = await resolveTruckToken(token);
+  if (!tok || !tok.driverId) return undefined;
+  const [load] = await db
+    .select()
+    .from(loadsTable)
+    .where(
+      and(
+        eq(loadsTable.driverId, tok.driverId),
+        inArray(loadsTable.status, ACTIVE_LOAD_STATUSES),
+      ),
+    )
+    .orderBy(desc(loadsTable.createdAt))
+    .limit(1);
+  return load;
+}
+
 export function registerTruckRoutes(app: Express): void {
   // POST /api/truck/register — exchange { truck_number, company_id } for
   // a permanent per-truck token. Pulls driver_name from AgentOS as the
