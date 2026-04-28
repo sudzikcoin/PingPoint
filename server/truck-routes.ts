@@ -9,7 +9,7 @@ import {
   trackingDiagnostics,
   stops as stopsTable,
 } from "@shared/schema";
-import { eq, and, desc, inArray } from "drizzle-orm";
+import { eq, and, desc, inArray, isNotNull, isNull } from "drizzle-orm";
 import { randomBytes } from "crypto";
 import { strictRateLimit } from "./middleware/rateLimit";
 import {
@@ -80,6 +80,53 @@ async function resolveTruckToken(token: string) {
   return row;
 }
 
+// Three-tier active-load selection. Physical state of the driver
+// (Tier 1) wins over recency, so newly-parsed loads can't displace
+// the one the driver is physically working on.
+async function selectActiveLoadThreeTier(driverId: string) {
+  // Tier 1: driver physically on a stop (highest priority)
+  // Catches AT_PICKUP and AT_DELIVERY where stop has arrived but
+  // not departed. Prevents new loads from displacing the active
+  // one while driver is at pickup/delivery dock.
+  const tier1 = await db
+    .select()
+    .from(loadsTable)
+    .innerJoin(stopsTable, eq(stopsTable.loadId, loadsTable.id))
+    .where(and(
+      eq(loadsTable.driverId, driverId),
+      inArray(loadsTable.status, ACTIVE_LOAD_STATUSES),
+      isNotNull(stopsTable.arrivedAt),
+      isNull(stopsTable.departedAt),
+    ))
+    .orderBy(desc(stopsTable.arrivedAt))
+    .limit(1);
+  if (tier1[0]) return tier1[0].loads;
+
+  // Tier 2: in-progress between stops
+  const tier2 = await db
+    .select()
+    .from(loadsTable)
+    .where(and(
+      eq(loadsTable.driverId, driverId),
+      inArray(loadsTable.status, ["IN_TRANSIT", "AT_PICKUP", "AT_DELIVERY"]),
+    ))
+    .orderBy(desc(loadsTable.updatedAt))
+    .limit(1);
+  if (tier2[0]) return tier2[0];
+
+  // Tier 3: planned, not yet started (most recent first)
+  const tier3 = await db
+    .select()
+    .from(loadsTable)
+    .where(and(
+      eq(loadsTable.driverId, driverId),
+      eq(loadsTable.status, "PLANNED"),
+    ))
+    .orderBy(desc(loadsTable.createdAt))
+    .limit(1);
+  return tier3[0] ?? null;
+}
+
 // Resolve a trk_* token to its driver's currently-active load. Used by
 // non-truck-namespaced endpoints (e.g. /api/driver/:token/iosix-raw-log)
 // to accept truck tokens for trucks that have already migrated off the
@@ -87,18 +134,8 @@ async function resolveTruckToken(token: string) {
 export async function resolveActiveLoadForTruckToken(token: string) {
   const tok = await resolveTruckToken(token);
   if (!tok || !tok.driverId) return undefined;
-  const [load] = await db
-    .select()
-    .from(loadsTable)
-    .where(
-      and(
-        eq(loadsTable.driverId, tok.driverId),
-        inArray(loadsTable.status, ACTIVE_LOAD_STATUSES),
-      ),
-    )
-    .orderBy(desc(loadsTable.createdAt))
-    .limit(1);
-  return load;
+  const load = await selectActiveLoadThreeTier(tok.driverId);
+  return load ?? undefined;
 }
 
 export function registerTruckRoutes(app: Express): void {
@@ -204,17 +241,7 @@ export function registerTruckRoutes(app: Express): void {
         if (!tok)
           return res.status(404).json({ error: "Invalid truck token" });
         if (!tok.driverId) return res.json({ load: null });
-        const [load] = await db
-          .select()
-          .from(loadsTable)
-          .where(
-            and(
-              eq(loadsTable.driverId, tok.driverId),
-              inArray(loadsTable.status, ACTIVE_LOAD_STATUSES),
-            ),
-          )
-          .orderBy(desc(loadsTable.createdAt))
-          .limit(1);
+        const load = await selectActiveLoadThreeTier(tok.driverId);
         if (!load) return res.json({ load: null });
         // Return the same shape as the legacy /api/driver/:token endpoint so
         // the mobile app can reuse the existing transformAPIResponse mapper.
@@ -361,17 +388,7 @@ export function registerTruckRoutes(app: Express): void {
           });
         }
 
-        const [load] = await db
-          .select({ id: loadsTable.id, status: loadsTable.status })
-          .from(loadsTable)
-          .where(
-            and(
-              eq(loadsTable.driverId, tok.driverId),
-              inArray(loadsTable.status, ACTIVE_LOAD_STATUSES),
-            ),
-          )
-          .orderBy(desc(loadsTable.createdAt))
-          .limit(1);
+        const load = await selectActiveLoadThreeTier(tok.driverId);
 
         if (!load) {
           // last_seen was already bumped in resolveTruckToken — that is enough
