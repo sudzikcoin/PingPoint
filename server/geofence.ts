@@ -14,10 +14,6 @@ const IMMEDIATE_TRIGGER_ACCURACY_M = 50;
 // Дефолтный радиус геофенса — 2 мили (~3200м) для снижения ложных срабатываний GPS drift
 const DEFAULT_GEOFENCE_RADIUS_M = 3200;
 
-// In-memory state: предыдущее состояние (inside/outside) по каждому стопу
-// Ключ — stopId, значение — был ли водитель внутри на прошлом тике
-const stopInsideState: Map<string, boolean> = new Map();
-
 export function haversineMeters(lat1: number, lng1: number, lat2: number, lng2: number): number {
   const R = 6371000;
   const toRad = (deg: number) => (deg * Math.PI) / 180;
@@ -296,12 +292,15 @@ export async function evaluateGeofencesForActiveLoad(
     const inside = isInsideGeofence(distance, radius);
     const outsideHysteresis = isOutsideWithHysteresis(distance, radius);
 
-    // Предыдущее состояние из памяти (undefined — стоп ещё не проверялся в этой сессии)
-    const prevInside = stopInsideState.get(stop.id);
+    const state = await getOrCreateGeofenceState(stop.id, driverId);
+
+    // Предыдущее состояние читаем из БД (durable, переживает рестарты и UPDATE стопа)
+    const prevInside =
+      state.lastStatus === "inside" ? true :
+      state.lastStatus === "outside" ? false :
+      undefined;
 
     console.log(`[Geofence] Stop ${stop.id} (${stop.type}): dist=${Math.round(distance)}m radius=${radius}m inside=${inside} prevInside=${prevInside} arrived=${!!stop.arrivedAt}`);
-
-    const state = await getOrCreateGeofenceState(stop.id, driverId);
 
     if (inside) {
       const newInsideStreak = state.insideStreak + 1;
@@ -332,8 +331,6 @@ export async function evaluateGeofencesForActiveLoad(
         }
       }
 
-      // Фиксируем текущее состояние — внутри
-      stopInsideState.set(stop.id, true);
     } else if (outsideHysteresis) {
       const newOutsideStreak = state.outsideStreak + 1;
       await updateGeofenceState(stop.id, driverId, {
@@ -342,14 +339,14 @@ export async function evaluateGeofencesForActiveLoad(
         outsideStreak: newOutsideStreak,
       });
 
-      // DEPART: переход inside → outside И arrivedAt есть И departedAt ещё нет
+      // DEPART: переход inside → outside ИЛИ достигли порога подряд идущих outside-пингов
+      // (симметрично ARRIVE highAccuracy-shortcut: транзиция == достаточный сигнал).
+      // Гарды stop.arrivedAt && !stop.departedAt не дают сработать на стопах без ARRIVE
+      // или повторно — synthesize-ARRIVE в markStopDeparted покрывает GPS-gap отдельно.
       const isTransitionOut = prevInside === true;
-      if (
-        isTransitionOut &&
-        stop.arrivedAt &&
-        !stop.departedAt &&
-        newOutsideStreak >= CONSECUTIVE_PINGS_REQUIRED
-      ) {
+      const shouldTriggerDepart =
+        isTransitionOut || newOutsideStreak >= CONSECUTIVE_PINGS_REQUIRED;
+      if (shouldTriggerDepart && stop.arrivedAt && !stop.departedAt) {
         const timeSinceArrive = now.getTime() - new Date(stop.arrivedAt).getTime();
         const canTrigger =
           timeSinceArrive > MIN_TIME_GAP_MS &&
@@ -362,9 +359,6 @@ export async function evaluateGeofencesForActiveLoad(
           await updateGeofenceState(stop.id, driverId, { lastDepartAttemptAt: now });
         }
       }
-
-      // Фиксируем текущее состояние — снаружи (только если уверены, с учётом гистерезиса)
-      stopInsideState.set(stop.id, false);
     }
     // Если в "серой зоне" гистерезиса — состояние не трогаем, чтобы избежать дрейфа
   }
