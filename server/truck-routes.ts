@@ -358,6 +358,10 @@ export function registerTruckRoutes(app: Express): void {
           source: bodySource,
         } = body;
 
+        // Validation failures must return 200 OK (with wrote_ping:false +
+        // reason). transistorsoft only deletes from its SQLite queue on 2xx;
+        // 4xx is treated as transient failure → ping retried forever, causing
+        // backlog runaway + ANR for drivers with long offline periods.
         if (
           typeof lat !== "number" ||
           typeof lng !== "number" ||
@@ -366,18 +370,16 @@ export function registerTruckRoutes(app: Express): void {
           Math.abs(lat) > 90 ||
           Math.abs(lng) > 180
         ) {
-          return res
-            .status(400)
-            .json({ ok: false, error: "invalid_coords" });
+          return res.json({ ok: true, wrote_ping: false, reason: "invalid_coords" });
         }
         const accErr = validateGpsAccuracy(accuracy);
         if (accErr)
-          return res.status(422).json({ ok: false, error: accErr });
+          return res.json({ ok: true, wrote_ping: false, reason: accErr });
         const tsCandidate = recorded_at ?? timestamp;
         if (tsCandidate != null) {
           const tsErr = validateGpsTimestamp(tsCandidate);
           if (tsErr)
-            return res.status(422).json({ ok: false, error: tsErr });
+            return res.json({ ok: true, wrote_ping: false, reason: tsErr });
         }
 
         if (!tok.driverId) {
