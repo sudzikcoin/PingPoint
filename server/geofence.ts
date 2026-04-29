@@ -110,7 +110,7 @@ async function markStopArrived(
   return true;
 }
 
-async function applyArriveLoadTransition(
+export async function applyArriveLoadTransition(
   loadId: string,
   stopType: string,
   isLast: boolean,

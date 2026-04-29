@@ -22,7 +22,7 @@ import { checkAndConsumeLoadAllowance, rollbackLoadAllowance, getBillingSummary,
 import { createCheckoutSession, createSubscriptionCheckoutSession, createBillingPortalSession, getStripeCustomerByEmail, verifyWebhookSignature, processStripeEvent, grantReferralRewardsIfEligible } from "./billing/stripe";
 import { incrementLoadsCreated, getUsageSummary } from "./billing/usage";
 import { createProPaymentIntent, checkAndConfirmIntent, getMerchantInfo } from "./billing/solana";
-import { evaluateGeofencesForActiveLoad, getGeofenceDebugInfo } from "./geofence";
+import { evaluateGeofencesForActiveLoad, getGeofenceDebugInfo, applyArriveLoadTransition } from "./geofence";
 import { finalizeDelivery } from "./services/finalizeDelivery";
 import { getOrCreateWebhookConfigForUser, updateWebhookConfigForUser, emitLoadEvent } from "./webhooks/webhookService";
 import { notifyLoadStatusChange } from "./services/notificationService";
@@ -4325,12 +4325,29 @@ export async function registerRoutes(
 
 
 
-  // Driver Arrive Endpoint
+  // Driver Arrive Endpoint — records timestamp AND advances load status:
+  //   arrive PICKUP (seq 1)        → AT_PICKUP (only if PLANNED)
+  //   arrive last stop (DELIVERY)  → AT_DELIVERY + deliveredPendingAt
+  // Mirror auto-arrive in geofence.ts so manual button taps and GPS triggers
+  // share one transition path. Without this, BOL flow rejects with
+  // bol_received_before_geofence_arrive when driver taps "Arrived" manually.
   app.post("/api/driver/:token/stops/:stopId/arrive", async (req: Request, res: Response) => {
     try {
       const { stopId } = req.params;
-      const stop = await storage.updateStop(stopId, { arrivedAt: new Date() });
+      const now = new Date();
+      const stop = await storage.updateStop(stopId, { arrivedAt: now });
       if (!stop) return res.status(404).json({ error: "Stop not found" });
+
+      try {
+        const all = await storage.getStopsByLoad(stop.loadId);
+        const sorted = [...all].sort((a, b) => a.sequence - b.sequence);
+        const isLast = sorted[sorted.length - 1]?.id === stop.id;
+        const load = await storage.getLoad(stop.loadId);
+        await applyArriveLoadTransition(stop.loadId, stop.type, isLast, now, load?.customerRef ?? null);
+      } catch (err) {
+        console.warn("[Arrive] status-advance failed:", err);
+      }
+
       res.json({ success: true, stop });
     } catch (error) {
       console.error("Error recording arrival:", error);
