@@ -362,6 +362,14 @@ export function registerTruckRoutes(app: Express): void {
         // reason). transistorsoft only deletes from its SQLite queue on 2xx;
         // 4xx is treated as transient failure → ping retried forever, causing
         // backlog runaway + ANR for drivers with long offline periods.
+        // The stale() helper also flags res.locals.skipRateLimitCount so
+        // backlog-flush replays don't consume the 60/min budget reserved for
+        // fresh pings — see middleware/rateLimit.ts.
+        const stale = (reason: string) => {
+          res.locals.skipRateLimitCount = true;
+          return res.json({ ok: true, wrote_ping: false, reason });
+        };
+
         if (
           typeof lat !== "number" ||
           typeof lng !== "number" ||
@@ -370,24 +378,18 @@ export function registerTruckRoutes(app: Express): void {
           Math.abs(lat) > 90 ||
           Math.abs(lng) > 180
         ) {
-          return res.json({ ok: true, wrote_ping: false, reason: "invalid_coords" });
+          return stale("invalid_coords");
         }
         const accErr = validateGpsAccuracy(accuracy);
-        if (accErr)
-          return res.json({ ok: true, wrote_ping: false, reason: accErr });
+        if (accErr) return stale(accErr);
         const tsCandidate = recorded_at ?? timestamp;
         if (tsCandidate != null) {
           const tsErr = validateGpsTimestamp(tsCandidate);
-          if (tsErr)
-            return res.json({ ok: true, wrote_ping: false, reason: tsErr });
+          if (tsErr) return stale(tsErr);
         }
 
         if (!tok.driverId) {
-          return res.json({
-            ok: true,
-            wrote_ping: false,
-            reason: "no_driver",
-          });
+          return stale("no_driver");
         }
 
         const load = await selectActiveLoadThreeTier(tok.driverId);
@@ -395,11 +397,7 @@ export function registerTruckRoutes(app: Express): void {
         if (!load) {
           // last_seen was already bumped in resolveTruckToken — that is enough
           // for smart-push staleness detection.
-          return res.json({
-            ok: true,
-            wrote_ping: false,
-            reason: "no_active_load",
-          });
+          return stale("no_active_load");
         }
 
         const sourceLabel =

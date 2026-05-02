@@ -74,19 +74,25 @@ export function rateLimit(options?: RateLimitOptions) {
       entry.count++;
     }
 
-    // Optionally refund this request if the final response status is one
-    // that shouldn't consume the bucket (e.g. 422 validation reject).
+    // Refund this request if either:
+    //   (a) the final response status matches skipCountOnStatus
+    //       (e.g. 422 validation reject), or
+    //   (b) the handler explicitly sets res.locals.skipRateLimitCount = true
+    //       (used for backlog-flush returns that must remain 200 OK so the
+    //       SDK clears its offline queue, but should not consume bucket).
+    // Hook is registered unconditionally so handler-side flag works on
+    // endpoints that don't pass skipCountOnStatus.
     const skipOn = options?.skipCountOnStatus;
-    if (skipOn && skipOn.length > 0) {
-      res.on("finish", () => {
-        if (skipOn.includes(res.statusCode)) {
-          const cur = rateLimitStore.get(key);
-          if (cur && cur.resetAt > Date.now() && cur.count > 0) {
-            cur.count--;
-          }
+    res.on("finish", () => {
+      const skipByStatus = skipOn?.includes(res.statusCode) ?? false;
+      const skipByFlag = (res.locals as any).skipRateLimitCount === true;
+      if (skipByStatus || skipByFlag) {
+        const cur = rateLimitStore.get(key);
+        if (cur && cur.resetAt > Date.now() && cur.count > 0) {
+          cur.count--;
         }
-      });
-    }
+      }
+    });
 
     const remaining = Math.max(0, maxRequests - entry.count);
     const resetSeconds = Math.ceil((entry.resetAt - now) / 1000);
