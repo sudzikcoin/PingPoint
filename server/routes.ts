@@ -4479,6 +4479,10 @@ export async function registerRoutes(
         customerRef,
         truckNumber,
         carrierName,
+        pickupLat,
+        pickupLng,
+        deliveryLat,
+        deliveryLng,
       } = req.body || {};
 
       // Validate required fields
@@ -4575,11 +4579,35 @@ export async function registerRoutes(
         isBillable: true,
       });
 
-      // Geocode pickup + delivery in parallel; leave lat/lng null if provider misses
+      // Accept pre-geocoded coords from trusted internal callers (AgentOS).
+      // If both lat and lng are present and finite, use them directly and skip
+      // the Nominatim path — Nominatim fails frequently on rural industrial
+      // addresses, leaving stops with NULL lat/lng and breaking auto-arrive.
+      const acceptCoord = (v: any): number | null => {
+        if (v == null) return null;
+        const n = typeof v === "number" ? v : Number(v);
+        return Number.isFinite(n) ? n : null;
+      };
+      const preSuppliedPickup =
+        acceptCoord(pickupLat) != null && acceptCoord(pickupLng) != null
+          ? { lat: acceptCoord(pickupLat) as number, lng: acceptCoord(pickupLng) as number }
+          : null;
+      const preSuppliedDelivery =
+        acceptCoord(deliveryLat) != null && acceptCoord(deliveryLng) != null
+          ? { lat: acceptCoord(deliveryLat) as number, lng: acceptCoord(deliveryLng) as number }
+          : null;
+
       const [pickupGeo, deliveryGeo] = await Promise.all([
-        geocodeAddressSafe(`${pickupAddress}, ${pickupCity}, ${pickupState}`),
-        geocodeAddressSafe(`${deliveryAddress}, ${deliveryCity}, ${deliveryState}`),
+        preSuppliedPickup
+          ? Promise.resolve(preSuppliedPickup)
+          : geocodeAddressSafe(`${pickupAddress}, ${pickupCity}, ${pickupState}`),
+        preSuppliedDelivery
+          ? Promise.resolve(preSuppliedDelivery)
+          : geocodeAddressSafe(`${deliveryAddress}, ${deliveryCity}, ${deliveryState}`),
       ]);
+      console.log(
+        `[InternalAPI] Stops geocoding: pickup=${preSuppliedPickup ? "agentos" : "nominatim"} delivery=${preSuppliedDelivery ? "agentos" : "nominatim"}`
+      );
 
       // Create pickup + delivery stops
       await storage.createStops([
